@@ -1,5 +1,104 @@
+diff --git a/app/src/main/java/eu/kanade/presentation/components/Banners.kt b/app/src/main/java/eu/kanade/presentation/components/Banners.kt
+index a147d7ff43..625812f5a9 100644
+--- a/app/src/main/java/eu/kanade/presentation/components/Banners.kt
++++ b/app/src/main/java/eu/kanade/presentation/components/Banners.kt
+@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.layout.SubcomposeLayout
+ import androidx.compose.ui.platform.LocalDensity
+ import androidx.compose.ui.text.style.TextAlign
+@@ -50,6 +51,8 @@ val SyncingBannerBackgroundColor
+     @Composable get() = MaterialTheme.colorScheme.secondary
+ val UpdatingBannerBackgroundColor
+     @Composable get() = MaterialTheme.colorScheme.tertiary
++val BatchImportBannerBackgroundColor
++    @Composable get() = MaterialTheme.colorScheme.primary
+ // KMK <--
+ 
+ @Composable
+@@ -83,6 +86,8 @@ fun AppStateBanners(
+     indexing: Boolean,
+     // KMK -->
+     restoring: Boolean,
++    batchImporting: Boolean,
++    batchImportProgress: Float,
+     syncing: Boolean,
+     updating: Boolean,
+     // KMK <--
+@@ -98,15 +103,17 @@ fun AppStateBanners(
+         val indexingPlaceable = subcompose(0) {
+             AnimatedVisibility(
+                 // KMK -->
+-                visible = indexing || restoring || syncing || updating,
++                visible = indexing || restoring || batchImporting || syncing || updating,
+                 // KMK <--
+                 enter = expandVertically(),
+                 exit = shrinkVertically(),
+             ) {
+                 IndexingDownloadBanner(
+                     modifier = Modifier.windowInsetsPadding(mainInsets),
++                    backgroundColor = if (batchImporting) BatchImportBannerBackgroundColor else IndexingBannerBackgroundColor,
+                     // KMK -->
+                     text = when {
++                        batchImporting -> "Importing manga (${percentFormatter.format(batchImportProgress)})"
+                         updating -> progress?.let {
+                             stringResource(
+                                 MR.strings.notification_updating_progress,
+@@ -202,6 +209,7 @@ private fun IncognitoModeBanner(modifier: Modifier = Modifier) {
+ @Composable
+ private fun IndexingDownloadBanner(
+     modifier: Modifier = Modifier,
++    backgroundColor: Color = IndexingBannerBackgroundColor,
+     // KMK -->
+     text: String = stringResource(MR.strings.download_notifier_cache_renewal),
+     // KMK <--
+@@ -209,7 +217,7 @@ private fun IndexingDownloadBanner(
+     val density = LocalDensity.current
+     Row(
+         modifier = Modifier
+-            .background(color = IndexingBannerBackgroundColor)
++            .background(color = backgroundColor)
+             .fillMaxWidth()
+             .padding(8.dp)
+             .then(modifier),
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
+index ae2fd5a113..434f29ca6b 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
+@@ -16,21 +16,22 @@ open class BannerProgressStatus {
+         .debounce(1000L) // Don't notify if it finishes quickly enough
+         .stateIn(scope, SharingStarted.WhileSubscribed(), false)
+ 
+-    suspend fun start() {
+-        _isRunning.emit(true)
++    fun start() {
++        _isRunning.value = true
+     }
+ 
+-    suspend fun stop() {
+-        _isRunning.emit(false)
++    fun stop() {
++        _isRunning.value = false
+     }
+ 
+     val progress = MutableStateFlow(0f)
+ 
+-    suspend fun updateProgress(progress: Float) {
+-        this.progress.emit(progress)
++    fun updateProgress(progress: Float) {
++        this.progress.value = progress
+     }
+ }
+ 
+ class LibraryUpdateStatus : BannerProgressStatus()
+ class SyncStatus : BannerProgressStatus()
+ class BackupRestoreStatus : BannerProgressStatus()
++class BatchImportStatus : BannerProgressStatus()
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-index 6ecb671..92f771f 100644
+index 6ecb6717d2..92f771f13b 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
 +++ b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
 @@ -75,6 +75,14 @@ object Notifications {
@@ -32,8 +131,74 @@ index 6ecb671..92f771f 100644
                  buildNotificationChannel(CHANNEL_APP_UPDATE, IMPORTANCE_HIGH) {
                      setGroup(GROUP_APK_UPDATES)
                      setName(context.stringResource(MR.strings.channel_app_updates))
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt b/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
+index 0c0b07dfa5..e3a1fbe948 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
+@@ -10,6 +10,7 @@ import app.cash.sqldelight.driver.android.AndroidSqliteDriver
+ import eu.kanade.domain.track.store.DelayedTrackingStore
+ import eu.kanade.tachiyomi.core.security.SecurityPreferences
+ import eu.kanade.tachiyomi.data.BackupRestoreStatus
++import eu.kanade.tachiyomi.data.BatchImportStatus
+ import eu.kanade.tachiyomi.data.LibraryUpdateStatus
+ import eu.kanade.tachiyomi.data.SyncStatus
+ import eu.kanade.tachiyomi.data.cache.ChapterCache
+@@ -184,6 +185,7 @@ class AppModule(val app: Application) : InjektModule {
+ 
+         // KMK -->
+         addSingletonFactory { BackupRestoreStatus() }
++        addSingletonFactory { BatchImportStatus() }
+         addSingletonFactory { SyncStatus() }
+         addSingletonFactory { LibraryUpdateStatus() }
+         // KMK <--
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
+index 43bcfc49d5..427081ba29 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
+@@ -72,6 +72,7 @@ import eu.kanade.presentation.util.AssistContentScreen
+ import eu.kanade.presentation.util.DefaultNavigatorScreenTransition
+ import eu.kanade.tachiyomi.BuildConfig
+ import eu.kanade.tachiyomi.data.BackupRestoreStatus
++import eu.kanade.tachiyomi.data.BatchImportStatus
+ import eu.kanade.tachiyomi.data.LibraryUpdateStatus
+ import eu.kanade.tachiyomi.data.SyncStatus
+ import eu.kanade.tachiyomi.data.backup.create.BackupCreateJob
+@@ -149,6 +150,7 @@ class MainActivity : BaseActivity() {
+     private val backupPreferences: BackupPreferences by injectLazy()
+     private val syncPreferences: SyncPreferences by injectLazy()
+     private val backupRestoreStatus: BackupRestoreStatus by injectLazy()
++    private val batchImportStatus: BatchImportStatus by injectLazy()
+     private val syncStatus: SyncStatus by injectLazy()
+     private val libraryUpdateStatus: LibraryUpdateStatus by injectLazy()
+     // KMK <--
+@@ -225,6 +227,8 @@ class MainActivity : BaseActivity() {
+             val indexing by downloadCache.isInitializing.collectAsState()
+             // KMK -->
+             val restoringState by backupRestoreStatus.isRunning.collectAsState()
++            val batchImporting by batchImportStatus.isRunning.collectAsState()
++            val batchImportProgress by batchImportStatus.progress.collectAsState()
+             val syncingState by syncStatus.isRunning.collectAsState()
+             val updatingState by libraryUpdateStatus.isRunning.collectAsState()
+             val restoringProgressBanner by backupPreferences.showRestoringProgressBanner().collectAsState()
+@@ -242,6 +246,7 @@ class MainActivity : BaseActivity() {
+             val statusBarBackgroundColor = when {
+                 // KMK -->
+                 updating -> UpdatingBannerBackgroundColor
++                batchImporting -> MaterialTheme.colorScheme.primary
+                 syncing -> SyncingBannerBackgroundColor
+                 restoring -> RestoringBannerBackgroundColor
+                 // KMK <--
+@@ -309,6 +314,8 @@ class MainActivity : BaseActivity() {
+                             indexing = indexing,
+                             // KMK -->
+                             restoring = restoring,
++                            batchImporting = batchImporting,
++                            batchImportProgress = batchImportProgress,
+                             syncing = syncing,
+                             updating = updating,
+                             progress = updatingProgress.takeIf { updating }
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
-index 3d1e7f9..d27327a 100644
+index 3d1e7f9ea4..d27327a2d6 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 @@ -1,5 +1,8 @@
@@ -95,10 +260,10 @@ index 3d1e7f9..d27327a 100644
          }
      }
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-index a791e4d..a28a722 100644
+index a791e4d428..e80883c298 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-@@ -1,10 +1,15 @@
+@@ -1,143 +1,110 @@
  package exh.ui.batchadd
  
  import android.content.Context
@@ -107,34 +272,23 @@ index a791e4d..a28a722 100644
  import cafe.adriel.voyager.core.model.StateScreenModel
  import cafe.adriel.voyager.core.model.screenModelScope
  import eu.kanade.core.preference.asState
-+import eu.kanade.tachiyomi.data.notification.Notifications
-+import eu.kanade.tachiyomi.util.system.cancelNotification
-+import eu.kanade.tachiyomi.util.system.notificationBuilder
-+import eu.kanade.tachiyomi.util.system.notify
- import exh.GalleryAddEvent
- import exh.GalleryAdder
+-import exh.GalleryAddEvent
+-import exh.GalleryAdder
  import exh.log.xLogE
-@@ -12,11 +17,18 @@ import exh.source.ExhPreferences
+ import exh.source.ExhPreferences
++import exh.ui.batchadd.BatchImportJob
  import exh.util.trimOrNull
  import kotlinx.coroutines.CoroutineExceptionHandler
  import kotlinx.coroutines.Dispatchers
-+import kotlinx.coroutines.Job
-+import kotlinx.coroutines.channels.Channel
-+import kotlinx.coroutines.delay
- import kotlinx.coroutines.ensureActive
+-import kotlinx.coroutines.ensureActive
  import kotlinx.coroutines.flow.update
-+import kotlinx.coroutines.sync.Mutex
-+import kotlinx.coroutines.sync.withLock
-+import kotlin.random.Random
-+import kotlinx.coroutines.joinAll
  import kotlinx.coroutines.launch
-+import kotlinx.coroutines.coroutineScope
- import tachiyomi.core.common.i18n.stringResource
+-import tachiyomi.core.common.i18n.stringResource
 -import tachiyomi.core.common.util.lang.withIOContext
  import tachiyomi.i18n.sy.SYMR
  import uy.kohesive.injekt.Injekt
- import uy.kohesive.injekt.api.get
-@@ -24,123 +36,221 @@ import uy.kohesive.injekt.api.get
+-import uy.kohesive.injekt.api.get
+ 
  class BatchAddScreenModel(
      private val exhPreferences: ExhPreferences = Injekt.get(),
  ) : StateScreenModel<BatchAddState>(BatchAddState()) {
@@ -143,9 +297,7 @@ index a791e4d..a28a722 100644
 -    // KMK -->
      val isHentaiEnabled by Injekt.get<ExhPreferences>().isHentaiEnabled().asState(screenModelScope)
 -    // KMK <--
-+    private var importJob: Job? = null
-+    private val requestGate = Mutex()
-+    private var nextRequestAt = 0L
++
  
      fun addGalleries(context: Context) {
          val galleries = state.value.galleries
@@ -159,8 +311,7 @@ index a791e4d..a28a722 100644
  
 -        addGalleries(context, galleries)
 +    fun importFile(context: Context, uri: Uri) {
-+        importJob?.cancel()
-+        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
++        screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
 +            xLogE("File import error", throwable)
 +            mutableState.update { it.copy(state = State.INPUT, dialog = Dialog.FileReadError) }
 +        }) {
@@ -211,7 +362,7 @@ index a791e4d..a28a722 100644
 +            mutableState.update { it.copy(dialog = Dialog.NoGalleriesSpecified) }
 +            return
 +        }
-+        importJob?.cancel()
++        BatchImportJob.start(context.applicationContext, galleries)
 +        mutableState.update {
 +            it.copy(
                  progress = 0,
@@ -223,11 +374,10 @@ index a791e4d..a28a722 100644
 +                events = emptyList(),
              )
          }
--
++    }
+ 
 -        val handler = CoroutineExceptionHandler { _, throwable ->
-+        val appContext = context.applicationContext
-+        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
-             xLogE("Batch add error", throwable)
+-            xLogE("Batch add error", throwable)
 -        }
 -
 -        screenModelScope.launch(Dispatchers.IO + handler) {
@@ -259,67 +409,23 @@ index a791e4d..a28a722 100644
 -                            } + " " + result.logMessage,
 -                        ),
 -                    )
-+            appContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-+        }) {
-+            val queue = Channel<String>(IMPORT_WORKERS * 2)
-+            val results = Channel<ImportResult>(IMPORT_WORKERS * 2)
-+            val feeder = launch {
-+                galleries.forEach { queue.send(it) }
-+                queue.close()
-+            }
-+            val workers = List(IMPORT_WORKERS) {
-+                launch {
-+                    for (url in queue) {
-+                        ensureActive()
-+                        val result = addGalleryRateLimited(appContext, url)
-+                        results.send(ImportResult(url, result))
-+                    }
-                 }
-             }
- 
+-                }
+-            }
+-
 -            // Show report
 -            val summary = context.stringResource(SYMR.strings.batch_add_summary, succeeded.size, failed.size)
 -            mutableState.update { state ->
 -                state.copy(
 -                    events = state.events + summary,
-+            var completed = 0
-+            var added = 0
-+            var failed = 0
-+            val events = ArrayList<String>(MAX_VISIBLE_EVENTS)
-+            showProgressNotification(appContext, completed, galleries.size, added, failed)
-+            while (completed < galleries.size) {
-+                ensureActive()
-+                val item = results.receive()
-+                completed++
-+                if (item.result is GalleryAddEvent.Success) added++ else failed++
-+                if (events.size == MAX_VISIBLE_EVENTS) events.removeAt(0)
-+                events.add(
-+                    when (item.result) {
-+                        is GalleryAddEvent.Success -> appContext.stringResource(SYMR.strings.batch_add_ok)
-+                        is GalleryAddEvent.Fail -> appContext.stringResource(SYMR.strings.batch_add_error)
-+                    } + " " + item.result.logMessage,
-                 )
-+                if (completed % STATE_UPDATE_BATCH == 0 || completed == galleries.size) {
-+                    mutableState.update { current ->
-+                        current.copy(
-+                            progress = completed,
-+                            added = added,
-+                            failed = failed,
-+                            events = events.toList(),
-+                        )
-+                    }
-+                    showProgressNotification(appContext, completed, galleries.size, added, failed)
-+                }
-             }
-+            feeder.join()
-+            workers.joinAll()
-+            results.close()
-+            showCompleteNotification(appContext, completed, galleries.size, added, failed)
-+            mutableState.update { current -> current.copy(progress = galleries.size, added = added, failed = failed, events = events.toList()) }
-         }
+-                )
+-            }
+-        }
++    fun cancelImport(context: Context) {
++        BatchImportJob.stop(context.applicationContext)
++        mutableState.update { it.copy(state = State.INPUT) }
      }
  
--    fun finish() {
+     fun finish() {
 -        mutableState.update { state ->
 -            state.copy(
 -                progressTotal = 0,
@@ -327,106 +433,34 @@ index a791e4d..a28a722 100644
 -                galleries = "",
 -                state = State.INPUT,
 -                events = emptyList(),
-+    private suspend fun addGalleryRateLimited(context: Context, url: String): GalleryAddEvent {
-+        var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
-+        for (attempt in 0 until RATE_LIMIT_RETRIES) {
-+            awaitRequestSlot()
-+            result = GalleryAdder().addGallery(
-+                context = context,
-+                url = url,
-+                fav = true,
-+                retry = 1,
-             )
-+            if (!isRateLimited(result) || attempt == RATE_LIMIT_RETRIES - 1) return result
-+            val backoff = RATE_LIMIT_BACKOFF_MS * (1L shl attempt)
-+            delay(backoff + Random.nextLong(0, RATE_LIMIT_JITTER_MS))
-+        }
-+        return result
-+    }
-+
-+    private suspend fun awaitRequestSlot() {
-+        val waitFor = requestGate.withLock {
-+            val now = System.currentTimeMillis()
-+            val wait = (nextRequestAt - now).coerceAtLeast(0L)
-+            nextRequestAt = maxOf(now, nextRequestAt) + MIN_REQUEST_INTERVAL_MS
-+            wait
-         }
-+        if (waitFor > 0) delay(waitFor)
+-            )
+-        }
++        mutableState.update { it.copy(progressTotal = 0, progress = 0, galleries = "", state = State.INPUT, events = emptyList()) }
      }
  
 -    fun updateGalleries(galleries: String) {
 -        mutableState.update { it.copy(galleries = galleries) }
-+    private fun isRateLimited(result: GalleryAddEvent): Boolean {
-+        if (result !is GalleryAddEvent.Fail.Error) return false
-+        val message = result.logMessage.lowercase()
-+        return "429" in message || "too many request" in message || "rate limit" in message || "rate-limit" in message
-     }
+-    }
++    fun updateGalleries(galleries: String) = mutableState.update { it.copy(galleries = galleries) }
++    fun dismissDialog() = mutableState.update { it.copy(dialog = null) }
  
 -    fun dismissDialog() {
 -        mutableState.update { it.copy(dialog = null) }
-+    private fun showProgressNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {
-+        val percent = if (total == 0) 0 else completed * 100 / total
-+        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
-+            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)
-+            setContentTitle("Importing manga")
-+            setContentText("$completed/$total processed • $added added • $failed failed")
-+            setProgress(total, completed, false)
-+            setOngoing(true)
-+            setOnlyAlertOnce(true)
-+            setAutoCancel(false)
-+            setSubText("$percent%")
-+        }.also { context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, it.build()) }
-     }
+-    }
  
 -    enum class State {
 -        INPUT,
 -        PROGRESS,
-+    private fun showCompleteNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {
-+        context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-+        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
-+            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)
-+            setContentTitle("Manga import complete")
-+            setContentText("$completed/$total processed • $added added • $failed failed")
-+            setAutoCancel(true)
-+        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
-     }
- 
-+    fun cancelImport() {
-+        importJob?.cancel()
-+        importJob = null
-+        mutableState.update { it.copy(state = State.INPUT) }
-+    }
-+
-+    fun finish() {
-+        importJob?.cancel()
-+        importJob = null
-+        mutableState.update { it.copy(progressTotal = 0, progress = 0, galleries = "", state = State.INPUT, events = emptyList()) }
-+    }
-+
-+    fun updateGalleries(galleries: String) = mutableState.update { it.copy(galleries = galleries) }
-+    fun dismissDialog() = mutableState.update { it.copy(dialog = null) }
-+
-+    private data class ImportResult(val url: String, val result: GalleryAddEvent)
-+
+-    }
 +    enum class State { INPUT, PROGRESS }
-+
+ 
      sealed class Dialog {
          data object NoGalleriesSpecified : Dialog()
 +        data object FileReadError : Dialog()
      }
  
      companion object {
-+        private const val IMPORT_WORKERS = 2
-+        private const val MIN_REQUEST_INTERVAL_MS = 2_000L
-+        private const val RATE_LIMIT_RETRIES = 3
-+        private const val RATE_LIMIT_BACKOFF_MS = 2_000L
-+        private const val RATE_LIMIT_JITTER_MS = 500L
-+        private const val STATE_UPDATE_BATCH = 4
-+        private const val MAX_VISIBLE_EVENTS = 200
-         val ehVisitedRegex = """[0-9]*?\.[a-z0-9]*?:""".toRegex()
-     }
- }
-@@ -149,6 +259,8 @@ data class BatchAddState(
+@@ -149,6 +116,8 @@ data class BatchAddState(
      val progressTotal: Int = 0,
      val progress: Int = 0,
      val galleries: String = "",
@@ -435,8 +469,194 @@ index a791e4d..a28a722 100644
      val state: BatchAddScreenModel.State = BatchAddScreenModel.State.INPUT,
      val events: List<String> = emptyList(),
      val dialog: BatchAddScreenModel.Dialog? = null,
+diff --git a/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+new file mode 100644
+index 0000000000..38e091668d
+--- /dev/null
++++ b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+@@ -0,0 +1,180 @@
++package exh.ui.batchadd
++
++import android.content.Context
++import android.content.pm.ServiceInfo
++import android.net.Uri
++import android.os.Build
++import androidx.work.CoroutineWorker
++import androidx.work.ForegroundInfo
++import androidx.work.OneTimeWorkRequestBuilder
++import androidx.work.WorkerParameters
++import androidx.work.workDataOf
++import eu.kanade.tachiyomi.R
++import eu.kanade.tachiyomi.data.BatchImportStatus
++import eu.kanade.tachiyomi.data.notification.Notifications
++import eu.kanade.tachiyomi.util.system.cancelNotification
++import eu.kanade.tachiyomi.util.system.notificationBuilder
++import eu.kanade.tachiyomi.util.system.notify
++import eu.kanade.tachiyomi.util.system.setForegroundSafely
++import eu.kanade.tachiyomi.util.system.workManager
++import exh.GalleryAddEvent
++import exh.GalleryAdder
++import exh.log.xLogE
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import tachiyomi.domain.storage.service.StoragePreferences
++import uy.kohesive.injekt.Injekt
++import uy.kohesive.injekt.api.get
++import com.hippo.unifile.UniFile
++import java.text.SimpleDateFormat
++import java.util.Date
++import java.util.Locale
++import java.util.concurrent.TimeUnit
++
++class BatchImportJob(
++    private val context: Context,
++    workerParams: WorkerParameters,
++) : CoroutineWorker(context, workerParams) {
++    private val status: BatchImportStatus = Injekt.get()
++    private val storagePreferences: StoragePreferences = Injekt.get()
++    private val requestGate = Mutex()
++    private var nextRequestAt = 0L
++
++    override suspend fun doWork(): Result {
++        val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
++        val urls = runCatching { java.io.File(inputPath).readLines().filter(String::isNotBlank) }.getOrElse {
++            xLogE("Batch import input read error", it)
++            return Result.failure()
++        }
++        if (urls.isEmpty()) return Result.success()
++
++        status.start()
++        status.updateProgress(0f)
++        setForegroundSafely()
++        val failedLinks = ArrayList<String>()
++        var completed = 0
++        var added = 0
++        var failed = 0
++
++        return try {
++            showProgress(completed, urls.size, added, failed)
++            for (url in urls) {
++                val result = addGalleryRateLimited(url)
++                completed++
++                if (result is GalleryAddEvent.Success) added++ else {
++                    failed++
++                    failedLinks += url
++                }
++                status.updateProgress(completed.toFloat() / urls.size)
++                showProgress(completed, urls.size, added, failed)
++            }
++            writeFailedLinks(failedLinks)
++            showComplete(completed, urls.size, added, failed)
++            Result.success()
++        } catch (cancelled: kotlinx.coroutines.CancellationException) {
++            throw cancelled
++        } catch (error: Throwable) {
++            xLogE("Batch import error", error)
++            writeFailedLinks(failedLinks)
++            Result.failure()
++        } finally {
++            context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
++            status.stop()
++            runCatching { java.io.File(inputPath).delete() }
++        }
++    }
++
++    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
++        Notifications.ID_BATCH_IMPORT_PROGRESS,
++        buildProgressNotification(0, 1, 0, 0),
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
++    )
++
++    private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
++        var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
++        for (attempt in 0 until RATE_LIMIT_RETRIES) {
++            awaitRequestSlot()
++            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
++            if (!isRateLimited(result)) return result
++            if (attempt < RATE_LIMIT_RETRIES - 1) {
++                delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
++            }
++        }
++        return result
++    }
++
++    private suspend fun awaitRequestSlot() {
++        val waitFor = requestGate.withLock {
++            val now = System.currentTimeMillis()
++            val wait = (nextRequestAt - now).coerceAtLeast(0L)
++            nextRequestAt = maxOf(now, nextRequestAt) + REQUEST_INTERVAL_MS
++            wait
++        }
++        if (waitFor > 0) delay(waitFor)
++    }
++
++    private fun isRateLimited(result: GalleryAddEvent): Boolean =
++        result is GalleryAddEvent.Fail.Error && result.logMessage.lowercase().let {
++            "429" in it || "too many request" in it || "rate limit" in it || "rate-limit" in it
++        }
++
++    private fun buildProgressNotification(completed: Int, total: Int, added: Int, failed: Int) =
++        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
++            setSmallIcon(R.drawable.ic_komikku)
++            setContentTitle("Importing manga")
++            setContentText("$completed/$total processed • $added added • $failed failed")
++            setProgress(total.coerceAtLeast(1), completed, false)
++            setOngoing(true)
++            setOnlyAlertOnce(true)
++            setAutoCancel(false)
++            setSubText("${if (total == 0) 0 else completed * 100 / total}%")
++        }.build()
++
++    private fun showProgress(completed: Int, total: Int, added: Int, failed: Int) {
++        context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed))
++    }
++
++    private fun showComplete(completed: Int, total: Int, added: Int, failed: Int) {
++        context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
++        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
++            setSmallIcon(R.drawable.ic_komikku)
++            setContentTitle("Manga import complete")
++            setContentText("$completed/$total processed • $added added • $failed failed")
++            setAutoCancel(true)
++        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
++    }
++
++    private fun writeFailedLinks(failedLinks: List<String>) {
++        if (failedLinks.isEmpty()) return
++        runCatching {
++            val directory = UniFile.fromUri(context, Uri.parse(storagePreferences.baseStorageDirectory().get())) ?: return
++            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
++            val file = directory.createFile("batch_import_failed_links_$timestamp.txt") ?: return
++            file.openOutputStream().bufferedWriter().use { writer -> failedLinks.forEach(writer::appendLine) }
++        }.onFailure { xLogE("Failed-link export error", it) }
++    }
++
++    companion object {
++        private const val TAG = "BatchImport"
++        private const val INPUT_PATH = "input_path"
++        private const val REQUEST_INTERVAL_MS = 4_000L
++        private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
++        private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
++        private const val RATE_LIMIT_RETRIES = 3
++
++        fun start(context: Context, urls: List<String>) {
++            val input = java.io.File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
++            input.writeText(urls.joinToString("\n"))
++            val request = OneTimeWorkRequestBuilder<BatchImportJob>()
++                .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
++                .addTag(TAG)
++                .build()
++            context.workManager.enqueueUniqueWork(TAG, androidx.work.ExistingWorkPolicy.REPLACE, request)
++        }
++
++        fun stop(context: Context) {
++            context.workManager.cancelUniqueWork(TAG)
++        }
++    }
++}
 diff --git a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
-index deea67a..db6871b 100644
+index deea67a592..db6871b7ae 100644
 --- a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
 +++ b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
 @@ -193,6 +193,8 @@
@@ -449,7 +669,7 @@ index deea67a..db6871b 100644
      <string name="special_services">Special Services</string>
      <string name="pref_category_connections">Connections</string>
 diff --git a/i18n-sy/src/commonMain/moko-resources/base/strings.xml b/i18n-sy/src/commonMain/moko-resources/base/strings.xml
-index 53029f6..21bf3f4 100644
+index 53029f64df..21bf3f4f7b 100644
 --- a/i18n-sy/src/commonMain/moko-resources/base/strings.xml
 +++ b/i18n-sy/src/commonMain/moko-resources/base/strings.xml
 @@ -569,6 +569,8 @@
