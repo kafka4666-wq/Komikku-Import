@@ -1,0 +1,427 @@
+[1mdiff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt[m
+[1mindex 6ecb671..92f771f 100644[m
+[1m--- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt[m
+[1m+++ b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt[m
+[36m@@ -75,6 +75,14 @@[m [mobject Notifications {[m
+     const val CHANNEL_INCOGNITO_MODE = "incognito_mode_channel"[m
+     const val ID_INCOGNITO_MODE = -701[m
+ [m
+[32m+[m[32m    /**[m
+[32m+[m[32m     * Notification channel and ids used by large batch imports.[m
+[32m+[m[32m     */[m
+[32m+[m[32m    const val CHANNEL_BATCH_IMPORT_PROGRESS = "batch_import_progress_channel"[m
+[32m+[m[32m    const val ID_BATCH_IMPORT_PROGRESS = -801[m
+[32m+[m[32m    const val CHANNEL_BATCH_IMPORT_COMPLETE = "batch_import_complete_channel"[m
+[32m+[m[32m    const val ID_BATCH_IMPORT_COMPLETE = -802[m
+[32m+[m
+     // AM (DISCORD) -->[m
+     /**[m
+      * Notification channel used for Discord RPC[m
+[36m@@ -189,6 +197,14 @@[m [mobject Notifications {[m
+                 buildNotificationChannel(CHANNEL_INCOGNITO_MODE, IMPORTANCE_LOW) {[m
+                     setName(context.stringResource(MR.strings.pref_incognito_mode))[m
+                 },[m
+[32m+[m[32m                buildNotificationChannel(CHANNEL_BATCH_IMPORT_PROGRESS, IMPORTANCE_LOW) {[m
+[32m+[m[32m                    setName("Batch import progress")[m
+[32m+[m[32m                    setShowBadge(false)[m
+[32m+[m[32m                },[m
+[32m+[m[32m                buildNotificationChannel(CHANNEL_BATCH_IMPORT_COMPLETE, IMPORTANCE_DEFAULT) {[m
+[32m+[m[32m                    setName("Batch import complete")[m
+[32m+[m[32m                    setShowBadge(false)[m
+[32m+[m[32m                },[m
+                 buildNotificationChannel(CHANNEL_APP_UPDATE, IMPORTANCE_HIGH) {[m
+                     setGroup(GROUP_APK_UPDATES)[m
+                     setName(context.stringResource(MR.strings.channel_app_updates))[m
+[1mdiff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt[m
+[1mindex 3d1e7f9..d27327a 100644[m
+[1m--- a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt[m
+[1m+++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt[m
+[36m@@ -1,5 +1,8 @@[m
+ package exh.ui.batchadd[m
+ [m
+[32m+[m[32mimport android.content.Intent[m
+[32m+[m[32mimport androidx.activity.compose.rememberLauncherForActivityResult[m
+[32m+[m[32mimport androidx.activity.result.contract.ActivityResultContracts[m
+ import androidx.compose.foundation.layout.Column[m
+ import androidx.compose.foundation.layout.PaddingValues[m
+ import androidx.compose.foundation.layout.Row[m
+[36m@@ -48,6 +51,13 @@[m [mclass BatchAddScreen : Screen() {[m
+         val state by screenModel.state.collectAsState()[m
+         val navigator = LocalNavigator.currentOrThrow[m
+         val context = LocalContext.current[m
+[32m+[m[32m        val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->[m
+[32m+[m[32m            uri ?: return@rememberLauncherForActivityResult[m
+[32m+[m[32m            runCatching {[m
+[32m+[m[32m                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)[m
+[32m+[m[32m            }[m
+[32m+[m[32m            screenModel.importFile(context, uri)[m
+[32m+[m[32m        }[m
+ [m
+         Scaffold([m
+             topBar = { scrollBehavior ->[m
+[36m@@ -95,6 +105,13 @@[m [mclass BatchAddScreen : Screen() {[m
+                         ) {[m
+                             Text(text = stringResource(SYMR.strings.eh_batch_add_button))[m
+                         }[m
+[32m+[m[32m                        Spacer(Modifier.height(8.dp))[m
+[32m+[m[32m                        Button([m
+[32m+[m[32m                            modifier = Modifier.fillMaxWidth(),[m
+[32m+[m[32m                            onClick = { filePicker.launch(arrayOf("text/plain", "text/csv", "text/*")) },[m
+[32m+[m[32m                        ) {[m
+[32m+[m[32m                            Text(text = "Import TXT/CSV file")[m
+[32m+[m[32m                        }[m
+                         // KMK -->[m
+                         Spacer(Modifier.height(8.dp))[m
+                         Text([m
+[36m@@ -182,6 +199,20 @@[m [mclass BatchAddScreen : Screen() {[m
+                     Text(text = stringResource(SYMR.strings.batch_add_no_valid_galleries_message))[m
+                 },[m
+             )[m
+[32m+[m[32m            BatchAddScreenModel.Dialog.FileReadError -> AlertDialog([m
+[32m+[m[32m                onDismissRequest = onDismissRequest,[m
+[32m+[m[32m                confirmButton = {[m
+[32m+[m[32m                    TextButton(onClick = onDismissRequest) {[m
+[32m+[m[32m                        Text(text = stringResource(MR.strings.action_ok))[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                },[m
+[32m+[m[32m                title = {[m
+[32m+[m[32m                    Text(text = stringResource(SYMR.strings.batch_add_file_read_error))[m
+[32m+[m[32m                },[m
+[32m+[m[32m                text = {[m
+[32m+[m[32m                    Text(text = stringResource(SYMR.strings.batch_add_file_read_error_message))[m
+[32m+[m[32m                },[m
+[32m+[m[32m            )[m
+             null -> Unit[m
+         }[m
+     }[m
+[1mdiff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt[m
+[1mindex a791e4d..3e21f66 100644[m
+[1m--- a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt[m
+[1m+++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt[m
+[36m@@ -1,10 +1,15 @@[m
+ package exh.ui.batchadd[m
+ [m
+ import android.content.Context[m
+[32m+[m[32mimport android.net.Uri[m
+ import androidx.compose.runtime.getValue[m
+ import cafe.adriel.voyager.core.model.StateScreenModel[m
+ import cafe.adriel.voyager.core.model.screenModelScope[m
+ import eu.kanade.core.preference.asState[m
+[32m+[m[32mimport eu.kanade.tachiyomi.data.notification.Notifications[m
+[32m+[m[32mimport eu.kanade.tachiyomi.util.system.cancelNotification[m
+[32m+[m[32mimport eu.kanade.tachiyomi.util.system.notificationBuilder[m
+[32m+[m[32mimport eu.kanade.tachiyomi.util.system.notify[m
+ import exh.GalleryAddEvent[m
+ import exh.GalleryAdder[m
+ import exh.log.xLogE[m
+[36m@@ -12,11 +17,14 @@[m [mimport exh.source.ExhPreferences[m
+ import exh.util.trimOrNull[m
+ import kotlinx.coroutines.CoroutineExceptionHandler[m
+ import kotlinx.coroutines.Dispatchers[m
+[32m+[m[32mimport kotlinx.coroutines.Job[m
+[32m+[m[32mimport kotlinx.coroutines.channels.Channel[m
+ import kotlinx.coroutines.ensureActive[m
+ import kotlinx.coroutines.flow.update[m
+[32m+[m[32mimport kotlinx.coroutines.joinAll[m
+ import kotlinx.coroutines.launch[m
+[32m+[m[32mimport kotlinx.coroutines.coroutineScope[m
+ import tachiyomi.core.common.i18n.stringResource[m
+[31m-import tachiyomi.core.common.util.lang.withIOContext[m
+ import tachiyomi.i18n.sy.SYMR[m
+ import uy.kohesive.injekt.Injekt[m
+ import uy.kohesive.injekt.api.get[m
+[36m@@ -24,123 +32,187 @@[m [mimport uy.kohesive.injekt.api.get[m
+ class BatchAddScreenModel([m
+     private val exhPreferences: ExhPreferences = Injekt.get(),[m
+ ) : StateScreenModel<BatchAddState>(BatchAddState()) {[m
+[31m-    private val galleryAdder by lazy { GalleryAdder() }[m
+[31m-[m
+[31m-    // KMK -->[m
+     val isHentaiEnabled by Injekt.get<ExhPreferences>().isHentaiEnabled().asState(screenModelScope)[m
+[31m-    // KMK <--[m
+[32m+[m[32m    private var importJob: Job? = null[m
+ [m
+     fun addGalleries(context: Context) {[m
+         val galleries = state.value.galleries[m
+[31m-        // Check text box has content[m
+         if (galleries.isBlank()) {[m
+             mutableState.update { it.copy(dialog = Dialog.NoGalleriesSpecified) }[m
+             return[m
+         }[m
+[32m+[m[32m        startImport(context, parseLines(galleries))[m
+[32m+[m[32m    }[m
+ [m
+[31m-        addGalleries(context, galleries)[m
+[32m+[m[32m    fun importFile(context: Context, uri: Uri) {[m
+[32m+[m[32m        importJob?.cancel()[m
+[32m+[m[32m        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->[m
+[32m+[m[32m            xLogE("File import error", throwable)[m
+[32m+[m[32m            mutableState.update { it.copy(state = State.INPUT, dialog = Dialog.FileReadError) }[m
+[32m+[m[32m        }) {[m
+[32m+[m[32m            val urls = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->[m
+[32m+[m[32m                parseLines(reader.readText())[m
+[32m+[m[32m            }.orEmpty()[m
+[32m+[m[32m            if (urls.isEmpty()) {[m
+[32m+[m[32m                mutableState.update { it.copy(dialog = Dialog.NoGalleriesSpecified) }[m
+[32m+[m[32m            } else {[m
+[32m+[m[32m                startImport(context, urls)[m
+[32m+[m[32m            }[m
+[32m+[m[32m        }[m
+     }[m
+ [m
+[31m-    private fun addGalleries(context: Context, galleries: String) {[m
+[31m-        val splitGalleries = if (ehVisitedRegex.containsMatchIn(galleries)) {[m
+[31m-            val url = if (exhPreferences.enableExhentai().get()) {[m
+[32m+[m[32m    private fun parseLines(text: String): List<String> {[m
+[32m+[m[32m        if (text.isBlank()) return emptyList()[m
+[32m+[m[32m        return if (ehVisitedRegex.containsMatchIn(text)) {[m
+[32m+[m[32m            val baseUrl = if (exhPreferences.enableExhentai().get()) {[m
+                 "https://exhentai.org/g/"[m
+             } else {[m
+                 "https://e-hentai.org/g/"[m
+             }[m
+[31m-            ehVisitedRegex.findAll(galleries).map { galleryKeys ->[m
+[31m-                val linkParts = galleryKeys.value.split(".")[m
+[31m-                url + linkParts[0] + "/" + linkParts[1].replace(":", "")[m
+[31m-            }.toList()[m
+[32m+[m[32m            ehVisitedRegex.findAll(text).mapNotNull { match ->[m
+[32m+[m[32m                val parts = match.value.split('.')[m
+[32m+[m[32m                if (parts.size >= 2) baseUrl + parts[0] + "/" + parts[1].replace(":", "") else null[m
+[32m+[m[32m            }.distinct().toList()[m
+         } else {[m
+[31m-            galleries.split("\n")[m
+[32m+[m[32m            text.lineSequence()[m
+                 .mapNotNull(String::trimOrNull)[m
+[32m+[m[32m                .filterNot { it.startsWith("#") }[m
+[32m+[m[32m                .distinct()[m
+[32m+[m[32m                .toList()[m
+         }[m
+[32m+[m[32m    }[m
+ [m
+[31m-        mutableState.update { state ->[m
+[31m-            state.copy([m
+[32m+[m[32m    private fun startImport(context: Context, galleries: List<String>) {[m
+[32m+[m[32m        if (galleries.isEmpty()) {[m
+[32m+[m[32m            mutableState.update { it.copy(dialog = Dialog.NoGalleriesSpecified) }[m
+[32m+[m[32m            return[m
+[32m+[m[32m        }[m
+[32m+[m[32m        importJob?.cancel()[m
+[32m+[m[32m        mutableState.update {[m
+[32m+[m[32m            it.copy([m
+                 progress = 0,[m
+[31m-                progressTotal = splitGalleries.size,[m
+[32m+[m[32m                progressTotal = galleries.size,[m
+[32m+[m[32m                added = 0,[m
+[32m+[m[32m                failed = 0,[m
+                 state = State.PROGRESS,[m
+[32m+[m[32m                events = emptyList(),[m
+             )[m
+         }[m
+[31m-[m
+[31m-        val handler = CoroutineExceptionHandler { _, throwable ->[m
+[32m+[m[32m        val appContext = context.applicationContext[m
+[32m+[m[32m        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->[m
+             xLogE("Batch add error", throwable)[m
+[31m-        }[m
+[31m-[m
+[31m-        screenModelScope.launch(Dispatchers.IO + handler) {[m
+[31m-            val succeeded = mutableListOf<String>()[m
+[31m-            val failed = mutableListOf<String>()[m
+[31m-[m
+[31m-            splitGalleries.forEachIndexed { i, s ->[m
+[31m-                ensureActive()[m
+[31m-                val result = withIOContext {[m
+[31m-                    galleryAdder.addGallery([m
+[31m-                        context = context,[m
+[31m-                        url = s,[m
+[31m-                        fav = true,[m
+[31m-                        retry = 2,[m
+[31m-                    )[m
+[31m-                }[m
+[31m-                if (result is GalleryAddEvent.Success) {[m
+[31m-                    succeeded.add(s)[m
+[31m-                } else {[m
+[31m-                    failed.add(s)[m
+[31m-                }[m
+[31m-                mutableState.update { state ->[m
+[31m-                    state.copy([m
+[31m-                        progress = i + 1,[m
+[31m-                        events = state.events.plus([m
+[31m-                            when (result) {[m
+[31m-                                is GalleryAddEvent.Success -> context.stringResource(SYMR.strings.batch_add_ok)[m
+[31m-                                is GalleryAddEvent.Fail -> context.stringResource(SYMR.strings.batch_add_error)[m
+[31m-                            } + " " + result.logMessage,[m
+[31m-                        ),[m
+[31m-                    )[m
+[32m+[m[32m            appContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)[m
+[32m+[m[32m        }) {[m
+[32m+[m[32m            val queue = Channel<String>(IMPORT_WORKERS * 2)[m
+[32m+[m[32m            val results = Channel<ImportResult>(IMPORT_WORKERS * 2)[m
+[32m+[m[32m            val feeder = launch {[m
+[32m+[m[32m                galleries.forEach { queue.send(it) }[m
+[32m+[m[32m                queue.close()[m
+[32m+[m[32m            }[m
+[32m+[m[32m            val workers = List(IMPORT_WORKERS) {[m
+[32m+[m[32m                launch {[m
+[32m+[m[32m                    for (url in queue) {[m
+[32m+[m[32m                        ensureActive()[m
+[32m+[m[32m                        val result = GalleryAdder().addGallery([m
+[32m+[m[32m                            context = appContext,[m
+[32m+[m[32m                            url = url,[m
+[32m+[m[32m                            fav = true,[m
+[32m+[m[32m                            retry = 2,[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                        results.send(ImportResult(url, result))[m
+[32m+[m[32m                    }[m
+                 }[m
+             }[m
+ [m
+[31m-            // Show report[m
+[31m-            val summary = context.stringResource(SYMR.strings.batch_add_summary, succeeded.size, failed.size)[m
+[31m-            mutableState.update { state ->[m
+[31m-                state.copy([m
+[31m-                    events = state.events + summary,[m
+[32m+[m[32m            var completed = 0[m
+[32m+[m[32m            var added = 0[m
+[32m+[m[32m            var failed = 0[m
+[32m+[m[32m            val events = ArrayList<String>(MAX_VISIBLE_EVENTS)[m
+[32m+[m[32m            showProgressNotification(appContext, completed, galleries.size, added, failed)[m
+[32m+[m[32m            while (completed < galleries.size) {[m
+[32m+[m[32m                ensureActive()[m
+[32m+[m[32m                val item = results.receive()[m
+[32m+[m[32m                completed++[m
+[32m+[m[32m                if (item.result is GalleryAddEvent.Success) added++ else failed++[m
+[32m+[m[32m                if (events.size == MAX_VISIBLE_EVENTS) events.removeAt(0)[m
+[32m+[m[32m                events.add([m
+[32m+[m[32m                    when (item.result) {[m
+[32m+[m[32m                        is GalleryAddEvent.Success -> appContext.stringResource(SYMR.strings.batch_add_ok)[m
+[32m+[m[32m                        is GalleryAddEvent.Fail -> appContext.stringResource(SYMR.strings.batch_add_error)[m
+[32m+[m[32m                    } + " " + item.result.logMessage,[m
+                 )[m
+[32m+[m[32m                if (completed % STATE_UPDATE_BATCH == 0 || completed == galleries.size) {[m
+[32m+[m[32m                    mutableState.update { current ->[m
+[32m+[m[32m                        current.copy([m
+[32m+[m[32m                            progress = completed,[m
+[32m+[m[32m                            added = added,[m
+[32m+[m[32m                            failed = failed,[m
+[32m+[m[32m                            events = events.toList(),[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                    showProgressNotification(appContext, completed, galleries.size, added, failed)[m
+[32m+[m[32m                }[m
+             }[m
+[32m+[m[32m            feeder.join()[m
+[32m+[m[32m            workers.joinAll()[m
+[32m+[m[32m            results.close()[m
+[32m+[m[32m            showCompleteNotification(appContext, completed, galleries.size, added, failed)[m
+[32m+[m[32m            mutableState.update { current -> current.copy(progress = galleries.size, added = added, failed = failed, events = events.toList()) }[m
+         }[m
+     }[m
+ [m
+[31m-    fun finish() {[m
+[31m-        mutableState.update { state ->[m
+[31m-            state.copy([m
+[31m-                progressTotal = 0,[m
+[31m-                progress = 0,[m
+[31m-                galleries = "",[m
+[31m-                state = State.INPUT,[m
+[31m-                events = emptyList(),[m
+[31m-            )[m
+[31m-        }[m
+[32m+[m[32m    private fun showProgressNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {[m
+[32m+[m[32m        val percent = if (total == 0) 0 else completed * 100 / total[m
+[32m+[m[32m        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {[m
+[32m+[m[32m            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)[m
+[32m+[m[32m            setContentTitle("Importing manga")[m
+[32m+[m[32m            setContentText("$completed/$total processed • $added added • $failed failed")[m
+[32m+[m[32m            setProgress(total, completed, false)[m
+[32m+[m[32m            setOngoing(true)[m
+[32m+[m[32m            setOnlyAlertOnce(true)[m
+[32m+[m[32m            setAutoCancel(false)[m
+[32m+[m[32m            setSubText("$percent%")[m
+[32m+[m[32m        }.also { context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, it.build()) }[m
+     }[m
+ [m
+[31m-    fun updateGalleries(galleries: String) {[m
+[31m-        mutableState.update { it.copy(galleries = galleries) }[m
+[32m+[m[32m    private fun showCompleteNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {[m
+[32m+[m[32m        context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)[m
+[32m+[m[32m        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {[m
+[32m+[m[32m            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)[m
+[32m+[m[32m            setContentTitle("Manga import complete")[m
+[32m+[m[32m            setContentText("$completed/$total processed • $added added • $failed failed")[m
+[32m+[m[32m            setAutoCancel(true)[m
+[32m+[m[32m        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }[m
+     }[m
+ [m
+[31m-    fun dismissDialog() {[m
+[31m-        mutableState.update { it.copy(dialog = null) }[m
+[32m+[m[32m    fun cancelImport() {[m
+[32m+[m[32m        importJob?.cancel()[m
+[32m+[m[32m        importJob = null[m
+[32m+[m[32m        mutableState.update { it.copy(state = State.INPUT) }[m
+     }[m
+ [m
+[31m-    enum class State {[m
+[31m-        INPUT,[m
+[31m-        PROGRESS,[m
+[32m+[m[32m    fun finish() {[m
+[32m+[m[32m        importJob?.cancel()[m
+[32m+[m[32m        importJob = null[m
+[32m+[m[32m        mutableState.update { it.copy(progressTotal = 0, progress = 0, galleries = "", state = State.INPUT, events = emptyList()) }[m
+     }[m
+ [m
+[32m+[m[32m    fun updateGalleries(galleries: String) = mutableState.update { it.copy(galleries = galleries) }[m
+[32m+[m[32m    fun dismissDialog() = mutableState.update { it.copy(dialog = null) }[m
+[32m+[m
+[32m+[m[32m    private data class ImportResult(val url: String, val result: GalleryAddEvent)[m
+[32m+[m
+[32m+[m[32m    enum class State { INPUT, PROGRESS }[m
+[32m+[m
+     sealed class Dialog {[m
+         data object NoGalleriesSpecified : Dialog()[m
+[32m+[m[32m        data object FileReadError : Dialog()[m
+     }[m
+ [m
+     companion object {[m
+[32m+[m[32m        private const val IMPORT_WORKERS = 4[m
+[32m+[m[32m        private const val STATE_UPDATE_BATCH = 4[m
+[32m+[m[32m        private const val MAX_VISIBLE_EVENTS = 200[m
+         val ehVisitedRegex = """[0-9]*?\.[a-z0-9]*?:""".toRegex()[m
+     }[m
+ }[m
+[36m@@ -149,6 +221,8 @@[m [mdata class BatchAddState([m
+     val progressTotal: Int = 0,[m
+     val progress: Int = 0,[m
+     val galleries: String = "",[m
+[32m+[m[32m    val added: Int = 0,[m
+[32m+[m[32m    val failed: Int = 0,[m
+     val state: BatchAddScreenModel.State = BatchAddScreenModel.State.INPUT,[m
+     val events: List<String> = emptyList(),[m
+     val dialog: BatchAddScreenModel.Dialog? = null,[m
+[1mdiff --git a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml[m
+[1mindex deea67a..db6871b 100644[m
+[1m--- a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml[m
+[1m+++ b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml[m
+[36m@@ -193,6 +193,8 @@[m
+     <string name="label_to_be_updated">To be updated</string>[m
+     <string name="sponsor_me">Sponsor Me</string>[m
+     <string name="batch_add_description">Support: MangaDex, E-H, ExH, nH, 8Muses</string>[m
+[32m+[m[32m    <string name="batch_add_file_read_error">Unable to read file</string>[m
+[32m+[m[32m    <string name="batch_add_file_read_error_message">The selected file could not be read.</string>[m
+     <!-- Connections section -->[m
+     <string name="special_services">Special Services</string>[m
+     <string name="pref_category_connections">Connections</string>[m
+[1mdiff --git a/i18n-sy/src/commonMain/moko-resources/base/strings.xml b/i18n-sy/src/commonMain/moko-resources/base/strings.xml[m
+[1mindex 53029f6..21bf3f4 100644[m
+[1m--- a/i18n-sy/src/commonMain/moko-resources/base/strings.xml[m
+[1m+++ b/i18n-sy/src/commonMain/moko-resources/base/strings.xml[m
+[36m@@ -569,6 +569,8 @@[m
+     <string name="eh_batch_add_finish">Finish</string>[m
+     <string name="batch_add_no_valid_galleries">No galleries to add!</string>[m
+     <string name="batch_add_no_valid_galleries_message">You must specify at least one gallery to add!</string>[m
+[32m+[m[32m    <string name="batch_add_file_read_error">Unable to read file</string>[m
+[32m+[m[32m    <string name="batch_add_file_read_error_message">The selected file could not be read.</string>[m
+     <string name="batch_add">Batch add</string>[m
+     <string name="batch_add_ok">[OK]</string>[m
+     <string name="batch_add_error">[ERROR]</string>[m
