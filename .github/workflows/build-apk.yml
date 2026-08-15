@@ -1,227 +1,73 @@
 name: Build Komikku APK
 
-
-
 on:
-
   workflow_dispatch:
-  
   push:
-  
     branches: [ main ]
-    
-
 
 permissions:
-
   contents: read
-  
-
 
 env:
-
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
-  
   JAVA_TOOL_OPTIONS: -Xmx4g
-  
-
 
 jobs:
-
   build-apk:
-  
     runs-on: ubuntu-24.04
-    
     timeout-minutes: 45
-    
     steps:
-    
       - name: Check out overlay repository
-      
         uses: actions/checkout@v4
-        
-
-
       - name: Check out official Komikku source
-      
         uses: actions/checkout@v4
-        
         with:
-        
           repository: komikku-app/komikku
-          
           path: upstream
-          
-
-
-      - name: Apply Kotlin source overlay and package ID
-      
+      - name: Apply Kotlin overlay and package ID
         run: |
-        
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          
           cd upstream
-          
           git apply --verbose komikku-overlay.patch
-          
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
-          
-
-
       - name: Set up Java 21
-      
         uses: actions/setup-java@v4
-        
         with:
-        
           distribution: temurin
-          
           java-version: "21"
-          
           cache: gradle
-          
-
-
       - name: Set up Android SDK
-      
         uses: android-actions/setup-android@v3
-        
-
-
       - name: Install Android SDK packages
-      
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
-        
-
-
       - name: Make Gradle executable
-      
         working-directory: upstream
-        
         run: chmod +x ./gradlew
-        
-
-
       - name: Build debug APK
-      
         working-directory: upstream
-        
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-        
-
-
-      - name: Validate and locate APK
-      
+      - name: Validate and locate universal APK
         working-directory: upstream
-        
         run: |
-        
-          APK=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
-          
+          APK=$(find app/build/outputs/apk -type f -name 'app-debug.apk' | head -n 1)
           test -n "$APK"
-          
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
-          
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
-          
           sha256sum "$APK"
-          
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
-          
-
-
-      - name: Upload APK
-      
+      - name: Upload universal APK
         uses: actions/upload-artifact@v4
-        
         with:
-        
-          name: Komikku-com.manus.komikku-debug
-          
+          name: Komikku-com.manus.komikku-universal-debug
           path: ${{ env.APK_PATH }}
-          
           if-no-files-found: error
-          
           retention-days: 30
-          
-
-
       - name: Upload build reports
-      
         if: always()
-        
         uses: actions/upload-artifact@v4
-        
         with:
-        
           name: komikku-build-reports
-          
           path: upstream/app/build/reports/**
-          
           if-no-files-found: ignore
-          
           retention-days: 30
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
