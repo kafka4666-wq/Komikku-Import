@@ -1,16 +1,20 @@
 name: Build Komikku APK
 
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
 
+
 permissions:
   contents: read
+
 
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
   JAVA_TOOL_OPTIONS: -Xmx4g
+
 
 jobs:
   build-apk:
@@ -50,7 +54,7 @@ jobs:
       - name: Validate and locate universal APK
         working-directory: upstream
         run: |
-          APK=$(find app/build/outputs/apk -type f -name 'app-debug.apk' | head -n 1)
+          APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n 1)
           test -n "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
@@ -71,3 +75,4 @@ jobs:
           path: upstream/app/build/reports/**
           if-no-files-found: ignore
           retention-days: 30
+
