@@ -41,17 +41,18 @@ jobs:
 
       - name: Validate APK metadata
         run: |
-          APK=$(find app/build/outputs/apk/universal -type f -name '*.apk' | head -n 1)
+          APK=$(find app/build/outputs/apk -type f -name '*.apk' | head -n 1)
           test -n "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx 'com.manus.komikku'
           sha256sum "$APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Komikku-com.manus.komikku-debug
-          path: app/build/outputs/apk/universal/*.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
 
@@ -69,7 +70,7 @@ jobs:
       - name: Publish APK to workflow summary
         if: success()
         run: |
-          APK=$(find app/build/outputs/apk/universal -type f -name '*.apk' | head -n 1)
+          APK="${{ env.APK_PATH }}"
           echo "## APK ready" >> "$GITHUB_STEP_SUMMARY"
           echo "Package: \\`com.manus.komikku\\`" >> "$GITHUB_STEP_SUMMARY"
           echo "SHA-256: \\`$(sha256sum "$APK" | cut -d ' ' -f 1)\\`" >> "$GITHUB_STEP_SUMMARY"
