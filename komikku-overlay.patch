@@ -576,7 +576,7 @@ index a791e4d428..d4d12903ed 100644
      val dialog: BatchAddScreenModel.Dialog? = null,
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
 new file mode 100644
-index 0000000000..ae9724f3d6
+index 0000000000..41cbbfa25b
 --- /dev/null
 +++ b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
 @@ -0,0 +1,223 @@
@@ -639,7 +639,7 @@ index 0000000000..ae9724f3d6
 +        val checkpointFile = File("$inputPath.progress")
 +        val failedFile = File("$inputPath.failed")
 +        val eventsFile = File("$inputPath.events")
-+        var nextIndex = checkpointFile.readText().trim().toIntOrNull()?.coerceIn(0, urls.size) ?: 0
++        var nextIndex = checkpointFile.readLinesSafely().firstOrNull()?.trim()?.toIntOrNull()?.coerceIn(0, urls.size) ?: 0
 +        val failedLinks = failedFile.readLinesSafely().toMutableList()
 +        val events = eventsFile.readLinesSafely()
 +        val initialFailed = failedLinks.size.coerceAtMost(nextIndex)
