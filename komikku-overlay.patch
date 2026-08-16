@@ -1,3 +1,18 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index feaf089e76..5c29a1e7a3 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -28,8 +28,8 @@ android {
+     defaultConfig {
+         applicationId = "app.komikku"
+ 
+-        versionCode = 81
+-        versionName = "1.14.1"
++        versionCode = 82
++        versionName = "1.14.2"
+ 
+         buildConfigField("String", "COMMIT_COUNT", "\"${getCommitCount()}\"")
+         buildConfigField("String", "COMMIT_SHA", "\"${getGitSha()}\"")
 diff --git a/app/src/main/java/eu/kanade/presentation/components/Banners.kt b/app/src/main/java/eu/kanade/presentation/components/Banners.kt
 index a147d7ff43..625812f5a9 100644
 --- a/app/src/main/java/eu/kanade/presentation/components/Banners.kt
