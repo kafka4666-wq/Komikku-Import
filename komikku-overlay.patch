@@ -65,11 +65,15 @@ index a147d7ff43..625812f5a9 100644
              .padding(8.dp)
              .then(modifier),
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-index ae2fd5a113..434f29ca6b 100644
+index ae2fd5a113..3bcb5de0a4 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
 +++ b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-@@ -16,21 +16,22 @@ open class BannerProgressStatus {
-         .debounce(1000L) // Don't notify if it finishes quickly enough
+@@ -13,24 +13,76 @@ open class BannerProgressStatus {
+     private val _isRunning = MutableStateFlow(false)
+ 
+     val isRunning = _isRunning
+-        .debounce(1000L) // Don't notify if it finishes quickly enough
++        .debounce(1000L)
          .stateIn(scope, SharingStarted.WhileSubscribed(), false)
  
 -    suspend fun start() {
@@ -96,7 +100,58 @@ index ae2fd5a113..434f29ca6b 100644
  class LibraryUpdateStatus : BannerProgressStatus()
  class SyncStatus : BannerProgressStatus()
  class BackupRestoreStatus : BannerProgressStatus()
-+class BatchImportStatus : BannerProgressStatus()
++
++data class BatchImportSnapshot(
++    val total: Int = 0,
++    val completed: Int = 0,
++    val added: Int = 0,
++    val failed: Int = 0,
++    val currentUrl: String = "",
++    val events: List<String> = emptyList(),
++    val running: Boolean = false,
++)
++
++class BatchImportStatus : BannerProgressStatus() {
++    val state = MutableStateFlow(BatchImportSnapshot())
++
++    fun begin(total: Int, completed: Int = 0, added: Int = 0, failed: Int = 0, events: List<String> = emptyList()) {
++        state.value = BatchImportSnapshot(
++            total = total,
++            completed = completed,
++            added = added,
++            failed = failed,
++            events = events,
++            running = true,
++        )
++        start()
++        updateProgress(if (total == 0) 0f else completed.toFloat() / total)
++    }
++
++    fun record(url: String, wasAdded: Boolean, detail: String? = null) {
++        val old = state.value
++        val event = if (wasAdded) {
++            "[ADDED] $url"
++        } else {
++            "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
++        }
++        val completed = old.completed + 1
++        val failed = old.failed + if (wasAdded) 0 else 1
++        state.value = old.copy(
++            completed = completed,
++            added = old.added + if (wasAdded) 1 else 0,
++            failed = failed,
++            currentUrl = url,
++            events = old.events + event,
++        )
++        updateProgress(if (old.total == 0) 0f else completed.toFloat() / old.total)
++    }
++
++    fun restore(total: Int, completed: Int, added: Int, failed: Int, events: List<String>, running: Boolean) {
++        state.value = BatchImportSnapshot(total, completed, added, failed, events = events, running = running)
++        updateProgress(if (total == 0) 0f else completed.toFloat() / total)
++        if (running) start() else stop()
++    }
++}
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
 index 6ecb6717d2..92f771f13b 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
@@ -198,7 +253,7 @@ index 43bcfc49d5..427081ba29 100644
                              updating = updating,
                              progress = updatingProgress.takeIf { updating }
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
-index 3d1e7f9ea4..d27327a2d6 100644
+index 3d1e7f9ea4..86bedeade7 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 @@ -1,5 +1,8 @@
@@ -238,7 +293,21 @@ index 3d1e7f9ea4..d27327a2d6 100644
                          // KMK -->
                          Spacer(Modifier.height(8.dp))
                          Text(
-@@ -182,6 +199,20 @@ class BatchAddScreen : Screen() {
+@@ -134,6 +151,13 @@ class BatchAddScreen : Screen() {
+                                         style = MaterialTheme.typography.bodyMedium,
+                                     )
+                                 }
++                                Spacer(modifier = Modifier.height(8.dp))
++                                Text(
++                                    text = "${state.added} added • ${state.failed} failed",
++                                    style = MaterialTheme.typography.bodyMedium,
++                                    modifier = Modifier.fillMaxWidth(),
++                                    textAlign = TextAlign.Center,
++                                )
+                                 Spacer(modifier = Modifier.height(12.dp))
+                             }
+                         }
+@@ -182,6 +206,20 @@ class BatchAddScreen : Screen() {
                      Text(text = stringResource(SYMR.strings.batch_add_no_valid_galleries_message))
                  },
              )
@@ -260,10 +329,10 @@ index 3d1e7f9ea4..d27327a2d6 100644
          }
      }
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-index a791e4d428..18ade5c992 100644
+index a791e4d428..d4d12903ed 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-@@ -1,22 +1,19 @@
+@@ -1,22 +1,21 @@
  package exh.ui.batchadd
  
  import android.content.Context
@@ -274,6 +343,7 @@ index a791e4d428..18ade5c992 100644
  import eu.kanade.core.preference.asState
 -import exh.GalleryAddEvent
 -import exh.GalleryAdder
++import eu.kanade.tachiyomi.data.BatchImportStatus
  import exh.log.xLogE
  import exh.source.ExhPreferences
 +import exh.ui.batchadd.BatchImportJob
@@ -281,6 +351,7 @@ index a791e4d428..18ade5c992 100644
  import kotlinx.coroutines.CoroutineExceptionHandler
  import kotlinx.coroutines.Dispatchers
 -import kotlinx.coroutines.ensureActive
++import kotlinx.coroutines.flow.collect
  import kotlinx.coroutines.flow.update
  import kotlinx.coroutines.launch
 -import tachiyomi.core.common.i18n.stringResource
@@ -288,7 +359,7 @@ index a791e4d428..18ade5c992 100644
  import tachiyomi.i18n.sy.SYMR
  import uy.kohesive.injekt.Injekt
  import uy.kohesive.injekt.api.get
-@@ -24,120 +21,91 @@ import uy.kohesive.injekt.api.get
+@@ -24,120 +23,110 @@ import uy.kohesive.injekt.api.get
  class BatchAddScreenModel(
      private val exhPreferences: ExhPreferences = Injekt.get(),
  ) : StateScreenModel<BatchAddState>(BatchAddState()) {
@@ -297,7 +368,26 @@ index a791e4d428..18ade5c992 100644
 -    // KMK -->
      val isHentaiEnabled by Injekt.get<ExhPreferences>().isHentaiEnabled().asState(screenModelScope)
 -    // KMK <--
++    private val batchImportStatus: BatchImportStatus = Injekt.get()
 +
++    init {
++        screenModelScope.launch {
++            batchImportStatus.state.collect { snapshot ->
++                if (snapshot.total > 0) {
++                    mutableState.update {
++                        it.copy(
++                            progressTotal = snapshot.total,
++                            progress = snapshot.completed,
++                            added = snapshot.added,
++                            failed = snapshot.failed,
++                            state = State.PROGRESS,
++                            events = snapshot.events,
++                        )
++                    }
++                }
++            }
++        }
++    }
  
      fun addGalleries(context: Context) {
          val galleries = state.value.galleries
@@ -460,7 +550,7 @@ index a791e4d428..18ade5c992 100644
      }
  
      companion object {
-@@ -149,6 +117,8 @@ data class BatchAddState(
+@@ -149,6 +138,8 @@ data class BatchAddState(
      val progressTotal: Int = 0,
      val progress: Int = 0,
      val galleries: String = "",
@@ -471,10 +561,10 @@ index a791e4d428..18ade5c992 100644
      val dialog: BatchAddScreenModel.Dialog? = null,
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
 new file mode 100644
-index 0000000000..168434077c
+index 0000000000..ae9724f3d6
 --- /dev/null
 +++ b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,223 @@
 +package exh.ui.batchadd
 +
 +import android.content.Context
@@ -497,13 +587,17 @@ index 0000000000..168434077c
 +import exh.GalleryAddEvent
 +import exh.GalleryAdder
 +import exh.log.xLogE
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.NonCancellable
 +import kotlinx.coroutines.delay
 +import kotlinx.coroutines.sync.Mutex
 +import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.withContext
 +import tachiyomi.domain.storage.service.StoragePreferences
 +import uy.kohesive.injekt.Injekt
 +import uy.kohesive.injekt.api.get
 +import com.hippo.unifile.UniFile
++import java.io.File
 +import java.text.SimpleDateFormat
 +import java.util.Date
 +import java.util.Locale
@@ -520,45 +614,71 @@ index 0000000000..168434077c
 +
 +    override suspend fun doWork(): Result {
 +        val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
-+        val urls = runCatching { java.io.File(inputPath).readLines().filter(String::isNotBlank) }.getOrElse {
++        val inputFile = File(inputPath)
++        val urls = runCatching { inputFile.readLines().filter(String::isNotBlank) }.getOrElse {
 +            xLogE("Batch import input read error", it)
 +            return Result.failure()
 +        }
 +        if (urls.isEmpty()) return Result.success()
 +
-+        status.start()
-+        status.updateProgress(0f)
++        val checkpointFile = File("$inputPath.progress")
++        val failedFile = File("$inputPath.failed")
++        val eventsFile = File("$inputPath.events")
++        var nextIndex = checkpointFile.readText().trim().toIntOrNull()?.coerceIn(0, urls.size) ?: 0
++        val failedLinks = failedFile.readLinesSafely().toMutableList()
++        val events = eventsFile.readLinesSafely()
++        val initialFailed = failedLinks.size.coerceAtMost(nextIndex)
++        var added = (nextIndex - initialFailed).coerceAtLeast(0)
++        var failed = initialFailed
++
++        status.begin(urls.size, nextIndex, added, failed, events)
 +        setForegroundSafely()
-+        val failedLinks = ArrayList<String>()
-+        var completed = 0
-+        var added = 0
-+        var failed = 0
++        showProgress(nextIndex, urls.size, added, failed)
 +
 +        return try {
-+            showProgress(completed, urls.size, added, failed)
-+            for (url in urls) {
++            while (nextIndex < urls.size) {
++                val url = urls[nextIndex]
 +                val result = addGalleryRateLimited(url)
-+                completed++
-+                if (result is GalleryAddEvent.Success) added++ else {
++                val wasAdded = result is GalleryAddEvent.Success
++                val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
++                if (wasAdded) {
++                    added++
++                } else {
 +                    failed++
 +                    failedLinks += url
++                    failedFile.appendLineSafely(url)
 +                }
-+                status.updateProgress(completed.toFloat() / urls.size)
-+                showProgress(completed, urls.size, added, failed)
++                val event = if (wasAdded) "[ADDED] $url" else "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
++                eventsFile.appendLineSafely(event)
++                nextIndex++
++                checkpointFile.writeText(nextIndex.toString())
++                status.record(url, wasAdded, detail)
++                showProgress(nextIndex, urls.size, added, failed)
 +            }
-+            writeFailedLinks(failedLinks)
-+            showComplete(completed, urls.size, added, failed)
++            writeLinksFile("batch_import_failed_links", failedLinks)
++            showComplete(nextIndex, urls.size, added, failed)
 +            Result.success()
-+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
++        } catch (cancelled: CancellationException) {
++            withContext(NonCancellable) {
++                writeUnprocessedLinks(urls, nextIndex, failedLinks)
++                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
++            }
 +            throw cancelled
 +        } catch (error: Throwable) {
 +            xLogE("Batch import error", error)
-+            writeFailedLinks(failedLinks)
-+            Result.failure()
++            withContext(NonCancellable) {
++                writeUnprocessedLinks(urls, nextIndex, failedLinks)
++                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
++            }
++            Result.retry()
 +        } finally {
 +            context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-+            status.stop()
-+            runCatching { java.io.File(inputPath).delete() }
++            if (!isStopped && nextIndex >= urls.size) {
++                inputFile.delete()
++                checkpointFile.delete()
++                failedFile.delete()
++                eventsFile.delete()
++            }
 +        }
 +    }
 +
@@ -622,14 +742,26 @@ index 0000000000..168434077c
 +        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
 +    }
 +
-+    private fun writeFailedLinks(failedLinks: List<String>) {
-+        if (failedLinks.isEmpty()) return
++    private fun writeUnprocessedLinks(urls: List<String>, nextIndex: Int, failedLinks: List<String>) {
++        val pending = urls.drop(nextIndex)
++        writeLinksFile("batch_import_unprocessed_links", (failedLinks + pending).distinct())
++    }
++
++    private fun writeLinksFile(prefix: String, links: List<String>) {
++        if (links.isEmpty()) return
 +        runCatching {
 +            val directory = UniFile.fromUri(context, Uri.parse(storagePreferences.baseStorageDirectory().get())) ?: return
 +            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-+            val file = directory.createFile("batch_import_failed_links_$timestamp.txt") ?: return
-+            file.openOutputStream().bufferedWriter().use { writer -> failedLinks.forEach(writer::appendLine) }
-+        }.onFailure { xLogE("Failed-link export error", it) }
++            val file = directory.createFile("${prefix}_$timestamp.txt") ?: return
++            file.openOutputStream().bufferedWriter().use { writer -> links.distinct().forEach(writer::appendLine) }
++        }.onFailure { xLogE("Batch-link export error", it) }
++    }
++
++    private fun File.readLinesSafely(): List<String> = runCatching { if (exists()) readLines().filter(String::isNotBlank) else emptyList() }.getOrDefault(emptyList())
++
++    private fun File.appendLineSafely(value: String) {
++        parentFile?.mkdirs()
++        appendText(value + "\n")
 +    }
 +
 +    companion object {
@@ -641,10 +773,11 @@ index 0000000000..168434077c
 +        private const val RATE_LIMIT_RETRIES = 3
 +
 +        fun start(context: Context, urls: List<String>) {
-+            val input = java.io.File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
++            val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
 +            input.writeText(urls.joinToString("\n"))
 +            val request = OneTimeWorkRequestBuilder<BatchImportJob>()
 +                .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
++                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
 +                .addTag(TAG)
 +                .build()
 +            context.workManager.enqueueUniqueWork(TAG, androidx.work.ExistingWorkPolicy.REPLACE, request)
