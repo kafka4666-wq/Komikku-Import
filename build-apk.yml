@@ -83,7 +83,7 @@ jobs:
           test -n "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "package: name='com.manus.komikku' versionCode='83' versionName='1.14.3'"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "package: name='com.manus.komikku' versionCode='84' versionName='1.14.4'"
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
