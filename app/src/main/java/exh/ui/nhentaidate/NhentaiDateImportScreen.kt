@@ -1,7 +1,11 @@
 package exh.ui.nhentaidate
 
+import android.Manifest
 import android.app.DatePickerDialog
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,12 +24,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ForegroundInfo
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -36,8 +44,10 @@ import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.NetworkHelper
+import eu.kanade.tachiyomi.util.system.cancelNotification
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.notify
+import eu.kanade.tachiyomi.util.system.setForegroundSafely
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -61,6 +71,24 @@ class NhentaiDateImportScreen : Screen() {
         var endDate by remember { mutableStateOf(today()) }
         var started by remember { mutableStateOf(false) }
         var excludedTags by remember { mutableStateOf("") }
+        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            if (granted) {
+                started = true
+                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
+            }
+        }
+        fun startImport() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                started = true
+                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
+            }
+        }
 
         Scaffold { contentPadding ->
             Column(
@@ -107,10 +135,7 @@ class NhentaiDateImportScreen : Screen() {
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !started && startDate <= endDate,
-                    onClick = {
-                        started = true
-                        NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
-                    },
+                    onClick = { startImport() },
                 ) {
                     Text(if (started) "Preparing import…" else "Add books from $startDate to $endDate")
                 }
@@ -149,21 +174,49 @@ class NhentaiDateImportWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val status: BatchImportStatus = Injekt.get()
-        status.begin(total = 1)
         val startDate = inputData.getString(KEY_START_DATE) ?: return Result.failure()
         val endDate = inputData.getString(KEY_END_DATE) ?: return Result.failure()
         val excludedTags = inputData.getString(KEY_EXCLUDED_TAGS).orEmpty()
             .split(',').map(String::trim).filter(String::isNotBlank).distinct()
         if (startDate > endDate) return Result.failure()
-        return runCatching {
+
+        status.begin(total = 1, events = listOf("Preparing import…"))
+        setForegroundSafely()
+        showPreparationNotification()
+        return try {
             val urls = fetchGalleryUrls(startDate, endDate, excludedTags)
             if (urls.isEmpty()) {
-                status.restore(0, 0, 0, 0, emptyList(), running = false)
-                return Result.success()
+                status.restore(0, 0, 0, 0, listOf("No nhentai books matched the selected date range."), running = false)
+                applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+                Result.success()
+            } else {
+                BatchImportJob.start(applicationContext, urls)
+                Result.success()
             }
-            BatchImportJob.start(applicationContext, urls)
-            Result.success()
-        }.getOrElse { Result.retry() }
+        } catch (error: Throwable) {
+            status.restore(1, 0, 0, 1, listOf("[FAILED] nhentai date discovery — ${error.message.orEmpty()}"), running = false)
+            applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+            Result.retry()
+        }
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
+        Notifications.ID_BATCH_IMPORT_PROGRESS,
+        buildPreparationNotification(),
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+    )
+
+    private fun buildPreparationNotification() = applicationContext.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
+        setSmallIcon(R.drawable.ic_komikku)
+        setContentTitle("Preparing nhentai import")
+        setContentText("Finding books for the selected date range…")
+        setOngoing(true)
+        setOnlyAlertOnce(true)
+        setAutoCancel(false)
+    }.build()
+
+    private fun showPreparationNotification() {
+        applicationContext.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildPreparationNotification())
     }
 
     private suspend fun fetchGalleryUrls(startDate: String, endDate: String, excludedTags: List<String>): List<String> {
@@ -172,8 +225,6 @@ class NhentaiDateImportWorker(
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }
         val start = dateFormat.parse(startDate) ?: return emptyList()
         val end = dateFormat.parse(endDate) ?: return emptyList()
-        val now = System.currentTimeMillis()
-        val lowerBoundDays = ((now - start.time) / DAY_MS).coerceAtLeast(0L)
         val tagQuery = excludedTags.joinToString(" ") { "-Tags:$it" }
         var page = 1
         var nextRequestAt = 0L
@@ -184,7 +235,9 @@ class NhentaiDateImportWorker(
             if (waitFor > 0) delay(waitFor)
         }
         while (page <= MAX_PAGES) {
-            val query = "Uploaded:>${lowerBoundDays}d $tagQuery".trim()
+            // The API does not support the Uploaded:>Nd syntax. Fetch newest pages
+            // and apply the exact inclusive date range and tag filter locally.
+            val query = tagQuery.ifBlank { "a" }
             val url = "https://nhentai.net/api/v2/search".toHttpUrl().newBuilder()
                 .addQueryParameter("query", query)
                 .addQueryParameter("sort", "date")
@@ -205,22 +258,26 @@ class NhentaiDateImportWorker(
             val json = JSONObject(response.use { it.body.string() })
             val results = json.optJSONArray("result") ?: break
             if (results.length() == 0) break
+            var reachedOlderThanStart = false
             for (index in 0 until results.length()) {
                 val item = results.optJSONObject(index) ?: continue
                 val id = item.optLong("id", 0L)
                 if (id <= 0L) continue
+                val listedUpload = item.optLong("upload_date", 0L) * 1000L
                 val details = fetchGalleryDetails(client, id, ::awaitRequestSlot) ?: continue
-                val uploaded = details.optLong("upload_date", 0L) * 1000L
+                val uploaded = details.optLong("upload_date", listedUpload / 1000L) * 1000L
                 val tags = details.optJSONArray("tags")
                 val hasExcludedTag = excludedTags.any { excluded ->
                     (0 until (tags?.length() ?: 0)).any { tagIndex ->
                         tags?.optJSONObject(tagIndex)?.optString("name").equals(excluded, ignoreCase = true)
                     }
                 }
+                if (uploaded > 0L && uploaded < start.time) reachedOlderThanStart = true
                 if (!hasExcludedTag && uploaded in start.time..(end.time + DAY_MS - 1L)) {
                     all += "https://nhentai.net/g/$id/"
                 }
             }
+            if (reachedOlderThanStart) break
             val pages = json.optInt("num_pages", page)
             if (page >= pages) break
             page++
