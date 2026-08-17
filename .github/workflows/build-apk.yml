@@ -1,80 +1,110 @@
 name: Build Komikku APK
 
-
-
-
-
-
 on:
-
-
   workflow_dispatch:
-  
   push:
-  
     branches: [main]
-    
-
-
-
 
 permissions:
-
-
   contents: read
-  
-
-
-
 
 env:
-
-
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
-  
   JAVA_TOOL_OPTIONS: -Xmx4g
-  
-
-
-
 
 jobs:
-
-
   build-apk:
-  
     runs-on: ubuntu-24.04
-    
     timeout-minutes: 45
-    
     steps:
-    
       - name: Check out overlay repository
-      
         uses: actions/checkout@v4
-        
       - name: Check out official Komikku source
-      
         uses: actions/checkout@v4
-        
         with:
-        
           repository: komikku-app/komikku
-          
           path: upstream
-          
       - name: Apply Kotlin overlay and package ID
-      
         shell: bash
-        
         run: |
-        
           set -euo pipefail
-          
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          
-          
           cd upstream
-          
+          # The patch was generated with colored git diff output. Remove ANSI escapes
+          # before applying it so file headers and Kotlin lines are valid patch text.
           for patch in komikku-overlay.patch; do
-          
+            perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$patch" > "$patch.clean"
+            mv "$patch.clean" "$patch"
+          done
+
+          extract_new_file() {
+            local path="$1"
+            local header="diff --git a/${path} b/${path}"
+            mkdir -p "$(dirname "$path")"
+            awk -v header="$header" '
+              $0 == header { found=1; next }
+              found && /^diff --git / { exit }
+              found && /^\+\+\+ b\// { next }
+              found && /^\+/ { sub(/^\+/, ""); print }
+            ' komikku-overlay.patch > "$path"
+            test -s "$path"
+          }
+
+          git apply --verbose komikku-overlay.patch || true
+          grep -q 'class BatchImportStatus' app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
+          grep -q 'ID_BATCH_IMPORT_PROGRESS' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
+          # Copy new Kotlin files from the overlay repository itself. Keeping these
+          # files outside the colored unified diff avoids any patch-parser ambiguity.
+          mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
+          cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          cp ../app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
+          sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Make Gradle executable
+        working-directory: upstream
+        run: chmod +x ./gradlew
+      - name: Build debug APK
+        working-directory: upstream
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Validate and locate universal APK
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n 1)
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='83'" /tmp/komikku-badging.txt
+          sha256sum "$APK"
+          echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
+      - name: Upload universal APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Komikku-com.manus.komikku-universal-debug
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: komikku-build-reports
+          path: upstream/app/build/reports/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+        
