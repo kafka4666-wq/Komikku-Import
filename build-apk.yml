@@ -32,6 +32,10 @@ jobs:
         run: |
           cp komikku-overlay.patch upstream/komikku-overlay.patch
           cd upstream
+          # The uploaded patch was generated with colored git diff output. Strip ANSI
+          # escapes first so headers and Kotlin lines are valid patch text.
+          sed -E $'s/\033\\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
+          mv komikku-overlay.clean.patch komikku-overlay.patch
           # Materialize the new Kotlin source first; this makes the build independent of
           # whether git apply accepts the surrounding mixed-context hunks.
           NHENTAI_FILE="app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
