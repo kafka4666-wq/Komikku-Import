@@ -125,7 +125,9 @@ class BatchImportJob(
         var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
         for (attempt in 0 until RATE_LIMIT_RETRIES) {
             awaitRequestSlot()
-            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
+            result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 2)
+            }
             if (!isRateLimited(result)) return result
             if (attempt < RATE_LIMIT_RETRIES - 1) {
                 delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
