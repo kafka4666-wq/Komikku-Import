@@ -59,7 +59,8 @@ jobs:
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force an update-compatible release identity in the generated APK.
-          perl -pi -e 's/^[ \t]*versionCode[ \t]*=.*/        versionCode = 84/; s/^[ \t]*versionName[ \t]*=.*/        versionName = "1.14.4"/' app/build.gradle.kts
+          sed -i '/versionCode =/c\        versionCode = 84' app/build.gradle.kts
+          sed -i '/versionName =/c\        versionName = "1.14.4"' app/build.gradle.kts
           grep -nE 'versionCode|versionName' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
       - name: Set up Java 21
