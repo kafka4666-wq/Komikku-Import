@@ -1,252 +1,76 @@
 name: Build Komikku APK
-
-
-
 on:
-
   workflow_dispatch:
-  
   push:
-  
     branches: [main]
-    
-
-
 permissions:
-
   contents: read
-  
-
-
 env:
-
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
-  
   JAVA_TOOL_OPTIONS: -Xmx4g
-  
-
-
 jobs:
-
   build-apk:
-  
     runs-on: ubuntu-24.04
-    
     timeout-minutes: 45
-    
     steps:
-    
-      - name: Check out overlay repository
-      
+      - name: Checkout overlay
         uses: actions/checkout@v4
-        
-      - name: Check out official Komikku source
-      
+      - name: Checkout official Komikku
         uses: actions/checkout@v4
-        
         with:
-        
           repository: komikku-app/komikku
-          
           path: upstream
-          
-      - name: Apply Kotlin overlay and package ID
-      
+      - name: Apply overlay and direct Kotlin sources
         shell: bash
-        
         run: |
-        
           set -euo pipefail
-          
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          
-          mkdir -p upstream/app/src/main/java/exh/ui/batchadd upstream/app/src/main/java/exh/ui/nhentaidate
-          
-          cp app/src/main/java/exh/ui/batchadd/BatchImportJob.kt upstream/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          
-          cp app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt upstream/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          
+          cp komikku-overlay-lifecycle.patch upstream/komikku-overlay-lifecycle.patch
           cd upstream
-          
-          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
-          
-          mv komikku-overlay.clean.patch komikku-overlay.patch
-          
+          for p in komikku-overlay-lifecycle.patch komikku-overlay.patch; do perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$p" > "$p.clean"; mv "$p.clean" "$p"; done
+          git apply --verbose komikku-overlay-lifecycle.patch || true
           git apply --verbose komikku-overlay.patch || true
-          
+          grep -q 'class BatchImportStatus' app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
+          grep -q 'ID_BATCH_IMPORT_PROGRESS' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
+          mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
           cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          
           cp ../app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          
-          grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          
-          sed -i 's/applicationIdSuffix = "\\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
-          
-      - name: Set up Java 21
-      
+          sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
+      - name: Set up Java
         uses: actions/setup-java@v4
-        
         with:
-        
           distribution: temurin
-          
-          java-version: "21"
-          
+          java-version: '21'
           cache: gradle
-          
       - name: Set up Android SDK
-      
         uses: android-actions/setup-android@v3
-        
-      - name: Install Android SDK packages
-      
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
-        
-      - name: Make Gradle executable
-      
-        working-directory: upstream
-        
-        run: chmod +x ./gradlew
-        
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Build debug APK
-      
         working-directory: upstream
-        
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-        
-      - name: Validate and locate universal APK
-      
+        run: chmod +x ./gradlew && ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Validate APK
         working-directory: upstream
-        
         run: |
-        
           set -euo pipefail
-          
-          APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n 1)
-          
+          APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n1)
           test -n "$APK"
-          
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
-          
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
-          
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx 'com.manus.komikku'
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "package: name='com.manus.komikku' versionCode='83' versionName='1.14.3'"
-          
-          sha256sum "$APK"
-          
-          echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
-          
-      - name: Upload universal APK
-      
+      - name: Upload APK
         uses: actions/upload-artifact@v4
-        
         with:
-        
           name: Komikku-com.manus.komikku-universal-debug
-          
-          path: ${{ env.APK_PATH }}
-          
+          path: upstream/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
-          
-          retention-days: 30
-          
-      - name: Upload build reports
-      
+      - name: Upload reports
         if: always()
-        
         uses: actions/upload-artifact@v4
-        
         with:
-        
           name: komikku-build-reports
-          
           path: upstream/app/build/reports/**
-          
           if-no-files-found: ignore
-          
-          retention-days: 30
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
