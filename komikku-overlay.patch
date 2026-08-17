@@ -105,7 +105,7 @@ index 97474b3a7d..114d3146ba 100644
                  }
 +                item {
 +                    TextPreferenceWidget(
-+                        title = "nhentai Books Imported",
++                        title = "Nhentai Book Import",
 +                        icon = Icons.Outlined.CalendarMonth,
 +                        onPreferenceClick = onClickNhentaiDateImport,
 +                    )
