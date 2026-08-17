@@ -1,211 +1,8 @@
-diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index feaf089e76..43e017b553 100644
---- a/app/build.gradle.kts
-+++ b/app/build.gradle.kts
-@@ -28,8 +28,8 @@ android {
-     defaultConfig {
-         applicationId = "app.komikku"
- 
--        versionCode = 81
--        versionName = "1.14.1"
-+        versionCode = 83
-+        versionName = "1.14.3"
- 
-         buildConfigField("String", "COMMIT_COUNT", "\"${getCommitCount()}\"")
-         buildConfigField("String", "COMMIT_SHA", "\"${getGitSha()}\"")
-diff --git a/app/src/main/java/eu/kanade/presentation/components/Banners.kt b/app/src/main/java/eu/kanade/presentation/components/Banners.kt
-index a147d7ff43..625812f5a9 100644
---- a/app/src/main/java/eu/kanade/presentation/components/Banners.kt
-+++ b/app/src/main/java/eu/kanade/presentation/components/Banners.kt
-@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
- import androidx.compose.runtime.remember
- import androidx.compose.runtime.setValue
- import androidx.compose.ui.Modifier
-+import androidx.compose.ui.graphics.Color
- import androidx.compose.ui.layout.SubcomposeLayout
- import androidx.compose.ui.platform.LocalDensity
- import androidx.compose.ui.text.style.TextAlign
-@@ -50,6 +51,8 @@ val SyncingBannerBackgroundColor
-     @Composable get() = MaterialTheme.colorScheme.secondary
- val UpdatingBannerBackgroundColor
-     @Composable get() = MaterialTheme.colorScheme.tertiary
-+val BatchImportBannerBackgroundColor
-+    @Composable get() = MaterialTheme.colorScheme.primary
- // KMK <--
- 
- @Composable
-@@ -83,6 +86,8 @@ fun AppStateBanners(
-     indexing: Boolean,
-     // KMK -->
-     restoring: Boolean,
-+    batchImporting: Boolean,
-+    batchImportProgress: Float,
-     syncing: Boolean,
-     updating: Boolean,
-     // KMK <--
-@@ -98,15 +103,17 @@ fun AppStateBanners(
-         val indexingPlaceable = subcompose(0) {
-             AnimatedVisibility(
-                 // KMK -->
--                visible = indexing || restoring || syncing || updating,
-+                visible = indexing || restoring || batchImporting || syncing || updating,
-                 // KMK <--
-                 enter = expandVertically(),
-                 exit = shrinkVertically(),
-             ) {
-                 IndexingDownloadBanner(
-                     modifier = Modifier.windowInsetsPadding(mainInsets),
-+                    backgroundColor = if (batchImporting) BatchImportBannerBackgroundColor else IndexingBannerBackgroundColor,
-                     // KMK -->
-                     text = when {
-+                        batchImporting -> "Importing manga (${percentFormatter.format(batchImportProgress)})"
-                         updating -> progress?.let {
-                             stringResource(
-                                 MR.strings.notification_updating_progress,
-@@ -202,6 +209,7 @@ private fun IncognitoModeBanner(modifier: Modifier = Modifier) {
- @Composable
- private fun IndexingDownloadBanner(
-     modifier: Modifier = Modifier,
-+    backgroundColor: Color = IndexingBannerBackgroundColor,
-     // KMK -->
-     text: String = stringResource(MR.strings.download_notifier_cache_renewal),
-     // KMK <--
-@@ -209,7 +217,7 @@ private fun IndexingDownloadBanner(
-     val density = LocalDensity.current
-     Row(
-         modifier = Modifier
--            .background(color = IndexingBannerBackgroundColor)
-+            .background(color = backgroundColor)
-             .fillMaxWidth()
-             .padding(8.dp)
-             .then(modifier),
-diff --git a/app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt b/app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-index 97474b3a7d..114d3146ba 100644
---- a/app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-+++ b/app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.outlined.Label
- import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
- import androidx.compose.material.icons.filled.Favorite
- import androidx.compose.material.icons.outlined.CloudOff
-+import androidx.compose.material.icons.outlined.CalendarMonth
- import androidx.compose.material.icons.outlined.GetApp
- import androidx.compose.material.icons.outlined.History
- import androidx.compose.material.icons.outlined.Info
-@@ -75,6 +76,7 @@ fun MoreScreen(
-     onClickSettings: () -> Unit,
-     onClickAbout: () -> Unit,
-     onClickBatchAdd: () -> Unit,
-+    onClickNhentaiDateImport: () -> Unit,
-     onClickUpdates: () -> Unit,
-     onClickHistory: () -> Unit,
-     // KMK -->
-@@ -210,6 +212,13 @@ fun MoreScreen(
-                         onPreferenceClick = onClickBatchAdd,
-                     )
-                 }
-+                item {
-+                    TextPreferenceWidget(
-+                        title = "nhentai Books Imported",
-+                        icon = Icons.Outlined.CalendarMonth,
-+                        onPreferenceClick = onClickNhentaiDateImport,
-+                    )
-+                }
-             }
-             // SY <--
- 
-diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-index ae2fd5a113..3bcb5de0a4 100644
---- a/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-+++ b/app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-@@ -13,24 +13,76 @@ open class BannerProgressStatus {
-     private val _isRunning = MutableStateFlow(false)
- 
-     val isRunning = _isRunning
--        .debounce(1000L) // Don't notify if it finishes quickly enough
-+        .debounce(1000L)
-         .stateIn(scope, SharingStarted.WhileSubscribed(), false)
- 
--    suspend fun start() {
--        _isRunning.emit(true)
-+    fun start() {
-+        _isRunning.value = true
-     }
- 
--    suspend fun stop() {
--        _isRunning.emit(false)
-+    fun stop() {
-+        _isRunning.value = false
-     }
- 
-     val progress = MutableStateFlow(0f)
- 
--    suspend fun updateProgress(progress: Float) {
--        this.progress.emit(progress)
-+    fun updateProgress(progress: Float) {
-+        this.progress.value = progress
-     }
- }
- 
- class LibraryUpdateStatus : BannerProgressStatus()
- class SyncStatus : BannerProgressStatus()
- class BackupRestoreStatus : BannerProgressStatus()
-+
-+data class BatchImportSnapshot(
-+    val total: Int = 0,
-+    val completed: Int = 0,
-+    val added: Int = 0,
-+    val failed: Int = 0,
-+    val currentUrl: String = "",
-+    val events: List<String> = emptyList(),
-+    val running: Boolean = false,
-+)
-+
-+class BatchImportStatus : BannerProgressStatus() {
-+    val state = MutableStateFlow(BatchImportSnapshot())
-+
-+    fun begin(total: Int, completed: Int = 0, added: Int = 0, failed: Int = 0, events: List<String> = emptyList()) {
-+        state.value = BatchImportSnapshot(
-+            total = total,
-+            completed = completed,
-+            added = added,
-+            failed = failed,
-+            events = events,
-+            running = true,
-+        )
-+        start()
-+        updateProgress(if (total == 0) 0f else completed.toFloat() / total)
-+    }
-+
-+    fun record(url: String, wasAdded: Boolean, detail: String? = null) {
-+        val old = state.value
-+        val event = if (wasAdded) {
-+            "[ADDED] $url"
-+        } else {
-+            "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
-+        }
-+        val completed = old.completed + 1
-+        val failed = old.failed + if (wasAdded) 0 else 1
-+        state.value = old.copy(
-+            completed = completed,
-+            added = old.added + if (wasAdded) 1 else 0,
-+            failed = failed,
-+            currentUrl = url,
-+            events = old.events + event,
-+        )
-+        updateProgress(if (old.total == 0) 0f else completed.toFloat() / old.total)
-+    }
-+
-+    fun restore(total: Int, completed: Int, added: Int, failed: Int, events: List<String>, running: Boolean) {
-+        state.value = BatchImportSnapshot(total, completed, added, failed, events = events, running = running)
-+        updateProgress(if (total == 0) 0f else completed.toFloat() / total)
-+        if (running) start() else stop()
-+    }
-+}
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-index 6ecb6717d2..ea75af182c 100644
+index 6ecb671..92f771f 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
 +++ b/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-@@ -75,6 +75,16 @@ object Notifications {
+@@ -75,6 +75,14 @@ object Notifications {
      const val CHANNEL_INCOGNITO_MODE = "incognito_mode_channel"
      const val ID_INCOGNITO_MODE = -701
  
@@ -216,13 +13,11 @@ index 6ecb6717d2..ea75af182c 100644
 +    const val ID_BATCH_IMPORT_PROGRESS = -801
 +    const val CHANNEL_BATCH_IMPORT_COMPLETE = "batch_import_complete_channel"
 +    const val ID_BATCH_IMPORT_COMPLETE = -802
-+    const val CHANNEL_NHENTAI_REMINDER = "nhentai_daily_reminder_channel"
-+    const val ID_NHENTAI_DAILY_REMINDER = -803
 +
      // AM (DISCORD) -->
      /**
       * Notification channel used for Discord RPC
-@@ -189,6 +199,18 @@ object Notifications {
+@@ -189,6 +197,14 @@ object Notifications {
                  buildNotificationChannel(CHANNEL_INCOGNITO_MODE, IMPORTANCE_LOW) {
                      setName(context.stringResource(MR.strings.pref_incognito_mode))
                  },
@@ -234,113 +29,11 @@ index 6ecb6717d2..ea75af182c 100644
 +                    setName("Batch import complete")
 +                    setShowBadge(false)
 +                },
-+                buildNotificationChannel(CHANNEL_NHENTAI_REMINDER, IMPORTANCE_DEFAULT) {
-+                    setName("nhentai daily reminder")
-+                    setShowBadge(true)
-+                },
                  buildNotificationChannel(CHANNEL_APP_UPDATE, IMPORTANCE_HIGH) {
                      setGroup(GROUP_APK_UPDATES)
                      setName(context.stringResource(MR.strings.channel_app_updates))
-diff --git a/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt b/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
-index 0c0b07dfa5..e3a1fbe948 100644
---- a/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
-+++ b/app/src/main/java/eu/kanade/tachiyomi/di/AppModule.kt
-@@ -10,6 +10,7 @@ import app.cash.sqldelight.driver.android.AndroidSqliteDriver
- import eu.kanade.domain.track.store.DelayedTrackingStore
- import eu.kanade.tachiyomi.core.security.SecurityPreferences
- import eu.kanade.tachiyomi.data.BackupRestoreStatus
-+import eu.kanade.tachiyomi.data.BatchImportStatus
- import eu.kanade.tachiyomi.data.LibraryUpdateStatus
- import eu.kanade.tachiyomi.data.SyncStatus
- import eu.kanade.tachiyomi.data.cache.ChapterCache
-@@ -184,6 +185,7 @@ class AppModule(val app: Application) : InjektModule {
- 
-         // KMK -->
-         addSingletonFactory { BackupRestoreStatus() }
-+        addSingletonFactory { BatchImportStatus() }
-         addSingletonFactory { SyncStatus() }
-         addSingletonFactory { LibraryUpdateStatus() }
-         // KMK <--
-diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
-index 43bcfc49d5..427081ba29 100644
---- a/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
-+++ b/app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
-@@ -72,6 +72,7 @@ import eu.kanade.presentation.util.AssistContentScreen
- import eu.kanade.presentation.util.DefaultNavigatorScreenTransition
- import eu.kanade.tachiyomi.BuildConfig
- import eu.kanade.tachiyomi.data.BackupRestoreStatus
-+import eu.kanade.tachiyomi.data.BatchImportStatus
- import eu.kanade.tachiyomi.data.LibraryUpdateStatus
- import eu.kanade.tachiyomi.data.SyncStatus
- import eu.kanade.tachiyomi.data.backup.create.BackupCreateJob
-@@ -149,6 +150,7 @@ class MainActivity : BaseActivity() {
-     private val backupPreferences: BackupPreferences by injectLazy()
-     private val syncPreferences: SyncPreferences by injectLazy()
-     private val backupRestoreStatus: BackupRestoreStatus by injectLazy()
-+    private val batchImportStatus: BatchImportStatus by injectLazy()
-     private val syncStatus: SyncStatus by injectLazy()
-     private val libraryUpdateStatus: LibraryUpdateStatus by injectLazy()
-     // KMK <--
-@@ -225,6 +227,8 @@ class MainActivity : BaseActivity() {
-             val indexing by downloadCache.isInitializing.collectAsState()
-             // KMK -->
-             val restoringState by backupRestoreStatus.isRunning.collectAsState()
-+            val batchImporting by batchImportStatus.isRunning.collectAsState()
-+            val batchImportProgress by batchImportStatus.progress.collectAsState()
-             val syncingState by syncStatus.isRunning.collectAsState()
-             val updatingState by libraryUpdateStatus.isRunning.collectAsState()
-             val restoringProgressBanner by backupPreferences.showRestoringProgressBanner().collectAsState()
-@@ -242,6 +246,7 @@ class MainActivity : BaseActivity() {
-             val statusBarBackgroundColor = when {
-                 // KMK -->
-                 updating -> UpdatingBannerBackgroundColor
-+                batchImporting -> MaterialTheme.colorScheme.primary
-                 syncing -> SyncingBannerBackgroundColor
-                 restoring -> RestoringBannerBackgroundColor
-                 // KMK <--
-@@ -309,6 +314,8 @@ class MainActivity : BaseActivity() {
-                             indexing = indexing,
-                             // KMK -->
-                             restoring = restoring,
-+                            batchImporting = batchImporting,
-+                            batchImportProgress = batchImportProgress,
-                             syncing = syncing,
-                             updating = updating,
-                             progress = updatingProgress.takeIf { updating }
-diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
-index ecbef75ef0..f7336a5595 100644
---- a/app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
-+++ b/app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
-@@ -34,6 +34,9 @@ import eu.kanade.tachiyomi.ui.setting.SettingsScreen
- import eu.kanade.tachiyomi.ui.stats.StatsScreen
- import eu.kanade.tachiyomi.ui.updates.UpdatesTab
- import exh.ui.batchadd.BatchAddScreen
-+import exh.ui.nhentaidate.NhentaiDateImportScreen
-+import exh.ui.nhentaidate.NhentaiDateImportWorker
-+import exh.ui.nhentaidate.NhentaiDailyReminderWorker
- import kotlinx.coroutines.flow.MutableStateFlow
- import kotlinx.coroutines.flow.StateFlow
- import kotlinx.coroutines.flow.asStateFlow
-@@ -70,6 +73,9 @@ data object MoreTab : Tab {
-         val navigator = LocalNavigator.currentOrThrow
-         val screenModel = rememberScreenModel { MoreScreenModel() }
-         val downloadQueueState by screenModel.downloadQueueState.collectAsState()
-+        LaunchedEffect(Unit) {
-+            NhentaiDailyReminderWorker.schedule(context)
-+        }
-         MoreScreen(
-             downloadQueueStateProvider = { downloadQueueState },
-             downloadedOnly = screenModel.downloadedOnly,
-@@ -88,6 +94,7 @@ data object MoreTab : Tab {
-             onClickAbout = { navigator.push(SettingsScreen(SettingsScreen.Destination.About)) },
-             // SY -->
-             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
-+            onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
-             onClickUpdates = { navigator.push(UpdatesTab) },
-             onClickHistory = { navigator.push(HistoryTab) },
-             // SY <--
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
-index 3d1e7f9ea4..86bedeade7 100644
+index 3d1e7f9..d27327a 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
 @@ -1,5 +1,8 @@
@@ -380,21 +73,7 @@ index 3d1e7f9ea4..86bedeade7 100644
                          // KMK -->
                          Spacer(Modifier.height(8.dp))
                          Text(
-@@ -134,6 +151,13 @@ class BatchAddScreen : Screen() {
-                                         style = MaterialTheme.typography.bodyMedium,
-                                     )
-                                 }
-+                                Spacer(modifier = Modifier.height(8.dp))
-+                                Text(
-+                                    text = "${state.added} added • ${state.failed} failed",
-+                                    style = MaterialTheme.typography.bodyMedium,
-+                                    modifier = Modifier.fillMaxWidth(),
-+                                    textAlign = TextAlign.Center,
-+                                )
-                                 Spacer(modifier = Modifier.height(12.dp))
-                             }
-                         }
-@@ -182,6 +206,20 @@ class BatchAddScreen : Screen() {
+@@ -182,6 +199,20 @@ class BatchAddScreen : Screen() {
                      Text(text = stringResource(SYMR.strings.batch_add_no_valid_galleries_message))
                  },
              )
@@ -416,10 +95,10 @@ index 3d1e7f9ea4..86bedeade7 100644
          }
      }
 diff --git a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-index a791e4d428..d4d12903ed 100644
+index a791e4d..a28a722 100644
 --- a/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
 +++ b/app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-@@ -1,22 +1,21 @@
+@@ -1,10 +1,15 @@
  package exh.ui.batchadd
  
  import android.content.Context
@@ -428,25 +107,34 @@ index a791e4d428..d4d12903ed 100644
  import cafe.adriel.voyager.core.model.StateScreenModel
  import cafe.adriel.voyager.core.model.screenModelScope
  import eu.kanade.core.preference.asState
--import exh.GalleryAddEvent
--import exh.GalleryAdder
-+import eu.kanade.tachiyomi.data.BatchImportStatus
++import eu.kanade.tachiyomi.data.notification.Notifications
++import eu.kanade.tachiyomi.util.system.cancelNotification
++import eu.kanade.tachiyomi.util.system.notificationBuilder
++import eu.kanade.tachiyomi.util.system.notify
+ import exh.GalleryAddEvent
+ import exh.GalleryAdder
  import exh.log.xLogE
- import exh.source.ExhPreferences
-+import exh.ui.batchadd.BatchImportJob
+@@ -12,11 +17,18 @@ import exh.source.ExhPreferences
  import exh.util.trimOrNull
  import kotlinx.coroutines.CoroutineExceptionHandler
  import kotlinx.coroutines.Dispatchers
--import kotlinx.coroutines.ensureActive
-+import kotlinx.coroutines.flow.collect
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.channels.Channel
++import kotlinx.coroutines.delay
+ import kotlinx.coroutines.ensureActive
  import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlin.random.Random
++import kotlinx.coroutines.joinAll
  import kotlinx.coroutines.launch
--import tachiyomi.core.common.i18n.stringResource
++import kotlinx.coroutines.coroutineScope
+ import tachiyomi.core.common.i18n.stringResource
 -import tachiyomi.core.common.util.lang.withIOContext
  import tachiyomi.i18n.sy.SYMR
  import uy.kohesive.injekt.Injekt
  import uy.kohesive.injekt.api.get
-@@ -24,120 +23,110 @@ import uy.kohesive.injekt.api.get
+@@ -24,123 +36,221 @@ import uy.kohesive.injekt.api.get
  class BatchAddScreenModel(
      private val exhPreferences: ExhPreferences = Injekt.get(),
  ) : StateScreenModel<BatchAddState>(BatchAddState()) {
@@ -455,26 +143,9 @@ index a791e4d428..d4d12903ed 100644
 -    // KMK -->
      val isHentaiEnabled by Injekt.get<ExhPreferences>().isHentaiEnabled().asState(screenModelScope)
 -    // KMK <--
-+    private val batchImportStatus: BatchImportStatus = Injekt.get()
-+
-+    init {
-+        screenModelScope.launch {
-+            batchImportStatus.state.collect { snapshot ->
-+                if (snapshot.total > 0) {
-+                    mutableState.update {
-+                        it.copy(
-+                            progressTotal = snapshot.total,
-+                            progress = snapshot.completed,
-+                            added = snapshot.added,
-+                            failed = snapshot.failed,
-+                            state = State.PROGRESS,
-+                            events = snapshot.events,
-+                        )
-+                    }
-+                }
-+            }
-+        }
-+    }
++    private var importJob: Job? = null
++    private val requestGate = Mutex()
++    private var nextRequestAt = 0L
  
      fun addGalleries(context: Context) {
          val galleries = state.value.galleries
@@ -488,7 +159,8 @@ index a791e4d428..d4d12903ed 100644
  
 -        addGalleries(context, galleries)
 +    fun importFile(context: Context, uri: Uri) {
-+        screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
++        importJob?.cancel()
++        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
 +            xLogE("File import error", throwable)
 +            mutableState.update { it.copy(state = State.INPUT, dialog = Dialog.FileReadError) }
 +        }) {
@@ -539,7 +211,7 @@ index a791e4d428..d4d12903ed 100644
 +            mutableState.update { it.copy(dialog = Dialog.NoGalleriesSpecified) }
 +            return
 +        }
-+        BatchImportJob.start(context.applicationContext, galleries)
++        importJob?.cancel()
 +        mutableState.update {
 +            it.copy(
                  progress = 0,
@@ -551,10 +223,11 @@ index a791e4d428..d4d12903ed 100644
 +                events = emptyList(),
              )
          }
-+    }
- 
+-
 -        val handler = CoroutineExceptionHandler { _, throwable ->
--            xLogE("Batch add error", throwable)
++        val appContext = context.applicationContext
++        importJob = screenModelScope.launch(Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
+             xLogE("Batch add error", throwable)
 -        }
 -
 -        screenModelScope.launch(Dispatchers.IO + handler) {
@@ -586,23 +259,67 @@ index a791e4d428..d4d12903ed 100644
 -                            } + " " + result.logMessage,
 -                        ),
 -                    )
--                }
--            }
--
++            appContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
++        }) {
++            val queue = Channel<String>(IMPORT_WORKERS * 2)
++            val results = Channel<ImportResult>(IMPORT_WORKERS * 2)
++            val feeder = launch {
++                galleries.forEach { queue.send(it) }
++                queue.close()
++            }
++            val workers = List(IMPORT_WORKERS) {
++                launch {
++                    for (url in queue) {
++                        ensureActive()
++                        val result = addGalleryRateLimited(appContext, url)
++                        results.send(ImportResult(url, result))
++                    }
+                 }
+             }
+ 
 -            // Show report
 -            val summary = context.stringResource(SYMR.strings.batch_add_summary, succeeded.size, failed.size)
 -            mutableState.update { state ->
 -                state.copy(
 -                    events = state.events + summary,
--                )
--            }
--        }
-+    fun cancelImport(context: Context) {
-+        BatchImportJob.stop(context.applicationContext)
-+        mutableState.update { it.copy(state = State.INPUT) }
++            var completed = 0
++            var added = 0
++            var failed = 0
++            val events = ArrayList<String>(MAX_VISIBLE_EVENTS)
++            showProgressNotification(appContext, completed, galleries.size, added, failed)
++            while (completed < galleries.size) {
++                ensureActive()
++                val item = results.receive()
++                completed++
++                if (item.result is GalleryAddEvent.Success) added++ else failed++
++                if (events.size == MAX_VISIBLE_EVENTS) events.removeAt(0)
++                events.add(
++                    when (item.result) {
++                        is GalleryAddEvent.Success -> appContext.stringResource(SYMR.strings.batch_add_ok)
++                        is GalleryAddEvent.Fail -> appContext.stringResource(SYMR.strings.batch_add_error)
++                    } + " " + item.result.logMessage,
+                 )
++                if (completed % STATE_UPDATE_BATCH == 0 || completed == galleries.size) {
++                    mutableState.update { current ->
++                        current.copy(
++                            progress = completed,
++                            added = added,
++                            failed = failed,
++                            events = events.toList(),
++                        )
++                    }
++                    showProgressNotification(appContext, completed, galleries.size, added, failed)
++                }
+             }
++            feeder.join()
++            workers.joinAll()
++            results.close()
++            showCompleteNotification(appContext, completed, galleries.size, added, failed)
++            mutableState.update { current -> current.copy(progress = galleries.size, added = added, failed = failed, events = events.toList()) }
+         }
      }
  
-     fun finish() {
+-    fun finish() {
 -        mutableState.update { state ->
 -            state.copy(
 -                progressTotal = 0,
@@ -610,180 +327,19 @@ index a791e4d428..d4d12903ed 100644
 -                galleries = "",
 -                state = State.INPUT,
 -                events = emptyList(),
--            )
--        }
-+        mutableState.update { it.copy(progressTotal = 0, progress = 0, galleries = "", state = State.INPUT, events = emptyList()) }
-     }
- 
--    fun updateGalleries(galleries: String) {
--        mutableState.update { it.copy(galleries = galleries) }
--    }
-+    fun updateGalleries(galleries: String) = mutableState.update { it.copy(galleries = galleries) }
-+    fun dismissDialog() = mutableState.update { it.copy(dialog = null) }
- 
--    fun dismissDialog() {
--        mutableState.update { it.copy(dialog = null) }
--    }
- 
--    enum class State {
--        INPUT,
--        PROGRESS,
--    }
-+    enum class State { INPUT, PROGRESS }
- 
-     sealed class Dialog {
-         data object NoGalleriesSpecified : Dialog()
-+        data object FileReadError : Dialog()
-     }
- 
-     companion object {
-@@ -149,6 +138,8 @@ data class BatchAddState(
-     val progressTotal: Int = 0,
-     val progress: Int = 0,
-     val galleries: String = "",
-+    val added: Int = 0,
-+    val failed: Int = 0,
-     val state: BatchAddScreenModel.State = BatchAddScreenModel.State.INPUT,
-     val events: List<String> = emptyList(),
-     val dialog: BatchAddScreenModel.Dialog? = null,
-diff --git a/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-new file mode 100644
-index 0000000000..41cbbfa25b
---- /dev/null
-+++ b/app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-@@ -0,0 +1,223 @@
-+package exh.ui.batchadd
-+
-+import android.content.Context
-+import android.content.pm.ServiceInfo
-+import android.net.Uri
-+import android.os.Build
-+import androidx.work.CoroutineWorker
-+import androidx.work.ForegroundInfo
-+import androidx.work.OneTimeWorkRequestBuilder
-+import androidx.work.WorkerParameters
-+import androidx.work.workDataOf
-+import eu.kanade.tachiyomi.R
-+import eu.kanade.tachiyomi.data.BatchImportStatus
-+import eu.kanade.tachiyomi.data.notification.Notifications
-+import eu.kanade.tachiyomi.util.system.cancelNotification
-+import eu.kanade.tachiyomi.util.system.notificationBuilder
-+import eu.kanade.tachiyomi.util.system.notify
-+import eu.kanade.tachiyomi.util.system.setForegroundSafely
-+import eu.kanade.tachiyomi.util.system.workManager
-+import exh.GalleryAddEvent
-+import exh.GalleryAdder
-+import exh.log.xLogE
-+import kotlinx.coroutines.CancellationException
-+import kotlinx.coroutines.NonCancellable
-+import kotlinx.coroutines.delay
-+import kotlinx.coroutines.sync.Mutex
-+import kotlinx.coroutines.sync.withLock
-+import kotlinx.coroutines.withContext
-+import tachiyomi.domain.storage.service.StoragePreferences
-+import uy.kohesive.injekt.Injekt
-+import uy.kohesive.injekt.api.get
-+import com.hippo.unifile.UniFile
-+import java.io.File
-+import java.text.SimpleDateFormat
-+import java.util.Date
-+import java.util.Locale
-+import java.util.concurrent.TimeUnit
-+
-+class BatchImportJob(
-+    private val context: Context,
-+    workerParams: WorkerParameters,
-+) : CoroutineWorker(context, workerParams) {
-+    private val status: BatchImportStatus = Injekt.get()
-+    private val storagePreferences: StoragePreferences = Injekt.get()
-+    private val requestGate = Mutex()
-+    private var nextRequestAt = 0L
-+
-+    override suspend fun doWork(): Result {
-+        val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
-+        val inputFile = File(inputPath)
-+        val urls = runCatching { inputFile.readLines().filter(String::isNotBlank) }.getOrElse {
-+            xLogE("Batch import input read error", it)
-+            return Result.failure()
-+        }
-+        if (urls.isEmpty()) return Result.success()
-+
-+        val checkpointFile = File("$inputPath.progress")
-+        val failedFile = File("$inputPath.failed")
-+        val eventsFile = File("$inputPath.events")
-+        var nextIndex = checkpointFile.readLinesSafely().firstOrNull()?.trim()?.toIntOrNull()?.coerceIn(0, urls.size) ?: 0
-+        val failedLinks = failedFile.readLinesSafely().toMutableList()
-+        val events = eventsFile.readLinesSafely()
-+        val initialFailed = failedLinks.size.coerceAtMost(nextIndex)
-+        var added = (nextIndex - initialFailed).coerceAtLeast(0)
-+        var failed = initialFailed
-+
-+        status.begin(urls.size, nextIndex, added, failed, events)
-+        setForegroundSafely()
-+        showProgress(nextIndex, urls.size, added, failed)
-+
-+        return try {
-+            while (nextIndex < urls.size) {
-+                val url = urls[nextIndex]
-+                val result = addGalleryRateLimited(url)
-+                val wasAdded = result is GalleryAddEvent.Success
-+                val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
-+                if (wasAdded) {
-+                    added++
-+                } else {
-+                    failed++
-+                    failedLinks += url
-+                    failedFile.appendLineSafely(url)
-+                }
-+                val event = if (wasAdded) "[ADDED] $url" else "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
-+                eventsFile.appendLineSafely(event)
-+                nextIndex++
-+                checkpointFile.writeText(nextIndex.toString())
-+                status.record(url, wasAdded, detail)
-+                showProgress(nextIndex, urls.size, added, failed)
-+            }
-+            writeLinksFile("batch_import_failed_links", failedLinks)
-+            showComplete(nextIndex, urls.size, added, failed)
-+            Result.success()
-+        } catch (cancelled: CancellationException) {
-+            withContext(NonCancellable) {
-+                writeUnprocessedLinks(urls, nextIndex, failedLinks)
-+                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
-+            }
-+            throw cancelled
-+        } catch (error: Throwable) {
-+            xLogE("Batch import error", error)
-+            withContext(NonCancellable) {
-+                writeUnprocessedLinks(urls, nextIndex, failedLinks)
-+                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
-+            }
-+            Result.retry()
-+        } finally {
-+            context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-+            if (!isStopped && nextIndex >= urls.size) {
-+                inputFile.delete()
-+                checkpointFile.delete()
-+                failedFile.delete()
-+                eventsFile.delete()
-+            }
-+        }
-+    }
-+
-+    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
-+        Notifications.ID_BATCH_IMPORT_PROGRESS,
-+        buildProgressNotification(0, 1, 0, 0),
-+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
-+    )
-+
-+    private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
++    private suspend fun addGalleryRateLimited(context: Context, url: String): GalleryAddEvent {
 +        var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
 +        for (attempt in 0 until RATE_LIMIT_RETRIES) {
 +            awaitRequestSlot()
-+            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
-+            if (!isRateLimited(result)) return result
-+            if (attempt < RATE_LIMIT_RETRIES - 1) {
-+                delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
-+            }
++            result = GalleryAdder().addGallery(
++                context = context,
++                url = url,
++                fav = true,
++                retry = 1,
+             )
++            if (!isRateLimited(result) || attempt == RATE_LIMIT_RETRIES - 1) return result
++            val backoff = RATE_LIMIT_BACKOFF_MS * (1L shl attempt)
++            delay(backoff + Random.nextLong(0, RATE_LIMIT_JITTER_MS))
 +        }
 +        return result
 +    }
@@ -792,91 +348,95 @@ index 0000000000..41cbbfa25b
 +        val waitFor = requestGate.withLock {
 +            val now = System.currentTimeMillis()
 +            val wait = (nextRequestAt - now).coerceAtLeast(0L)
-+            nextRequestAt = maxOf(now, nextRequestAt) + REQUEST_INTERVAL_MS
++            nextRequestAt = maxOf(now, nextRequestAt) + MIN_REQUEST_INTERVAL_MS
 +            wait
-+        }
+         }
 +        if (waitFor > 0) delay(waitFor)
-+    }
-+
-+    private fun isRateLimited(result: GalleryAddEvent): Boolean =
-+        result is GalleryAddEvent.Fail.Error && result.logMessage.lowercase().let {
-+            "429" in it || "too many request" in it || "rate limit" in it || "rate-limit" in it
-+        }
-+
-+    private fun buildProgressNotification(completed: Int, total: Int, added: Int, failed: Int) =
+     }
+ 
+-    fun updateGalleries(galleries: String) {
+-        mutableState.update { it.copy(galleries = galleries) }
++    private fun isRateLimited(result: GalleryAddEvent): Boolean {
++        if (result !is GalleryAddEvent.Fail.Error) return false
++        val message = result.logMessage.lowercase()
++        return "429" in message || "too many request" in message || "rate limit" in message || "rate-limit" in message
+     }
+ 
+-    fun dismissDialog() {
+-        mutableState.update { it.copy(dialog = null) }
++    private fun showProgressNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {
++        val percent = if (total == 0) 0 else completed * 100 / total
 +        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
-+            setSmallIcon(R.drawable.ic_komikku)
++            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)
 +            setContentTitle("Importing manga")
 +            setContentText("$completed/$total processed • $added added • $failed failed")
-+            setProgress(total.coerceAtLeast(1), completed, false)
++            setProgress(total, completed, false)
 +            setOngoing(true)
 +            setOnlyAlertOnce(true)
 +            setAutoCancel(false)
-+            setSubText("${if (total == 0) 0 else completed * 100 / total}%")
-+        }.build()
-+
-+    private fun showProgress(completed: Int, total: Int, added: Int, failed: Int) {
-+        context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed))
-+    }
-+
-+    private fun showComplete(completed: Int, total: Int, added: Int, failed: Int) {
++            setSubText("$percent%")
++        }.also { context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, it.build()) }
+     }
+ 
+-    enum class State {
+-        INPUT,
+-        PROGRESS,
++    private fun showCompleteNotification(context: Context, completed: Int, total: Int, added: Int, failed: Int) {
 +        context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
 +        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
-+            setSmallIcon(R.drawable.ic_komikku)
++            setSmallIcon(eu.kanade.tachiyomi.R.drawable.ic_komikku)
 +            setContentTitle("Manga import complete")
 +            setContentText("$completed/$total processed • $added added • $failed failed")
 +            setAutoCancel(true)
 +        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
+     }
+ 
++    fun cancelImport() {
++        importJob?.cancel()
++        importJob = null
++        mutableState.update { it.copy(state = State.INPUT) }
 +    }
 +
-+    private fun writeUnprocessedLinks(urls: List<String>, nextIndex: Int, failedLinks: List<String>) {
-+        val pending = urls.drop(nextIndex)
-+        writeLinksFile("batch_import_unprocessed_links", (failedLinks + pending).distinct())
++    fun finish() {
++        importJob?.cancel()
++        importJob = null
++        mutableState.update { it.copy(progressTotal = 0, progress = 0, galleries = "", state = State.INPUT, events = emptyList()) }
 +    }
 +
-+    private fun writeLinksFile(prefix: String, links: List<String>) {
-+        if (links.isEmpty()) return
-+        runCatching {
-+            val directory = UniFile.fromUri(context, Uri.parse(storagePreferences.baseStorageDirectory().get())) ?: return
-+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-+            val file = directory.createFile("${prefix}_$timestamp.txt") ?: return
-+            file.openOutputStream().bufferedWriter().use { writer -> links.distinct().forEach(writer::appendLine) }
-+        }.onFailure { xLogE("Batch-link export error", it) }
-+    }
++    fun updateGalleries(galleries: String) = mutableState.update { it.copy(galleries = galleries) }
++    fun dismissDialog() = mutableState.update { it.copy(dialog = null) }
 +
-+    private fun File.readLinesSafely(): List<String> = runCatching { if (exists()) readLines().filter(String::isNotBlank) else emptyList() }.getOrDefault(emptyList())
++    private data class ImportResult(val url: String, val result: GalleryAddEvent)
 +
-+    private fun File.appendLineSafely(value: String) {
-+        parentFile?.mkdirs()
-+        appendText(value + "\n")
-+    }
++    enum class State { INPUT, PROGRESS }
 +
-+    companion object {
-+        private const val TAG = "BatchImport"
-+        private const val INPUT_PATH = "input_path"
-+        private const val REQUEST_INTERVAL_MS = 4_000L
-+        private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
-+        private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
+     sealed class Dialog {
+         data object NoGalleriesSpecified : Dialog()
++        data object FileReadError : Dialog()
+     }
+ 
+     companion object {
++        private const val IMPORT_WORKERS = 2
++        private const val MIN_REQUEST_INTERVAL_MS = 2_000L
 +        private const val RATE_LIMIT_RETRIES = 3
-+
-+        fun start(context: Context, urls: List<String>) {
-+            val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
-+            input.writeText(urls.joinToString("\n"))
-+            val request = OneTimeWorkRequestBuilder<BatchImportJob>()
-+                .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
-+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-+                .addTag(TAG)
-+                .build()
-+            context.workManager.enqueueUniqueWork(TAG, androidx.work.ExistingWorkPolicy.REPLACE, request)
-+        }
-+
-+        fun stop(context: Context) {
-+            context.workManager.cancelUniqueWork(TAG)
-+        }
-+    }
-+}
++        private const val RATE_LIMIT_BACKOFF_MS = 2_000L
++        private const val RATE_LIMIT_JITTER_MS = 500L
++        private const val STATE_UPDATE_BATCH = 4
++        private const val MAX_VISIBLE_EVENTS = 200
+         val ehVisitedRegex = """[0-9]*?\.[a-z0-9]*?:""".toRegex()
+     }
+ }
+@@ -149,6 +259,8 @@ data class BatchAddState(
+     val progressTotal: Int = 0,
+     val progress: Int = 0,
+     val galleries: String = "",
++    val added: Int = 0,
++    val failed: Int = 0,
+     val state: BatchAddScreenModel.State = BatchAddScreenModel.State.INPUT,
+     val events: List<String> = emptyList(),
+     val dialog: BatchAddScreenModel.Dialog? = null,
 diff --git a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
-index deea67a592..db6871b7ae 100644
+index deea67a..db6871b 100644
 --- a/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
 +++ b/i18n-kmk/src/commonMain/moko-resources/base/strings.xml
 @@ -193,6 +193,8 @@
@@ -889,7 +449,7 @@ index deea67a592..db6871b7ae 100644
      <string name="special_services">Special Services</string>
      <string name="pref_category_connections">Connections</string>
 diff --git a/i18n-sy/src/commonMain/moko-resources/base/strings.xml b/i18n-sy/src/commonMain/moko-resources/base/strings.xml
-index 53029f64df..21bf3f4f7b 100644
+index 53029f6..21bf3f4 100644
 --- a/i18n-sy/src/commonMain/moko-resources/base/strings.xml
 +++ b/i18n-sy/src/commonMain/moko-resources/base/strings.xml
 @@ -569,6 +569,8 @@
@@ -901,248 +461,3 @@ index 53029f64df..21bf3f4f7b 100644
      <string name="batch_add">Batch add</string>
      <string name="batch_add_ok">[OK]</string>
      <string name="batch_add_error">[ERROR]</string>
-diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-new file mode 100644
-index 0000000000..7ba2da681b
---- /dev/null
-+++ b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-@@ -0,0 +1,239 @@
-+package exh.ui.nhentaidate
-+
-+import android.app.DatePickerDialog
-+import android.content.Context
-+import androidx.compose.foundation.layout.Arrangement
-+import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.Row
-+import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.foundation.layout.padding
-+import androidx.compose.material.icons.Icons
-+import androidx.compose.material.icons.outlined.CalendarMonth
-+import androidx.compose.material.icons.outlined.Today
-+import androidx.compose.material3.Button
-+import androidx.compose.material3.Icon
-+import androidx.compose.material3.MaterialTheme
-+import androidx.compose.material3.OutlinedButton
-+import androidx.compose.material3.Text
-+import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.getValue
-+import androidx.compose.runtime.mutableStateOf
-+import androidx.compose.runtime.remember
-+import androidx.compose.runtime.setValue
-+import androidx.compose.ui.Modifier
-+import androidx.compose.ui.platform.LocalContext
-+import androidx.compose.ui.unit.dp
-+import androidx.work.CoroutineWorker
-+import androidx.work.ExistingPeriodicWorkPolicy
-+import androidx.work.ExistingWorkPolicy
-+import androidx.work.OneTimeWorkRequestBuilder
-+import androidx.work.PeriodicWorkRequestBuilder
-+import androidx.work.WorkerParameters
-+import eu.kanade.presentation.util.Screen
-+import eu.kanade.tachiyomi.R
-+import eu.kanade.tachiyomi.data.notification.Notifications
-+import eu.kanade.tachiyomi.network.GET
-+import eu.kanade.tachiyomi.network.NetworkHelper
-+import eu.kanade.tachiyomi.network.awaitSuccess
-+import eu.kanade.tachiyomi.util.system.notificationBuilder
-+import eu.kanade.tachiyomi.util.system.notify
-+import eu.kanade.tachiyomi.util.system.workManager
-+import exh.ui.batchadd.BatchImportJob
-+import okhttp3.HttpUrl.Companion.toHttpUrl
-+import org.json.JSONObject
-+import tachiyomi.presentation.core.components.material.Scaffold
-+import tachiyomi.presentation.core.components.material.padding
-+import tachiyomi.presentation.core.i18n.stringResource
-+import uy.kohesive.injekt.Injekt
-+import uy.kohesive.injekt.api.get
-+import java.text.SimpleDateFormat
-+import java.util.Calendar
-+import java.util.Locale
-+import java.util.concurrent.TimeUnit
-+
-+class NhentaiDateImportScreen : Screen() {
-+    @Composable
-+    override fun Content() {
-+        val context = LocalContext.current
-+        var startDate by remember { mutableStateOf(today()) }
-+        var endDate by remember { mutableStateOf(today()) }
-+        var started by remember { mutableStateOf(false) }
-+
-+        Scaffold { contentPadding ->
-+            Column(
-+                modifier = Modifier.padding(contentPadding).padding(24.dp),
-+                verticalArrangement = Arrangement.spacedBy(16.dp),
-+            ) {
-+                Text("nhentai Books Imported", style = MaterialTheme.typography.titleLarge)
-+                Text(
-+                    "Import every nhentai(all) book uploaded on one date or across an inclusive date range. Requests run in the background with the same safe pacing as Batch Add.",
-+                    style = MaterialTheme.typography.bodyMedium,
-+                )
-+                Text("Start date: $startDate", style = MaterialTheme.typography.titleMedium)
-+                Text("End date: $endDate", style = MaterialTheme.typography.titleMedium)
-+                Row(
-+                    modifier = Modifier.fillMaxWidth(),
-+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-+                ) {
-+                    OutlinedButton(onClick = { val now = today(); startDate = now; endDate = now }) {
-+                        Icon(Icons.Outlined.Today, contentDescription = null)
-+                        Text(" Today")
-+                    }
-+                    OutlinedButton(onClick = {
-+                        showDatePicker(context, startDate) { startDate = it }
-+                    }) {
-+                        Icon(Icons.Outlined.CalendarMonth, contentDescription = null)
-+                        Text(" Start date")
-+                    }
-+                    OutlinedButton(onClick = {
-+                        showDatePicker(context, endDate) { endDate = it }
-+                    }) {
-+                        Icon(Icons.Outlined.CalendarMonth, contentDescription = null)
-+                        Text(" End date")
-+                    }
-+                }
-+                Button(
-+                    modifier = Modifier.fillMaxWidth(),
-+                    enabled = !started && startDate <= endDate,
-+                    onClick = {
-+                        started = true
-+                        NhentaiDateImportWorker.start(context, startDate, endDate)
-+                    },
-+                ) {
-+                    Text(if (started) "Preparing import…" else "Add books from $startDate to $endDate")
-+                }
-+                if (startDate > endDate) {
-+                    Text("The end date must be on or after the start date.", color = MaterialTheme.colorScheme.error)
-+                }
-+                Text(
-+                    "A reminder is scheduled daily at 9:00 PM local time. It will remind you to open this page and import that day’s books.",
-+                    style = MaterialTheme.typography.bodySmall,
-+                )
-+            }
-+        }
-+    }
-+
-+    private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
-+
-+    private fun formatDate(year: Int, month: Int, day: Int): String =
-+        String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
-+
-+    private fun showDatePicker(context: Context, initial: String, onDateSelected: (String) -> Unit) {
-+        val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(initial) ?: Calendar.getInstance().time
-+        val calendar = Calendar.getInstance().apply { time = parsed }
-+        DatePickerDialog(
-+            context,
-+            { _, year, month, day -> onDateSelected(formatDate(year, month, day)) },
-+            calendar.get(Calendar.YEAR),
-+            calendar.get(Calendar.MONTH),
-+            calendar.get(Calendar.DAY_OF_MONTH),
-+        ).show()
-+    }
-+}
-+
-+class NhentaiDateImportWorker(
-+    appContext: Context,
-+    params: WorkerParameters,
-+) : CoroutineWorker(appContext, params) {
-+    override suspend fun doWork(): Result {
-+        val startDate = inputData.getString(KEY_START_DATE) ?: return Result.failure()
-+        val endDate = inputData.getString(KEY_END_DATE) ?: return Result.failure()
-+        if (startDate > endDate) return Result.failure()
-+        return runCatching {
-+            val urls = fetchGalleryUrls(startDate, endDate)
-+            if (urls.isEmpty()) return Result.failure()
-+            BatchImportJob.start(applicationContext, urls)
-+            Result.success()
-+        }.getOrElse { Result.retry() }
-+    }
-+
-+    private suspend fun fetchGalleryUrls(startDate: String, endDate: String): List<String> {
-+        val client = Injekt.get<NetworkHelper>().client
-+        val all = LinkedHashSet<String>()
-+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }
-+        val calendar = Calendar.getInstance().apply { time = dateFormat.parse(startDate) ?: return emptyList() }
-+        val end = dateFormat.parse(endDate) ?: return emptyList()
-+        while (!calendar.time.after(end)) {
-+            val date = dateFormat.format(calendar.time)
-+            var page = 1
-+            while (page <= MAX_PAGES) {
-+                val url = "https://nhentai.net/api/v2/search".toHttpUrl().newBuilder()
-+                    .addQueryParameter("query", "uploaded:$date")
-+                    .addQueryParameter("sort", "date")
-+                    .addQueryParameter("page", page.toString())
-+                    .build()
-+                val json = JSONObject(client.newCall(GET(url)).awaitSuccess().body.string())
-+                val results = json.optJSONArray("result") ?: break
-+                if (results.length() == 0) break
-+                for (index in 0 until results.length()) {
-+                    val id = results.optJSONObject(index)?.optLong("id", 0L) ?: 0L
-+                    if (id > 0) all += "https://nhentai.net/g/$id/"
-+                }
-+                val pages = json.optInt("num_pages", page)
-+                if (page >= pages) break
-+                page++
-+            }
-+            calendar.add(Calendar.DAY_OF_YEAR, 1)
-+        }
-+        return all.toList()
-+    }
-+
-+    companion object {
-+        private const val KEY_START_DATE = "start_date"
-+        private const val KEY_END_DATE = "end_date"
-+        private const val MAX_PAGES = 400
-+        private const val TAG = "nhentai-date-import"
-+
-+        fun start(context: Context, startDate: String, endDate: String = startDate) {
-+            val request = OneTimeWorkRequestBuilder<NhentaiDateImportWorker>()
-+                .setInputData(androidx.work.workDataOf(KEY_START_DATE to startDate, KEY_END_DATE to endDate))
-+                .addTag(TAG)
-+                .build()
-+            context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
-+        }
-+    }
-+}
-+
-+class NhentaiDailyReminderWorker(
-+    appContext: Context,
-+    params: WorkerParameters,
-+) : CoroutineWorker(appContext, params) {
-+    override suspend fun doWork(): Result {
-+        applicationContext.notify(
-+            Notifications.ID_NHENTAI_DAILY_REMINDER,
-+            applicationContext.notificationBuilder(Notifications.CHANNEL_NHENTAI_REMINDER) {
-+                setSmallIcon(R.drawable.ic_komikku)
-+                setContentTitle("nhentai books of the day")
-+                setContentText("Open More → nhentai Books Imported to add today’s books")
-+                setAutoCancel(true)
-+            }.build(),
-+        )
-+        return Result.success()
-+    }
-+
-+    companion object {
-+        private const val TAG = "nhentai-daily-reminder"
-+
-+        fun schedule(context: Context) {
-+            val now = Calendar.getInstance()
-+            val next = Calendar.getInstance().apply {
-+                set(Calendar.HOUR_OF_DAY, 21)
-+                set(Calendar.MINUTE, 0)
-+                set(Calendar.SECOND, 0)
-+                set(Calendar.MILLISECOND, 0)
-+                if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
-+            }
-+            val initialDelay = (next.timeInMillis - now.timeInMillis).coerceAtLeast(1L)
-+            val request = PeriodicWorkRequestBuilder<NhentaiDailyReminderWorker>(24, TimeUnit.HOURS)
-+                .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
-+                .addTag(TAG)
-+                .build()
-+            context.workManager.enqueueUniquePeriodicWork(
-+                TAG,
-+                ExistingPeriodicWorkPolicy.UPDATE,
-+                request,
-+            )
-+        }
-+    }
-+}
-+
