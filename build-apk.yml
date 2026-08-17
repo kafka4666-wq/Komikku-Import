@@ -1,20 +1,16 @@
 name: Build Komikku APK
 
-
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
-
+    branches: [main]
 
 permissions:
   contents: read
 
-
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
   JAVA_TOOL_OPTIONS: -Xmx4g
-
 
 jobs:
   build-apk:
@@ -29,35 +25,40 @@ jobs:
           repository: komikku-app/komikku
           path: upstream
       - name: Apply Kotlin overlay and package ID
+        shell: bash
         run: |
+          set -euo pipefail
           cp komikku-overlay.patch upstream/komikku-overlay.patch
           cd upstream
-          # The uploaded patch was generated with colored git diff output. Strip ANSI
-          # escapes first so headers and Kotlin lines are valid patch text.
+          # The patch was generated with colored git diff output. Remove ANSI escapes
+          # before applying it so file headers and Kotlin lines are valid patch text.
           perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
           mv komikku-overlay.clean.patch komikku-overlay.patch
-          # Materialize the new Kotlin source first; this makes the build independent of
-          # whether git apply accepts the surrounding mixed-context hunks.
-          NHENTAI_FILE="app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
-          mkdir -p "$(dirname "$NHENTAI_FILE")"
-          awk '
-            $0 == "diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt" { in_file=1; next }
-            in_file && /^diff --git / { exit }
-            in_file && /^\+\+\+ b\// { next }
-            in_file && /^\+/ { sub(/^\+/, ""); print }
-          ' komikku-overlay.patch > "$NHENTAI_FILE"
-          test -s "$NHENTAI_FILE"
+
+          extract_new_file() {
+            local path="$1"
+            local header="diff --git a/${path} b/${path}"
+            mkdir -p "$(dirname "$path")"
+            awk -v header="$header" '
+              $0 == header { found=1; next }
+              found && /^diff --git / { exit }
+              found && /^\+\+\+ b\// { next }
+              found && /^\+/ { sub(/^\+/, ""); print }
+            ' komikku-overlay.patch > "$path"
+            test -s "$path"
+          }
+
+          # Materialize every new Kotlin file explicitly. This remains reliable even
+          # if git apply rejects an unrelated mixed-context hunk.
+          extract_new_file app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          extract_new_file app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           git apply --verbose komikku-overlay.patch || true
-          # Re-materialize after apply because a partial apply may remove/rewrite a new file.
-          awk '
-            $0 == "diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt" { in_file=1; next }
-            in_file && /^diff --git / { exit }
-            in_file && /^\+\+\+ b\// { next }
-            in_file && /^\+/ { sub(/^\+/, ""); print }
-          ' komikku-overlay.patch > "$NHENTAI_FILE"
-          test -s "$NHENTAI_FILE"
-          echo "Materialized nhentai sources:"
-          find app/src/main/java/exh -type f -name '*Nhentai*' -o -name 'BatchImportJob.kt'
+          # Re-materialize after a partial apply, which can otherwise remove new files.
+          extract_new_file app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          extract_new_file app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
       - name: Set up Java 21
@@ -79,10 +80,12 @@ jobs:
       - name: Validate and locate universal APK
         working-directory: upstream
         run: |
+          set -euo pipefail
           APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n 1)
           test -n "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "package: name='com.manus.komikku' versionCode='83' versionName='1.14.3'"
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
@@ -101,3 +104,4 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+        
