@@ -48,14 +48,12 @@ jobs:
             test -s "$path"
           }
 
-          # Materialize every new Kotlin file explicitly. This remains reliable even
-          # if git apply rejects an unrelated mixed-context hunk.
-          extract_new_file app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          extract_new_file app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           git apply --verbose komikku-overlay.patch || true
-          # Re-materialize after a partial apply, which can otherwise remove new files.
-          extract_new_file app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          extract_new_file app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
+          # Copy new Kotlin files from the overlay repository itself. Keeping these
+          # files outside the colored unified diff avoids any patch-parser ambiguity.
+          mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
+          cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          cp ../app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
