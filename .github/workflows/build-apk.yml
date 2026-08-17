@@ -25,10 +25,9 @@ jobs:
         run: |
           set -euo pipefail
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          cp komikku-overlay-lifecycle.patch upstream/komikku-overlay-lifecycle.patch
           cd upstream
-          for p in komikku-overlay-lifecycle.patch komikku-overlay.patch; do perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$p" > "$p.clean"; mv "$p.clean" "$p"; done
-          git apply --verbose komikku-overlay-lifecycle.patch || true
+          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.patch.clean
+          mv komikku-overlay.patch.clean komikku-overlay.patch
           git apply --verbose komikku-overlay.patch || true
           grep -q 'class BatchImportStatus' app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
           grep -q 'ID_BATCH_IMPORT_PROGRESS' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
@@ -66,11 +65,3 @@ jobs:
         with:
           name: Komikku-com.manus.komikku-universal-debug
           path: upstream/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
-      - name: Upload reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: komikku-build-reports
-          path: upstream/app/build/reports/**
-          if-no-files-found: ignore
