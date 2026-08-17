@@ -32,18 +32,25 @@ jobs:
         run: |
           cp komikku-overlay.patch upstream/komikku-overlay.patch
           cd upstream
-          git apply --verbose komikku-overlay.patch
-          # Git apply can leave a new-file diff absent on this overlay checkout; materialize it from the patch.
+          # Materialize the new Kotlin source first; this makes the build independent of
+          # whether git apply accepts the surrounding mixed-context hunks.
           NHENTAI_FILE="app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
-          if [ ! -s "$NHENTAI_FILE" ]; then
-            mkdir -p "$(dirname "$NHENTAI_FILE")"
-            awk '
-              $0 == "diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt" { in_file=1; next }
-              in_file && /^diff --git / { exit }
-              in_file && /^\+\+\+ \/dev\/null/ { next }
-              in_file && /^\+/ { sub(/^\+/, ""); print }
-            ' komikku-overlay.patch > "$NHENTAI_FILE"
-          fi
+          mkdir -p "$(dirname "$NHENTAI_FILE")"
+          awk '
+            $0 == "diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt" { in_file=1; next }
+            in_file && /^diff --git / { exit }
+            in_file && /^\+\+\+ b\// { next }
+            in_file && /^\+/ { sub(/^\+/, ""); print }
+          ' komikku-overlay.patch > "$NHENTAI_FILE"
+          test -s "$NHENTAI_FILE"
+          git apply --verbose komikku-overlay.patch || true
+          # Re-materialize after apply because a partial apply may remove/rewrite a new file.
+          awk '
+            $0 == "diff --git a/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt b/app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt" { in_file=1; next }
+            in_file && /^diff --git / { exit }
+            in_file && /^\+\+\+ b\// { next }
+            in_file && /^\+/ { sub(/^\+/, ""); print }
+          ' komikku-overlay.patch > "$NHENTAI_FILE"
           test -s "$NHENTAI_FILE"
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
