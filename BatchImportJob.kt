@@ -70,6 +70,7 @@ class BatchImportJob(
 
         return try {
             while (nextIndex < urls.size) {
+                awaitResume()
                 val url = urls[nextIndex]
                 val result = addGalleryRateLimited(url)
                 val wasAdded = result is GalleryAddEvent.Success
@@ -121,6 +122,10 @@ class BatchImportJob(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
 
+    private suspend fun awaitResume() {
+        while (isPaused(context)) delay(PAUSE_POLL_MS)
+    }
+
     private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
         var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
         for (attempt in 0 until RATE_LIMIT_RETRIES) {
@@ -128,13 +133,18 @@ class BatchImportJob(
             result = withContext(kotlinx.coroutines.Dispatchers.IO) {
                 GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 2)
             }
-            if (!isRateLimited(result)) return result
+            if (!isRateLimited(result) && !isTransientFailure(result)) return result
             if (attempt < RATE_LIMIT_RETRIES - 1) {
-                delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
+                if (isRateLimited(result)) delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS)) else delay(REQUEST_INTERVAL_MS)
             }
         }
         return result
     }
+
+    private fun isTransientFailure(result: GalleryAddEvent): Boolean =
+        result is GalleryAddEvent.Fail.Error && result.logMessage.lowercase().let {
+            "timeout" in it || "timed out" in it || "connection" in it || "socket" in it || "503" in it || "502" in it || "500" in it || "temporarily" in it
+        }
 
     private suspend fun awaitRequestSlot() {
         val waitFor = requestGate.withLock {
@@ -206,6 +216,13 @@ class BatchImportJob(
         private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
         private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
         private const val RATE_LIMIT_RETRIES = 3
+        private const val PAUSE_POLL_MS = 500L
+        private const val PREFS_NAME = "batch_import_controls"
+        private const val PREFS_PAUSED = "paused"
+        private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        fun isPaused(context: Context): Boolean = prefs(context).getBoolean(PREFS_PAUSED, false)
+        fun pause(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, true).apply() }
+        fun resume(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, false).apply() }
 
         fun start(context: Context, urls: List<String>) {
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
