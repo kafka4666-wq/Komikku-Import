@@ -65,5 +65,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Komikku-com.manus.komikku-universal-debug
-          path: upstream/app/build/outputs/apk/**/*.apk
-
+          path: upstream/app/build/outputs/apk/**/\*universal\*debug.apk
