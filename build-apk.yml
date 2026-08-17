@@ -59,7 +59,10 @@ jobs:
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force an update-compatible release identity in the generated APK.
-          sed -i '/versionCode =/c\        versionCode = 84' app/build.gradle.kts
+          perl -pi -e 's/versionCode\s*=\s*\d+/versionCode = 84/g; s/versionName\s*=\s*"[^"]+"/versionName = "1.14.4"/g' app/build.gradle.kts
+          grep -nE 'versionCode|versionName' app/build.gradle.kts
+          test "$(grep -oE "versionCode = [0-9]+" app/build.gradle.kts | head -n1)" = "versionCode = 84"
+          test "$(grep -oE "versionName = \"[^\"]+\"" app/build.gradle.kts | head -n1)" = 'versionName = "1.14.4"'
           sed -i '/versionName =/c\        versionName = "1.14.4"' app/build.gradle.kts
           grep -nE 'versionCode|versionName' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
@@ -78,7 +81,7 @@ jobs:
         run: chmod +x ./gradlew
       - name: Build debug APK
         working-directory: upstream
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew clean :app:assembleDebug --no-daemon --stacktrace
       - name: Validate and locate universal APK
         working-directory: upstream
         run: |
