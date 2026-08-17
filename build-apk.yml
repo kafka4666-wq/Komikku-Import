@@ -34,7 +34,7 @@ jobs:
           cd upstream
           # The uploaded patch was generated with colored git diff output. Strip ANSI
           # escapes first so headers and Kotlin lines are valid patch text.
-          sed -E $'s/\033\\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
+          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
           mv komikku-overlay.clean.patch komikku-overlay.patch
           # Materialize the new Kotlin source first; this makes the build independent of
           # whether git apply accepts the surrounding mixed-context hunks.
@@ -56,6 +56,8 @@ jobs:
             in_file && /^\+/ { sub(/^\+/, ""); print }
           ' komikku-overlay.patch > "$NHENTAI_FILE"
           test -s "$NHENTAI_FILE"
+          echo "Materialized nhentai sources:"
+          find app/src/main/java/exh -type f -name '*Nhentai*' -o -name 'BatchImportJob.kt'
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
       - name: Set up Java 21
