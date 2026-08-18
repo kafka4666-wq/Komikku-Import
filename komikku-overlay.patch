@@ -1340,3 +1340,85 @@ index 53029f64df..21bf3f4f7b 100644
          /**[m
           * Returns [PendingIntent] that starts a service which dismissed the notification[m
           *[m
+diff --git a/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsAdvancedScreen.kt b/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsAdvancedScreen.kt
+index 3e20d13..2052eac 100644
+--- a/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsAdvancedScreen.kt
++++ b/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsAdvancedScreen.kt
+@@ -41,6 +41,7 @@ import eu.kanade.presentation.more.settings.screen.advanced.ClearDatabaseScreen
+ import eu.kanade.presentation.more.settings.screen.debug.DebugInfoScreen
+ import eu.kanade.tachiyomi.R
+ import eu.kanade.tachiyomi.core.security.SecurityPreferences
++import eu.kanade.tachiyomi.data.cache.CoverCache
+ import eu.kanade.tachiyomi.data.download.DownloadCache
+ import eu.kanade.tachiyomi.data.download.DownloadManager
+ import eu.kanade.tachiyomi.data.library.MetadataUpdateJob
+@@ -253,6 +254,14 @@ object SettingsAdvancedScreen : SearchableSettings {
+                         context.toast(MR.strings.download_cache_invalidated)
+                     },
+                 ),
++                Preference.PreferenceItem.TextPreference(
++                    title = "Clear cached covers",
++                    subtitle = "Remove generated cover images only; custom covers and manga data are kept.",
++                    onClick = {
++                        val deleted = Injekt.get<CoverCache>().clearCachedCovers()
++                        context.toast("Removed $deleted cached cover files")
++                    },
++                ),
+                 Preference.PreferenceItem.TextPreference(
+                     title = stringResource(MR.strings.pref_clear_database),
+                     subtitle = stringResource(MR.strings.pref_clear_database_summary),
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/App.kt b/app/src/main/java/eu/kanade/tachiyomi/App.kt
+index 6f85db0..b33fa66 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/App.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/App.kt
+@@ -278,7 +278,7 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
+             diskCache(
+                 DiskCache.Builder()
+                     .directory(context.cacheDir.resolve("image_cache"))
+-                    .maxSizePercent(0.02)
++                    .maxSizePercent(0.04)
+                     .build(),
+             )
+ 
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
+index 73d2e08..f7f5715 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
+@@ -98,6 +98,17 @@ class CoverCache(private val context: Context) {
+         }
+     }
+ 
++    /**
++     * Deletes generated cover files while preserving custom covers and manga data.
++     *
++     * @return number of generated cover files removed.
++     */
++    fun clearCachedCovers(): Int {
++        return cacheDir.listFiles().orEmpty().count { file ->
++            file.isFile && file.delete()
++        }
++    }
++
+     private fun getCacheDir(dir: String): File {
+         return context.getExternalFilesDir(dir)
+             ?: File(context.filesDir, dir).also { it.mkdirs() }
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
+index 0266552..5e0a3b6 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
+@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.flow.collectLatest
+ import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.flow.conflate
+ import kotlinx.coroutines.flow.debounce
+ import kotlinx.coroutines.flow.distinctUntilChanged
+ import kotlinx.coroutines.flow.map
+@@ -236,6 +237,7 @@ class DownloadQueueScreenModel(
+             combine(progressFlows, Array<Int>::sum)
+                 .distinctUntilChanged()
+                 .debounce(50)
++                .conflate()
+                 .collectLatest {
+                     onUpdateProgress(download)
+                 }
