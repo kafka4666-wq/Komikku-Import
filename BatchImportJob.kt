@@ -1,8 +1,8 @@
 package exh.ui.batchadd
 
 import android.content.Context
-import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.BatchImportStatus
+import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.cancelNotification
 import eu.kanade.tachiyomi.util.system.notificationBuilder
@@ -36,82 +37,112 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+/** A single process-wide gate shared by discovery and library insertion. */
+object BatchImportRequestLimiter {
+    private const val REQUEST_INTERVAL_MS = 4_000L
+    private val mutex = Mutex()
+    private var nextRequestAt = 0L
+
+    suspend fun await() {
+        val waitFor = mutex.withLock {
+            val now = System.currentTimeMillis()
+            val wait = (nextRequestAt - now).coerceAtLeast(0L)
+            nextRequestAt = maxOf(now, nextRequestAt) + REQUEST_INTERVAL_MS
+            wait
+        }
+        if (waitFor > 0) delay(waitFor)
+    }
+}
+
 class BatchImportJob(
     private val context: Context,
     workerParams: WorkerParameters,
 ) : CoroutineWorker(context, workerParams) {
     private val status: BatchImportStatus = Injekt.get()
     private val storagePreferences: StoragePreferences = Injekt.get()
-    private val requestGate = Mutex()
-    private var nextRequestAt = 0L
 
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
         val inputFile = File(inputPath)
-        val urls = runCatching { inputFile.readLines().filter(String::isNotBlank) }.getOrElse {
-            xLogE("Batch import input read error", it)
-            return Result.failure()
-        }
-        if (urls.isEmpty()) return Result.success()
-
         val checkpointFile = File("$inputPath.progress")
         val failedFile = File("$inputPath.failed")
         val eventsFile = File("$inputPath.events")
-        var nextIndex = checkpointFile.readLinesSafely().firstOrNull()?.trim()?.toIntOrNull()?.coerceIn(0, urls.size) ?: 0
-        val failedLinks = failedFile.readLinesSafely().toMutableList()
-        val events = eventsFile.readLinesSafely()
-        val initialFailed = failedLinks.size.coerceAtMost(nextIndex)
-        var added = (nextIndex - initialFailed).coerceAtLeast(0)
-        var failed = initialFailed
+        val doneFile = File("$inputPath.done")
+        var urls = inputFile.readLinesSafely().toMutableList()
+        if (urls.isEmpty() && !inputFile.exists()) return Result.failure()
+        var nextIndex = checkpointFile.readLinesSafely().firstOrNull()?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+        var failedLinks = failedFile.readLinesSafely().toMutableList()
+        var added = (nextIndex - failedLinks.size).coerceAtLeast(0)
+        var failed = failedLinks.size.coerceAtMost(nextIndex)
+        var announcedTotal = -1
 
-        status.begin(urls.size, nextIndex, added, failed, events)
+        status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
         setForegroundSafely()
         showProgress(nextIndex, urls.size, added, failed)
 
         return try {
-            while (nextIndex < urls.size) {
-                awaitResume()
-                val url = urls[nextIndex]
-                val result = addGalleryRateLimited(url)
-                val wasAdded = result is GalleryAddEvent.Success
-                val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
-                if (wasAdded) {
-                    added++
-                } else {
-                    failed++
-                    failedLinks += url
-                    failedFile.appendLineSafely(url)
+            while (true) {
+                val available = inputFile.readLinesSafely()
+                if (available.size > urls.size) {
+                    urls.addAll(available.drop(urls.size))
                 }
-                val event = if (wasAdded) "[ADDED] $url" else "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
-                eventsFile.appendLineSafely(event)
-                nextIndex++
-                checkpointFile.writeText(nextIndex.toString())
-                status.record(url, wasAdded, detail)
-                showProgress(nextIndex, urls.size, added, failed)
+                if (urls.size != announcedTotal) {
+                    status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
+                    announcedTotal = urls.size
+                    showProgress(nextIndex, urls.size, added, failed)
+                }
+
+                if (nextIndex < urls.size) {
+                    val url = urls[nextIndex]
+                    val result = addGalleryRateLimited(url)
+                    val wasAdded = result is GalleryAddEvent.Success
+                    val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
+                    if (wasAdded) {
+                        added++
+                    } else {
+                        failed++
+                        failedLinks += url
+                        failedFile.appendLineSafely(url)
+                    }
+                    val event = if (wasAdded) "[ADDED] $url" else "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
+                    eventsFile.appendLineSafely(event)
+                    nextIndex++
+                    checkpointFile.writeText(nextIndex.toString())
+                    status.record(url, wasAdded, detail)
+                    showProgress(nextIndex, urls.size, added, failed)
+                    continue
+                }
+
+                if (doneFile.exists()) break
+                delay(PAUSE_POLL_MS)
             }
+
             writeLinksFile("batch_import_failed_links", failedLinks)
             showComplete(nextIndex, urls.size, added, failed)
             Result.success()
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                writeUnprocessedLinks(urls, nextIndex, failedLinks)
-                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
+                val currentUrls = inputFile.readLinesSafely()
+                writeUnprocessedLinks(currentUrls, nextIndex, failedLinks)
+                status.restore(currentUrls.size, nextIndex.coerceAtMost(currentUrls.size), added, failed, eventsFile.readLinesSafely(), running = false)
             }
             throw cancelled
         } catch (error: Throwable) {
             xLogE("Batch import error", error)
             withContext(NonCancellable) {
-                writeUnprocessedLinks(urls, nextIndex, failedLinks)
-                status.restore(urls.size, nextIndex, added, failed, eventsFile.readLinesSafely(), running = false)
+                val currentUrls = inputFile.readLinesSafely()
+                writeUnprocessedLinks(currentUrls, nextIndex, failedLinks)
+                status.restore(currentUrls.size, nextIndex.coerceAtMost(currentUrls.size), added, failed, eventsFile.readLinesSafely(), running = false)
             }
             Result.retry()
         } finally {
             context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-            if (!isStopped && nextIndex >= urls.size) {
+            if (!isStopped && doneFile.exists() && nextIndex >= inputFile.readLinesSafely().size) {
                 inputFile.delete()
                 checkpointFile.delete()
                 failedFile.delete()
                 eventsFile.delete()
+                doneFile.delete()
             }
         }
     }
@@ -122,38 +153,23 @@ class BatchImportJob(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
 
-    private suspend fun awaitResume() {
-        while (isPaused(context)) delay(PAUSE_POLL_MS)
-    }
-
     private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
+        awaitResume()
         var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
         for (attempt in 0 until RATE_LIMIT_RETRIES) {
-            awaitRequestSlot()
-            result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 2)
-            }
-            if (!isRateLimited(result) && !isTransientFailure(result)) return result
+            awaitResume()
+            BatchImportRequestLimiter.await()
+            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
+            if (!isRateLimited(result)) return result
             if (attempt < RATE_LIMIT_RETRIES - 1) {
-                if (isRateLimited(result)) delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS)) else delay(REQUEST_INTERVAL_MS)
+                delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
             }
         }
         return result
     }
 
-    private fun isTransientFailure(result: GalleryAddEvent): Boolean =
-        result is GalleryAddEvent.Fail.Error && result.logMessage.lowercase().let {
-            "timeout" in it || "timed out" in it || "connection" in it || "socket" in it || "503" in it || "502" in it || "500" in it || "temporarily" in it
-        }
-
-    private suspend fun awaitRequestSlot() {
-        val waitFor = requestGate.withLock {
-            val now = System.currentTimeMillis()
-            val wait = (nextRequestAt - now).coerceAtLeast(0L)
-            nextRequestAt = maxOf(now, nextRequestAt) + REQUEST_INTERVAL_MS
-            wait
-        }
-        if (waitFor > 0) delay(waitFor)
+    private suspend fun awaitResume() {
+        while (isPaused(context)) delay(PAUSE_POLL_MS)
     }
 
     private fun isRateLimited(result: GalleryAddEvent): Boolean =
@@ -171,6 +187,9 @@ class BatchImportJob(
             setOnlyAlertOnce(true)
             setAutoCancel(false)
             setSubText("${if (total == 0) 0 else completed * 100 / total}%")
+            addAction(R.drawable.ic_pause_24dp, "Pause", NotificationReceiver.pauseBatchImportPendingBroadcast(context))
+            addAction(R.drawable.ic_play_arrow_24dp, "Resume", NotificationReceiver.resumeBatchImportPendingBroadcast(context))
+            addAction(R.drawable.ic_close_24dp, "Cancel", NotificationReceiver.cancelBatchImportPendingBroadcast(context))
         }.build()
 
     private fun showProgress(completed: Int, total: Int, added: Int, failed: Int) {
@@ -212,13 +231,13 @@ class BatchImportJob(
     companion object {
         private const val TAG = "BatchImport"
         private const val INPUT_PATH = "input_path"
-        private const val REQUEST_INTERVAL_MS = 4_000L
         private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
         private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
         private const val RATE_LIMIT_RETRIES = 3
         private const val PAUSE_POLL_MS = 500L
         private const val PREFS_NAME = "batch_import_controls"
         private const val PREFS_PAUSED = "paused"
+
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         fun isPaused(context: Context): Boolean = prefs(context).getBoolean(PREFS_PAUSED, false)
         fun pause(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, true).apply() }
@@ -227,6 +246,17 @@ class BatchImportJob(
         fun start(context: Context, urls: List<String>) {
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
             input.writeText(urls.joinToString("\n"))
+            File("${input.absolutePath}.done").writeText("done")
+            enqueue(context, input)
+        }
+
+        fun startFromFile(context: Context, input: File) {
+            input.parentFile?.mkdirs()
+            if (!input.exists()) input.createNewFile()
+            enqueue(context, input)
+        }
+
+        private fun enqueue(context: Context, input: File) {
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
                 .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
@@ -237,6 +267,11 @@ class BatchImportJob(
 
         fun stop(context: Context) {
             context.workManager.cancelUniqueWork(TAG)
+        }
+
+        fun cancel(context: Context) {
+            resume(context)
+            stop(context)
         }
     }
 }

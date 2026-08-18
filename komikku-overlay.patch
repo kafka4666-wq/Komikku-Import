@@ -58,7 +58,7 @@ index a147d7ff43..8fa03dbfdd 100644
 +                    backgroundColor = if (batchImporting) BatchImportBannerBackgroundColor else IndexingBannerBackgroundColor,
                      // KMK -->
                      text = when {
-+                        batchImporting -> "Adding manga (${percentFormatter.format(batchImportProgress)})"
++                        batchImporting -> "Adding manga${if (batchImportProgress > 0f) " (${percentFormatter.format(batchImportProgress)})" else "…"}"
                          updating -> progress?.let {
                              stringResource(
                                  MR.strings.notification_updating_progress,
@@ -395,12 +395,12 @@ index 3d1e7f9ea4..86bedeade7 100644
 +                            modifier = Modifier.fillMaxWidth(),
 +                            onClick = { filePicker.launch(arrayOf("text/plain", "text/csv", "text/*")) },
 +                        ) {
-+                            Text(text = "Import TXT/CSV file")
++                            Text(text = "Import / retry TXT/CSV file")
 +                        }
                          // KMK -->
                          Spacer(Modifier.height(8.dp))
                          Text(
-@@ -134,6 +151,30 @@ class BatchAddScreen : Screen() {
+@@ -134,6 +151,36 @@ class BatchAddScreen : Screen() {
                                          style = MaterialTheme.typography.bodyMedium,
                                      )
                                  }
@@ -426,6 +426,12 @@ index 3d1e7f9ea4..86bedeade7 100644
 +                                        onClick = { screenModel.resumeImport(context) },
 +                                    ) {
 +                                        Text("Resume")
++                                    }
++                                    Button(
++                                        modifier = Modifier.weight(1f),
++                                        onClick = { screenModel.cancelImport(context) },
++                                    ) {
++                                        Text("Cancel")
 +                                    }
 +                                }
                                  Spacer(modifier = Modifier.height(12.dp))
@@ -635,15 +641,15 @@ index a791e4d428..d4d12903ed 100644
 -            }
 -        }
 +    fun pauseImport(context: Context) {
-+        context.applicationContext.getSharedPreferences("batch_import_controls", Context.MODE_PRIVATE).edit().putBoolean("paused", true).apply()
++        BatchImportJob.Companion.pause(context.applicationContext)
 +    }
 +
 +    fun resumeImport(context: Context) {
-+        context.applicationContext.getSharedPreferences("batch_import_controls", Context.MODE_PRIVATE).edit().putBoolean("paused", false).apply()
++        BatchImportJob.Companion.resume(context.applicationContext)
 +    }
 +
 +    fun cancelImport(context: Context) {
-+        BatchImportJob.stop(context.applicationContext)
++        BatchImportJob.cancel(context.applicationContext)
 +        mutableState.update { it.copy(state = State.INPUT) }
      }
  
@@ -1068,7 +1074,7 @@ index 53029f64df..21bf3f4f7b 100644
 [32m+[m[32m                        NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)[m
 [32m+[m[32m                    },[m
 [32m+[m[32m                ) {[m
-[32m+[m[32m                    Text(if (started) "Preparing import…" else "Add books from $startDate to $endDate")[m
+[32m+[m[32m                    Text(if (started) "Adding manga…" else "Add books from $startDate to $endDate")[m
 [32m+[m[32m                }[m
 [32m+[m[32m                if (startDate > endDate) {[m
 [32m+[m[32m                    Text("The end date must be on or after the start date.", color = MaterialTheme.colorScheme.error)[m
@@ -1269,3 +1275,68 @@ index 53029f64df..21bf3f4f7b 100644
 [32m+[m[32m    }[m
 [32m+[m[32m}[m
 [32m+[m
+[1mdiff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
+[1mindex 531992d..c1a0f46 100644[m
+[1m--- a/upstream/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
+[1m+++ b/NotificationReceiver.modified.kt[m
+[36m@@ -9,6 +9,8 @@[m [mimport androidx.core.net.toUri[m
+ import eu.kanade.tachiyomi.data.backup.restore.BackupRestoreJob[m
+ import eu.kanade.tachiyomi.data.download.DownloadManager[m
+ import eu.kanade.tachiyomi.data.library.LibraryUpdateJob[m
+[32m+[m[32mimport exh.ui.batchadd.BatchImportJob[m
+[32m+[m[32mimport exh.ui.nhentaidate.NhentaiDateImportWorker[m
+ import eu.kanade.tachiyomi.data.sync.SyncDataJob[m
+ import eu.kanade.tachiyomi.data.updater.AppUpdateDownloadJob[m
+ import eu.kanade.tachiyomi.ui.main.MainActivity[m
+[36m@@ -75,6 +77,12 @@[m [mclass NotificationReceiver : BroadcastReceiver() {[m
+             ACTION_CANCEL_RESTORE -> cancelRestore(context)[m
+ [m
+             ACTION_CANCEL_SYNC -> cancelSync(context)[m
+[32m+[m[32m            ACTION_PAUSE_BATCH_IMPORT -> BatchImportJob.pause(context)[m
+[32m+[m[32m            ACTION_RESUME_BATCH_IMPORT -> BatchImportJob.resume(context)[m
+[32m+[m[32m            ACTION_CANCEL_BATCH_IMPORT -> {[m
+[32m+[m[32m                BatchImportJob.cancel(context)[m
+[32m+[m[32m                NhentaiDateImportWorker.stop(context)[m
+[32m+[m[32m            }[m
+             // Cancel library update and dismiss notification[m
+             ACTION_CANCEL_LIBRARY_UPDATE -> cancelLibraryUpdate(context)[m
+             // Start downloading app update[m
+[36m@@ -287,6 +295,10 @@[m [mclass NotificationReceiver : BroadcastReceiver() {[m
+         private const val ACTION_PAUSE_DOWNLOADS = "$ID.$NAME.ACTION_PAUSE_DOWNLOADS"[m
+         private const val ACTION_CLEAR_DOWNLOADS = "$ID.$NAME.ACTION_CLEAR_DOWNLOADS"[m
+ [m
+[32m+[m[32m        private const val ACTION_PAUSE_BATCH_IMPORT = "$ID.$NAME.ACTION_PAUSE_BATCH_IMPORT"[m
+[32m+[m[32m        private const val ACTION_RESUME_BATCH_IMPORT = "$ID.$NAME.ACTION_RESUME_BATCH_IMPORT"[m
+[32m+[m[32m        private const val ACTION_CANCEL_BATCH_IMPORT = "$ID.$NAME.ACTION_CANCEL_BATCH_IMPORT"[m
+[32m+[m
+         private const val ACTION_DISMISS_NOTIFICATION = "$ID.$NAME.ACTION_DISMISS_NOTIFICATION"[m
+ [m
+         // KMK -->[m
+[36m@@ -354,6 +366,27 @@[m [mclass NotificationReceiver : BroadcastReceiver() {[m
+             )[m
+         }[m
+ [m
+[32m+[m[32m        internal fun pauseBatchImportPendingBroadcast(context: Context): PendingIntent =[m
+[32m+[m[32m            batchImportPendingBroadcast(context, ACTION_PAUSE_BATCH_IMPORT, 9001)[m
+[32m+[m
+[32m+[m[32m        internal fun resumeBatchImportPendingBroadcast(context: Context): PendingIntent =[m
+[32m+[m[32m            batchImportPendingBroadcast(context, ACTION_RESUME_BATCH_IMPORT, 9002)[m
+[32m+[m
+[32m+[m[32m        internal fun cancelBatchImportPendingBroadcast(context: Context): PendingIntent =[m
+[32m+[m[32m            batchImportPendingBroadcast(context, ACTION_CANCEL_BATCH_IMPORT, 9003)[m
+[32m+[m
+[32m+[m[32m        private fun batchImportPendingBroadcast(context: Context, action: String, requestCode: Int): PendingIntent {[m
+[32m+[m[32m            val intent = Intent(context, NotificationReceiver::class.java).apply {[m
+[32m+[m[32m                this.action = action[m
+[32m+[m[32m            }[m
+[32m+[m[32m            return PendingIntent.getBroadcast([m
+[32m+[m[32m                context,[m
+[32m+[m[32m                requestCode,[m
+[32m+[m[32m                intent,[m
+[32m+[m[32m                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,[m
+[32m+[m[32m            )[m
+[32m+[m[32m        }[m
+[32m+[m
+         /**[m
+          * Returns [PendingIntent] that starts a service which dismissed the notification[m
+          *[m

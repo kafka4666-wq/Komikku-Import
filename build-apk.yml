@@ -1,17 +1,13 @@
 name: Build Komikku APK
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
   JAVA_TOOL_OPTIONS: -Xmx4g
-
 jobs:
   build-apk:
     runs-on: ubuntu-24.04
@@ -32,9 +28,10 @@ jobs:
           cd upstream
           # The patch was generated with colored git diff output. Remove ANSI escapes
           # before applying it so file headers and Kotlin lines are valid patch text.
-          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.clean.patch
-          mv komikku-overlay.clean.patch komikku-overlay.patch
-
+          for patch in komikku-overlay.patch; do
+            perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$patch" > "$patch.clean"
+            mv "$patch.clean" "$patch"
+          done
           extract_new_file() {
             local path="$1"
             local header="diff --git a/${path} b/${path}"
@@ -47,8 +44,9 @@ jobs:
             ' komikku-overlay.patch > "$path"
             test -s "$path"
           }
-
           git apply --verbose komikku-overlay.patch || true
+          grep -q 'class BatchImportStatus' app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
+          grep -q 'ID_BATCH_IMPORT_PROGRESS' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           # Copy new Kotlin files from the overlay repository itself. Keeping these
           # files outside the colored unified diff avoids any patch-parser ambiguity.
           mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
@@ -58,14 +56,16 @@ jobs:
           grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-                    # Force an update-compatible release identity in the generated APK.
-          sed -E -i 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 84/' app/build.gradle.kts
-          sed -E -i 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.4"/' app/build.gradle.kts
+          # Force the generated APK to an update-compatible release identity.
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 84/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.4"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
+          grep -q 'versionCode = 84' app/build.gradle.kts
+          grep -q 'versionName = "1.14.4"' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
-          grep -nE 'applicationId|versionCode|versionName' app/build.gradle.kts
-          test "$(grep -oE "versionCode = [0-9]+" app/build.gradle.kts | head -n1)" = "versionCode = 84"
-          test "$(grep -oE "versionName = \"[^\"]+\"" app/build.gradle.kts | head -n1)" = 'versionName = "1.14.4"'
-- name: Set up Java 21
+          # Date discovery and library insertion run as foreground WorkManager tasks.
+          perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -80,7 +80,7 @@ jobs:
         run: chmod +x ./gradlew
       - name: Build debug APK
         working-directory: upstream
-        run: ./gradlew clean :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
       - name: Validate and locate universal APK
         working-directory: upstream
         run: |
@@ -89,7 +89,8 @@ jobs:
           test -n "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "package: name='com.manus.komikku' versionCode='84' versionName='1.14.4'"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='84' versionName='1.14.4'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
@@ -107,5 +108,3 @@ jobs:
           path: upstream/app/build/reports/**
           if-no-files-found: ignore
           retention-days: 30
-
-        
