@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Today
@@ -43,6 +44,7 @@ import androidx.work.WorkerParameters
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.BatchImportStatus
+import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.NetworkHelper
@@ -167,6 +169,18 @@ class NhentaiDateImportScreen : Screen() {
                             Icon(Icons.Outlined.PlayArrow, contentDescription = null)
                             Text(" Resume")
                         }
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                BatchImportJob.cancel(context)
+                                NhentaiDateImportWorker.stop(context)
+                                started = false
+                                paused = false
+                            },
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = null)
+                            Text(" Cancel")
+                        }
                     }
                     Text(
                         if (paused) "Import paused. Resume when you want additions to continue." else "Discovery and adding continue when you leave this screen.",
@@ -248,6 +262,9 @@ class NhentaiDateImportWorker(
         setOngoing(true)
         setOnlyAlertOnce(true)
         setAutoCancel(false)
+        addAction(R.drawable.ic_pause_24dp, "Pause", NotificationReceiver.pauseBatchImportPendingBroadcast(applicationContext))
+        addAction(R.drawable.ic_play_arrow_24dp, "Resume", NotificationReceiver.resumeBatchImportPendingBroadcast(applicationContext))
+        addAction(R.drawable.ic_close_24dp, "Cancel", NotificationReceiver.cancelBatchImportPendingBroadcast(applicationContext))
     }.build()
 
     private suspend fun fetchGalleryUrls(
@@ -325,6 +342,10 @@ class NhentaiDateImportWorker(
                 .addTag(TAG)
                 .build()
             context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+        }
+
+        fun stop(context: Context) {
+            context.workManager.cancelUniqueWork(TAG)
         }
     }
 }
