@@ -635,11 +635,11 @@ index a791e4d428..d4d12903ed 100644
 -            }
 -        }
 +    fun pauseImport(context: Context) {
-+        BatchImportJob.Companion.pause(context.applicationContext)
++        context.applicationContext.getSharedPreferences("batch_import_controls", Context.MODE_PRIVATE).edit().putBoolean("paused", true).apply()
 +    }
 +
 +    fun resumeImport(context: Context) {
-+        BatchImportJob.Companion.resume(context.applicationContext)
++        context.applicationContext.getSharedPreferences("batch_import_controls", Context.MODE_PRIVATE).edit().putBoolean("paused", false).apply()
 +    }
 +
 +    fun cancelImport(context: Context) {
