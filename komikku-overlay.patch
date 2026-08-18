@@ -635,11 +635,11 @@ index a791e4d428..d4d12903ed 100644
 -            }
 -        }
 +    fun pauseImport(context: Context) {
-+        BatchImportJob.pause(context.applicationContext)
++        BatchImportJob.Companion.pause(context.applicationContext)
 +    }
 +
 +    fun resumeImport(context: Context) {
-+        BatchImportJob.resume(context.applicationContext)
++        BatchImportJob.Companion.resume(context.applicationContext)
 +    }
 +
 +    fun cancelImport(context: Context) {
