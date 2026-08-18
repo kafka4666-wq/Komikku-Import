@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.BatchImportStatus
+import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.cancelNotification
 import eu.kanade.tachiyomi.util.system.notificationBuilder
@@ -186,6 +187,9 @@ class BatchImportJob(
             setOnlyAlertOnce(true)
             setAutoCancel(false)
             setSubText("${if (total == 0) 0 else completed * 100 / total}%")
+            addAction(R.drawable.ic_pause_24dp, "Pause", NotificationReceiver.pauseBatchImportPendingBroadcast(context))
+            addAction(R.drawable.ic_play_arrow_24dp, "Resume", NotificationReceiver.resumeBatchImportPendingBroadcast(context))
+            addAction(R.drawable.ic_close_24dp, "Cancel", NotificationReceiver.cancelBatchImportPendingBroadcast(context))
         }.build()
 
     private fun showProgress(completed: Int, total: Int, added: Int, failed: Int) {
@@ -263,6 +267,11 @@ class BatchImportJob(
 
         fun stop(context: Context) {
             context.workManager.cancelUniqueWork(TAG)
+        }
+
+        fun cancel(context: Context) {
+            resume(context)
+            stop(context)
         }
     }
 }
