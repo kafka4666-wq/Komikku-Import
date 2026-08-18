@@ -483,7 +483,7 @@ index a791e4d428..d4d12903ed 100644
  import tachiyomi.i18n.sy.SYMR
  import uy.kohesive.injekt.Injekt
  import uy.kohesive.injekt.api.get
-@@ -24,121 +23,118 @@ import uy.kohesive.injekt.api.get
+@@ -24,120 +23,118 @@ import uy.kohesive.injekt.api.get
  class BatchAddScreenModel(
      private val exhPreferences: ExhPreferences = Injekt.get(),
  ) : StateScreenModel<BatchAddState>(BatchAddState()) {
@@ -641,7 +641,7 @@ index a791e4d428..d4d12903ed 100644
 +    fun resumeImport(context: Context) {
 +        BatchImportJob.resume(context.applicationContext)
 +    }
-
++
 +    fun cancelImport(context: Context) {
 +        BatchImportJob.stop(context.applicationContext)
 +        mutableState.update { it.copy(state = State.INPUT) }
