@@ -121,6 +121,10 @@ jobs:
         run: chmod +x ./gradlew
       - name: Build stable-signed debug APK
         working-directory: upstream
+        env:
+          KOMIKKU_KEYSTORE_PASSWORD: ${{ secrets.KOMIKKU_KEYSTORE_PASSWORD }}
+          KOMIKKU_KEY_ALIAS: ${{ secrets.KOMIKKU_KEY_ALIAS }}
+          KOMIKKU_KEY_PASSWORD: ${{ secrets.KOMIKKU_KEY_PASSWORD }}
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
       - name: Validate and locate universal APK
         working-directory: upstream
