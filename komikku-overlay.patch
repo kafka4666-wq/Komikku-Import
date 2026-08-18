@@ -411,6 +411,23 @@ index 3d1e7f9ea4..86bedeade7 100644
 +                                    modifier = Modifier.fillMaxWidth(),
 +                                    textAlign = TextAlign.Center,
 +                                )
++                                Spacer(modifier = Modifier.height(8.dp))
++                                Row(
++                                    modifier = Modifier.fillMaxWidth(),
++                                ) {
++                                    Button(
++                                        modifier = Modifier.weight(1f),
++                                        onClick = { screenModel.pauseImport(context) },
++                                    ) {
++                                        Text("Pause")
++                                    }
++                                    Button(
++                                        modifier = Modifier.weight(1f),
++                                        onClick = { screenModel.resumeImport(context) },
++                                    ) {
++                                        Text("Resume")
++                                    }
++                                }
                                  Spacer(modifier = Modifier.height(12.dp))
                              }
                          }
@@ -617,6 +634,14 @@ index a791e4d428..d4d12903ed 100644
 -                )
 -            }
 -        }
++    fun pauseImport(context: Context) {
++        BatchImportJob.pause(context.applicationContext)
++    }
++
++    fun resumeImport(context: Context) {
++        BatchImportJob.resume(context.applicationContext)
++    }
+
 +    fun cancelImport(context: Context) {
 +        BatchImportJob.stop(context.applicationContext)
 +        mutableState.update { it.copy(state = State.INPUT) }
