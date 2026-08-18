@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -60,6 +62,7 @@ class NhentaiDateImportScreen : Screen() {
         var startDate by remember { mutableStateOf(today()) }
         var endDate by remember { mutableStateOf(today()) }
         var started by remember { mutableStateOf(false) }
+        var paused by remember { mutableStateOf(BatchImportJob.isPaused(context)) }
         var excludedTags by remember { mutableStateOf("") }
 
         Scaffold { contentPadding ->
@@ -113,6 +116,33 @@ class NhentaiDateImportScreen : Screen() {
                     },
                 ) {
                     Text(if (started) "Preparing import…" else "Add books from $startDate to $endDate")
+                }
+                if (started || paused) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                BatchImportJob.pause(context)
+                                paused = true
+                            },
+                        ) {
+                            Icon(Icons.Outlined.Pause, contentDescription = null)
+                            Text(" Pause")
+                        }
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                BatchImportJob.resume(context)
+                                paused = false
+                            },
+                        ) {
+                            Icon(Icons.Outlined.PlayArrow, contentDescription = null)
+                            Text(" Resume")
+                        }
+                    }
                 }
                 if (startDate > endDate) {
                     Text("The end date must be on or after the start date.", color = MaterialTheme.colorScheme.error)
