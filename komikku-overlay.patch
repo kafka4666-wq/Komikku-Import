@@ -400,7 +400,7 @@ index 3d1e7f9ea4..86bedeade7 100644
                          // KMK -->
                          Spacer(Modifier.height(8.dp))
                          Text(
-@@ -134,6 +151,13 @@ class BatchAddScreen : Screen() {
+@@ -134,6 +151,30 @@ class BatchAddScreen : Screen() {
                                          style = MaterialTheme.typography.bodyMedium,
                                      )
                                  }
@@ -483,7 +483,7 @@ index a791e4d428..d4d12903ed 100644
  import tachiyomi.i18n.sy.SYMR
  import uy.kohesive.injekt.Injekt
  import uy.kohesive.injekt.api.get
-@@ -24,120 +23,110 @@ import uy.kohesive.injekt.api.get
+@@ -24,121 +23,118 @@ import uy.kohesive.injekt.api.get
  class BatchAddScreenModel(
      private val exhPreferences: ExhPreferences = Injekt.get(),
  ) : StateScreenModel<BatchAddState>(BatchAddState()) {
