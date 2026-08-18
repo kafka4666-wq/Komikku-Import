@@ -1277,8 +1277,8 @@ index 53029f64df..21bf3f4f7b 100644
 [32m+[m
 [1mdiff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
 [1mindex 531992d..c1a0f46 100644[m
-[1m--- a/upstream/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
-[1m+++ b/NotificationReceiver.modified.kt[m
+[1m--- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
+[1m+++ b/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
 [36m@@ -9,6 +9,8 @@[m [mimport androidx.core.net.toUri[m
  import eu.kanade.tachiyomi.data.backup.restore.BackupRestoreJob[m
  import eu.kanade.tachiyomi.data.download.DownloadManager[m
