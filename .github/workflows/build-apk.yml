@@ -59,6 +59,7 @@ jobs:
           # Force the generated APK to an update-compatible release identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 84/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.4"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           grep -q 'versionCode = 84' app/build.gradle.kts
           grep -q 'versionName = "1.14.4"' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
