@@ -9,6 +9,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
@@ -20,6 +21,7 @@ import eu.kanade.tachiyomi.util.system.setForegroundSafely
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.GalleryAddEvent
 import exh.GalleryAdder
+import exh.source.nHentaiSourceIds
 import exh.log.xLogE
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -27,6 +29,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import tachiyomi.domain.manga.interactor.GetLibraryManga
+import tachiyomi.domain.manga.model.MangaUpdate
 import tachiyomi.domain.storage.service.StoragePreferences
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -60,6 +64,12 @@ class BatchImportJob(
 ) : CoroutineWorker(context, workerParams) {
     private val status: BatchImportStatus = Injekt.get()
     private val storagePreferences: StoragePreferences = Injekt.get()
+    private val getLibraryManga: GetLibraryManga = Injekt.get()
+    private val updateManga: UpdateManga = Injekt.get()
+    private val identityRepairLock = Mutex()
+    private var identityRepairLoaded = false
+    private val sourceByCanonicalUrl = mutableMapOf<String, Long>()
+    private val mangaIdByCanonicalUrl = mutableMapOf<String, Long>()
 
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
@@ -94,6 +104,7 @@ class BatchImportJob(
 
                 if (nextIndex < urls.size) {
                     val url = urls[nextIndex]
+                    repairExistingNhentaiIdentity(url)
                     val result = addGalleryRateLimited(url)
                     val wasAdded = result is GalleryAddEvent.Success
                     val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
@@ -152,6 +163,39 @@ class BatchImportJob(
         buildProgressNotification(0, 1, 0, 0),
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
+
+    /**
+     * The source grid marks a result as present by querying (manga.url, manga.source).
+     * Older importer builds could resolve the same nhentai gallery through a different
+     * delegated language/source ID. Repair that key before GalleryAdder looks it up,
+     * preserving the existing row, favorite state, chapters, and categories.
+     */
+    private suspend fun repairExistingNhentaiIdentity(url: String) {
+        val identity = runCatching { GalleryAdder().canonicalMangaIdentity(url) }.getOrNull() ?: return
+        val canonicalUrl = identity.second.trimEnd('/').ifBlank { return }
+        val targetSource = identity.first
+        identityRepairLock.withLock {
+            if (!identityRepairLoaded) {
+                getLibraryManga.await().forEach { libraryManga ->
+                    val manga = libraryManga.manga
+                    val normalizedUrl = manga.url.trimEnd('/').ifBlank { return@forEach }
+                    val sourceIsNhentai = nHentaiSourceIds.isEmpty() || manga.source in nHentaiSourceIds
+                    if (sourceIsNhentai && normalizedUrl.startsWith("/g/")) {
+                        sourceByCanonicalUrl[normalizedUrl] = manga.source
+                        mangaIdByCanonicalUrl[normalizedUrl] = manga.id
+                    }
+                }
+                identityRepairLoaded = true
+            }
+
+            val existingSource = sourceByCanonicalUrl[canonicalUrl] ?: return
+            if (existingSource == targetSource) return
+            val mangaId = mangaIdByCanonicalUrl[canonicalUrl] ?: return
+            if (updateManga.await(MangaUpdate(id = mangaId, source = targetSource))) {
+                sourceByCanonicalUrl[canonicalUrl] = targetSource
+            }
+        }
+    }
 
     private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
         awaitResume()
