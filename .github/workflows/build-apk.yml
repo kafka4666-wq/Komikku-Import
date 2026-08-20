@@ -60,6 +60,9 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/backup/create app/src/main/java/eu/kanade/tachiyomi/data/sync
+          cp ../app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
@@ -67,6 +70,10 @@ jobs:
           grep -q 'LOG_QUEUE_CAPACITY' app/src/main/java/exh/log/EnhancedFilePrinter.kt
           grep -q 'formatThrowable' app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
           grep -q 'Sync stopped because the device ran out of memory' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
+          grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
+          grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
+          grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
+          grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
