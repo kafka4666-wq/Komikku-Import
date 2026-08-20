@@ -230,7 +230,7 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
         val syncPreferences: SyncPreferences = Injekt.get()
         val syncTriggerOpt = syncPreferences.getSyncTriggerOptions()
         if (syncPreferences.isSyncEnabled() && syncTriggerOpt.syncOnAppStart) {
-            SyncDataJob.startNow(this@App)
+            startSyncIfNotRecentlyAttempted()
         }
 
         initializeMigrator()
@@ -283,7 +283,9 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 
             memoryCache(
                 MemoryCache.Builder()
-                    .maxSizePercent(context)
+                    // Keep the cover cache useful without allowing it to consume most of
+                    // the heap on large libraries. Disk cache remains available at 4%.
+                    .maxSizePercent(context, 0.08)
                     .build(),
             )
 
@@ -300,13 +302,24 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
             .build()
     }
 
+    private fun startSyncIfNotRecentlyAttempted() {
+        val guard = getSharedPreferences("sync_start_guard", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastAttempt = guard.getLong("last_attempt_ms", 0L)
+        // A process recreated under memory pressure should not immediately launch the
+        // same heavy sync again on both cold start and resume.
+        if (now - lastAttempt < 15 * 60 * 1000L) return
+        guard.edit().putLong("last_attempt_ms", now).apply()
+        SyncDataJob.startNow(this@App)
+    }
+
     override fun onStart(owner: LifecycleOwner) {
         SecureActivityDelegate.onApplicationStart()
 
         val syncPreferences: SyncPreferences = Injekt.get()
         val syncTriggerOpt = syncPreferences.getSyncTriggerOptions()
         if (syncPreferences.isSyncEnabled() && syncTriggerOpt.syncOnAppResume) {
-            SyncDataJob.startNow(this@App)
+            startSyncIfNotRecentlyAttempted()
         }
 
         // AM (DISCORD) -->
