@@ -99,6 +99,7 @@ jobs:
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           mkdir -p app/src/main/java/eu/kanade/presentation/browse/components
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
@@ -119,6 +120,7 @@ jobs:
           grep -q 'selected = isSelected' app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           grep -q 'recordDuplicateDecision' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
           grep -q 'recordSourceMigration' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          grep -q 'migration-complete' app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
           grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
