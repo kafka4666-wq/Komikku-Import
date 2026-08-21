@@ -42,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.navigator.LocalNavigator
-import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.domain.ui.KomikkuFeatureStore
 import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.more.settings.widget.TextPreferenceWidget
@@ -62,8 +61,8 @@ class KomikkuFeatureHubScreen(
     @Composable
     override fun Content() {
         val context = LocalContext.current
-        val navigator = LocalNavigator.currentOrThrow
-        val backPress = LocalBackPress.currentOrThrow
+        val navigator = LocalNavigator.current
+        val backPress = LocalBackPress.current
         var input by remember { mutableStateOf(initialText.orEmpty()) }
         var recipeName by remember { mutableStateOf("") }
         var preview by remember { mutableStateOf<List<String>?>(null) }
@@ -79,7 +78,7 @@ class KomikkuFeatureHubScreen(
             topBar = {
                 AppBar(
                     title = "Komikku Action Center",
-                    navigateUp = backPress::invoke,
+                    navigateUp = { backPress?.invoke() ?: navigator?.pop() },
                 )
             },
         ) { contentPadding ->
@@ -139,13 +138,19 @@ class KomikkuFeatureHubScreen(
                     title = "Open Import Wizard",
                     subtitle = "Use the full Batch Add screen with file selection and live controls",
                     icon = Icons.AutoMirrored.Outlined.PlaylistAdd,
-                    onPreferenceClick = { navigator.push(BatchAddScreen()) },
+                    onPreferenceClick = {
+                        if (navigator != null) navigator.push(BatchAddScreen())
+                        else Toast.makeText(context, "Navigation is not ready yet", Toast.LENGTH_SHORT).show()
+                    },
                 )
                 TextPreferenceWidget(
                     title = "Nhentai Book Import",
                     subtitle = "Import by date range with tag filtering and background progress",
                     icon = Icons.Outlined.Search,
-                    onPreferenceClick = { navigator.push(NhentaiDateImportScreen()) },
+                    onPreferenceClick = {
+                        if (navigator != null) navigator.push(NhentaiDateImportScreen())
+                        else Toast.makeText(context, "Navigation is not ready yet", Toast.LENGTH_SHORT).show()
+                    },
                 )
                 TextPreferenceWidget(
                     title = "Retry failed only",
