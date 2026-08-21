@@ -1356,11 +1356,6 @@ index 3e20d13..2052eac 100644
                      },
                  ),
 +                Preference.PreferenceItem.TextPreference(
-+                    title = "Komikku Customisation",
-+                    subtitle = "Dashboard, library, imports, sync, reader, downloads, notifications, and accessibility",
-+                    onClick = { navigator.push(SettingsKomikkuCustomisationScreen) },
-+                ),
-+                Preference.PreferenceItem.TextPreference(
 +                    title = "Clear cached covers",
 +                    subtitle = "Remove generated cover images only; custom covers and manga data are kept.",
 +                    onClick = {
@@ -1390,7 +1385,6 @@ index 73d2e08..f7f5715 100644
 @@ -98,6 +98,18 @@ class CoverCache(private val context: Context) {
          }
      }
- 
 +    /**
 +     * Deletes generated cover files while preserving custom covers and manga data.
 +     *
