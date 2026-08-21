@@ -44,7 +44,7 @@ jobs:
             ' komikku-overlay.patch > "$path"
             test -s "$path"
           }
-          git apply --verbose komikku-overlay.patch || true
+          git apply --recount --verbose komikku-overlay.patch || true
           grep -q 'class BatchImportStatus' app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
           grep -q 'ID_BATCH_IMPORT_PROGRESS' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           # Copy new Kotlin files from the overlay repository itself. Keeping these
