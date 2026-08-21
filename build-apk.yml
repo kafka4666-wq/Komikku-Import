@@ -75,6 +75,9 @@ jobs:
           cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt
           cp ../i18n-kmk/src/commonMain/moko-resources/base/strings.xml i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           cp ../app/src/main/java/exh/log/EnhancedFilePrinter.kt app/src/main/java/exh/log/EnhancedFilePrinter.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
