@@ -25,6 +25,8 @@ jobs:
         run: |
           set -euo pipefail
           cp komikku-overlay.patch upstream/komikku-overlay.patch
+          mkdir -p worker-overlay
+          unzip -q komikku-worker-instrumentation.zip -d worker-overlay
           cd upstream
           # The patch was generated with colored git diff output. Remove ANSI escapes
           # before applying it so file headers and Kotlin lines are valid patch text.
@@ -51,6 +53,7 @@ jobs:
           # files outside the colored unified diff avoids any patch-parser ambiguity.
           mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
           cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          cp ../worker-overlay/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           cp ../app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           cp ../app/src/main/java/exh/GalleryAdder.kt app/src/main/java/exh/GalleryAdder.kt
           # Crash-safe logging and sync error handling are copied after the base patch
@@ -102,6 +105,8 @@ jobs:
           # Apply the uploaded feature archive last so its expanded Kotlin files override older overlays.
           unzip -o ../komikku-feature-upgrade.zip >/dev/null
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          grep -q 'recordSourceEvent' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          grep -q 'batch_import_retry' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
