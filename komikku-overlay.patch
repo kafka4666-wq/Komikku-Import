@@ -1387,9 +1387,10 @@ diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt b/ap
 index 73d2e08..f7f5715 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
 +++ b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
-@@ -98,6 +98,17 @@ class CoverCache(private val context: Context) {
+@@ -98,6 +98,18 @@ class CoverCache(private val context: Context) {
          }
      }
+ 
 +    /**
 +     * Deletes generated cover files while preserving custom covers and manga data.
 +     *
