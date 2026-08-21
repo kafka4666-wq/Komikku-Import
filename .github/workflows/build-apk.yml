@@ -72,6 +72,8 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/cache
+          cp ../app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
           mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/backup/create app/src/main/java/eu/kanade/tachiyomi/data/sync
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
