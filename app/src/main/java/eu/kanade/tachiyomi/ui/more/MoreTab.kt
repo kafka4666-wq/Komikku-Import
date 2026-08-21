@@ -21,6 +21,7 @@ import eu.kanade.core.preference.asState
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.presentation.more.MoreScreen
+import eu.kanade.presentation.more.KomikkuFeatureHubScreen
 import eu.kanade.presentation.util.Tab
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.connections.discord.DiscordRPCService
@@ -100,7 +101,10 @@ data object MoreTab : Tab {
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },
-            // SY <--
+            onClickFeatureHub = {
+                navigator.push(KomikkuFeatureHubScreen(onOpenLibrary = { tabNavigator.current = LibraryTab }))
+            },
+            // SY <--> 
             // KMK -->
             onClickLibraryUpdateErrors = { navigator.push(LibraryUpdateErrorScreen()) },
             // KMK <--
