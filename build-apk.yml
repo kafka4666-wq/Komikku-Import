@@ -96,6 +96,7 @@ jobs:
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
           cp ../full-runtime-overlay/domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
@@ -113,6 +114,7 @@ jobs:
           grep -q 'beginBulkOperation' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
           grep -q 'recordUndo' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
           grep -q 'adapterApiVersion' domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
+          grep -q 'selected = isSelected' app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
