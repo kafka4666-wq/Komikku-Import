@@ -1352,10 +1352,15 @@ index 3e20d13..2052eac 100644
  import eu.kanade.tachiyomi.data.download.DownloadCache
  import eu.kanade.tachiyomi.data.download.DownloadManager
  import eu.kanade.tachiyomi.data.library.MetadataUpdateJob
-@@ -253,6 +254,14 @@ object SettingsAdvancedScreen : SearchableSettings {
+@@ -253,6 +254,19 @@ object SettingsAdvancedScreen : SearchableSettings {
                          context.toast(MR.strings.download_cache_invalidated)
                      },
                  ),
++                Preference.PreferenceItem.TextPreference(
++                    title = "Komikku Customisation",
++                    subtitle = "Dashboard, library, imports, sync, reader, downloads, notifications, and accessibility",
++                    onClick = { navigator.push(SettingsKomikkuCustomisationScreen) },
++                ),
 +                Preference.PreferenceItem.TextPreference(
 +                    title = "Clear cached covers",
 +                    subtitle = "Remove generated cover images only; custom covers and manga data are kept.",
