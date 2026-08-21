@@ -99,13 +99,15 @@ jobs:
           grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
+          # Apply the uploaded feature archive last so its expanded Kotlin files override older overlays.
+          unzip -o ../komikku-feature-upgrade.zip >/dev/null
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 85/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
-          grep -q 'versionCode = 85' app/build.gradle.kts
+          grep -q 'versionCode = 86' app/build.gradle.kts
           grep -q 'versionName = "1.14.2' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
           # Date discovery and library insertion run as foreground WorkManager tasks.
@@ -180,7 +182,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='85' versionName='1.14.2'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='86' versionName='1.14.2'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
