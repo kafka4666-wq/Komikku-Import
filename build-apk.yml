@@ -86,13 +86,15 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
-          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/notification app/src/main/java/eu/kanade/tachiyomi/ui/download app/src/main/java/eu/kanade/tachiyomi/ui/reader
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/notification app/src/main/java/eu/kanade/tachiyomi/ui/download app/src/main/java/eu/kanade/tachiyomi/ui/reader app/src/main/java/eu/kanade/tachiyomi/ui/history domain/src/main/java/tachiyomi/domain/source/service
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          cp ../full-runtime-overlay/domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
@@ -108,6 +110,9 @@ jobs:
           grep -q 'CHANNEL_KOMIKKU_IMPORT' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           grep -q 'reorderByPriority' app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
           grep -q 'applyRuntimeReaderProfile' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          grep -q 'beginBulkOperation' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          grep -q 'recordUndo' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          grep -q 'adapterApiVersion' domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
           grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
