@@ -25,9 +25,10 @@ jobs:
         run: |
           set -euo pipefail
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          mkdir -p worker-overlay full-runtime-overlay
+          mkdir -p worker-overlay full-runtime-overlay full-feature-overlay
           unzip -q komikku-worker-instrumentation.zip -d worker-overlay
           unzip -q komikku-full-runtime-integrations.zip -d full-runtime-overlay
+          unzip -q komikku-full-feature-sources.zip -d full-feature-overlay
           cd upstream
           # The patch was generated with colored git diff output. Remove ANSI escapes
           # before applying it so file headers and Kotlin lines are valid patch text.
@@ -92,6 +93,9 @@ jobs:
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
           grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
@@ -118,6 +122,9 @@ jobs:
           grep -q 'KomikkuRuntimeFeatureEngine' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
           grep -q 'prioritizeLastQueued' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
           grep -q 'featureCatalog' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'ensureRuntimeMigration' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'startupSelfCheck' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'executeCommand' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           grep -q 'duplicateFingerprint' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           grep -q 'adaptiveLayout' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
