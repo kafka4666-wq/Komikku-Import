@@ -56,12 +56,17 @@ jobs:
           # Crash-safe logging and sync error handling are copied after the base patch
           # so they cover both importer and unrelated application failures.
           mkdir -p app/src/main/java/exh/log app/src/main/java/eu/kanade/tachiyomi/crash app/src/main/java/eu/kanade/tachiyomi/util app/src/main/java/eu/kanade/tachiyomi/data/sync
-          mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/more app/src/main/java/eu/kanade/tachiyomi/ui/more
+          mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/more app/src/main/java/eu/kanade/tachiyomi/ui/more app/src/main/java/eu/kanade/tachiyomi/ui/main
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
           cp ../i18n-kmk/src/commonMain/moko-resources/base/strings.xml i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           cp ../app/src/main/java/exh/log/EnhancedFilePrinter.kt app/src/main/java/exh/log/EnhancedFilePrinter.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
@@ -80,10 +85,15 @@ jobs:
           grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
+          grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
+          grep -q 'SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
           grep -q 'object SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
           grep -q 'collapseToolbar' app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           grep -q 'showCustomDashboard' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           grep -q 'onClickLibrary' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          grep -q 'Komikku Action Center' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
+          grep -q 'KomikkuFeatureStore' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          grep -q 'KomikkuFeatureStore.extractLinks' app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
           grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
