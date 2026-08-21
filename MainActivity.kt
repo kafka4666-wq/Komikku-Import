@@ -52,7 +52,6 @@ import androidx.lifecycle.lifecycleScope
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.NavigatorDisposeBehavior
-import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.connections.service.ConnectionsPreferences
 import eu.kanade.domain.source.interactor.GetIncognitoState
@@ -556,7 +555,7 @@ class MainActivity : BaseActivity() {
     @Composable
     private fun CheckForUpdates() {
         val context = LocalContext.current
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
 
         // App updates
         LaunchedEffect(Unit) {
@@ -593,7 +592,7 @@ class MainActivity : BaseActivity() {
 
     @Composable
     private fun ShowOnboarding() {
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
 
         LaunchedEffect(Unit) {
             if (!preferences.shownOnboardingFlow().get() && navigator.lastItem !is OnboardingScreen) {
