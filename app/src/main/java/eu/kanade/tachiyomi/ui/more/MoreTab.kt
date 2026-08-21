@@ -72,6 +72,7 @@ data object MoreTab : Tab {
     override fun Content() {
         val context = LocalContext.current
         val navigator = LocalNavigator.currentOrThrow
+        val tabNavigator = LocalTabNavigator.current
         val screenModel = rememberScreenModel { MoreScreenModel() }
         val downloadQueueState by screenModel.downloadQueueState.collectAsState()
         LaunchedEffect(Unit) {
@@ -98,7 +99,7 @@ data object MoreTab : Tab {
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
-            onClickLibrary = { LocalTabNavigator.current.current = LibraryTab },
+            onClickLibrary = { tabNavigator.current = LibraryTab },
             // SY <--
             // KMK -->
             onClickLibraryUpdateErrors = { navigator.push(LibraryUpdateErrorScreen()) },
