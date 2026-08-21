@@ -1,6 +1,7 @@
 package eu.kanade.presentation.more.settings.screen
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
@@ -15,7 +16,16 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import tachiyomi.i18n.kmk.KMR
 
-object SettingsKomikkuCustomisationScreen : Screen() {
+object SettingsKomikkuCustomisationScreen : SearchableSettings {
+    @Composable
+    @ReadOnlyComposable
+    override fun getTitleRes() = KMR.strings.pref_category_komikku_customisation
+    @Composable
+    override fun getPreferences(): List<Preference> {
+        val preferences = remember { KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>()) }
+        return buildPreferences(preferences)
+    }
+
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
@@ -23,12 +33,12 @@ object SettingsKomikkuCustomisationScreen : Screen() {
         PreferenceScaffold(
             titleRes = KMR.strings.pref_category_komikku_customisation,
             onBackPressed = navigator::pop,
-            itemsProvider = { getPreferences(preferences) },
+            itemsProvider = { buildPreferences(preferences) },
         )
     }
 
     @Composable
-    private fun getPreferences(preferences: KomikkuCustomisationPreferences): List<Preference> {
+    private fun buildPreferences(preferences: KomikkuCustomisationPreferences): List<Preference> {
         return listOf(
             Preference.PreferenceGroup(
                 title = "Komikku Customisation",
