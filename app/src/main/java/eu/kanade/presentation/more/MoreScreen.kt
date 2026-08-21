@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.GetApp
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.QueryStats
@@ -82,6 +83,7 @@ fun MoreScreen(
     onClickUpdates: () -> Unit,
     onClickHistory: () -> Unit,
     onClickLibrary: () -> Unit,
+    onClickFeatureHub: () -> Unit,
     // KMK -->
     onClickLibraryUpdateErrors: () -> Unit,
     // KMK <--
@@ -103,6 +105,14 @@ fun MoreScreen(
         ) {
             item {
                 LogoHeader()
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Komikku Action Center",
+                    subtitle = "Clipboard import, recovery, recipes, cleanup, reports, and reading tools",
+                    icon = Icons.Outlined.LibraryBooks,
+                    onPreferenceClick = onClickFeatureHub,
+                )
             }
             if (showCustomDashboard) {
                 item {
