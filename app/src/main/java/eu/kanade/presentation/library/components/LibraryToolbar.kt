@@ -24,12 +24,12 @@ import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.components.AppBarActions
 import eu.kanade.presentation.components.SearchToolbar
 import kotlinx.collections.immutable.persistentListOf
-import tachiyomi.core.common.preference.PreferenceStore
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.sy.SYMR
 import tachiyomi.presentation.core.components.Pill
 import tachiyomi.presentation.core.i18n.stringResource
 import tachiyomi.presentation.core.theme.active
+import tachiyomi.core.common.preference.PreferenceStore
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -57,7 +57,6 @@ fun LibraryToolbar(
 ) {
     val customisation = remember { KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>()) }
     val collapseToolbar = customisation.toolbarCollapsed().get()
-
     when {
     selectedCount > 0 -> LibrarySelectionToolbar(
         selectedCount = selectedCount,
@@ -83,6 +82,7 @@ fun LibraryToolbar(
         onInvalidateDownloadCache = onInvalidateDownloadCache,
         collapseToolbar = collapseToolbar,
     )
+    }
 }
 
 @Composable
@@ -128,60 +128,64 @@ private fun LibraryRegularToolbar(
         onChangeSearchQuery = onSearchQueryChange,
         actions = {
             val filterTint = if (hasFilters) MaterialTheme.colorScheme.active else LocalContentColor.current
-            val actions = persistentListOf(
-                AppBar.Action(
-                    title = stringResource(MR.strings.action_filter),
-                    icon = Icons.Outlined.FilterList,
-                    iconTint = filterTint,
-                    onClick = onClickFilter,
-                ),
-            ).builder().apply {
-                if (!collapseToolbar) {
-                    add(
-                        AppBar.OverflowAction(
-                            title = stringResource(MR.strings.action_update_library),
-                            onClick = onClickGlobalUpdate,
-                        ),
-                    )
-                    add(
-                        AppBar.OverflowAction(
-                            title = stringResource(MR.strings.action_update_category),
-                            onClick = onClickRefresh,
-                        ),
-                    )
-                    add(
-                        AppBar.OverflowAction(
-                            title = stringResource(MR.strings.action_open_random_manga),
-                            onClick = onClickOpenRandomManga,
-                        ),
-                    )
-                    add(
-                        AppBar.OverflowAction(
-                            title = stringResource(MR.strings.pref_invalidate_download_cache),
-                            onClick = { onInvalidateDownloadCache(context) },
-                        ),
-                    )
-                    // SY -->
-                    if (onClickSyncExh != null) {
+            AppBarActions(
+                actions = persistentListOf<AppBar.AppBarAction>().builder()
+                    .apply {
                         add(
-                            AppBar.OverflowAction(
-                                title = stringResource(SYMR.strings.sync_favorites),
-                                onClick = onClickSyncExh,
+                            AppBar.Action(
+                                title = stringResource(MR.strings.action_filter),
+                                icon = Icons.Outlined.FilterList,
+                                iconTint = filterTint,
+                                onClick = onClickFilter,
                             ),
                         )
+                        if (!collapseToolbar) {
+                            add(
+                                AppBar.OverflowAction(
+                                    title = stringResource(MR.strings.action_update_library),
+                                    onClick = onClickGlobalUpdate,
+                                ),
+                            )
+                            add(
+                                AppBar.OverflowAction(
+                                    title = stringResource(MR.strings.action_update_category),
+                                    onClick = onClickRefresh,
+                                ),
+                            )
+                            add(
+                                AppBar.OverflowAction(
+                                    title = stringResource(MR.strings.action_open_random_manga),
+                                    onClick = onClickOpenRandomManga,
+                                ),
+                            )
+                            add(
+                                AppBar.OverflowAction(
+                                    title = stringResource(MR.strings.pref_invalidate_download_cache),
+                                    onClick = { onInvalidateDownloadCache(context) },
+                                ),
+                            )
+                            // SY -->
+                            onClickSyncExh?.let {
+                                add(
+                                    AppBar.OverflowAction(
+                                        title = stringResource(SYMR.strings.sync_favorites),
+                                        onClick = it,
+                                    ),
+                                )
+                            }
+                            if (isSyncEnabled) {
+                                add(
+                                    AppBar.OverflowAction(
+                                        title = stringResource(SYMR.strings.sync_library),
+                                        onClick = onClickSyncNow,
+                                    ),
+                                )
+                            }
+                            // SY <--
+                        }
                     }
-                    if (isSyncEnabled) {
-                        add(
-                            AppBar.OverflowAction(
-                                title = stringResource(SYMR.strings.sync_library),
-                                onClick = onClickSyncNow,
-                            ),
-                        )
-                    }
-                    // SY <--
-                }
-            }.build()
-            AppBarActions(actions)
+                    .build(),
+            )
         },
         scrollBehavior = scrollBehavior,
     )
