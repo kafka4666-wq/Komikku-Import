@@ -104,9 +104,12 @@ jobs:
           grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           # Apply the uploaded feature archive last so its expanded Kotlin files override older overlays.
           unzip -o ../komikku-feature-upgrade.zip >/dev/null
+          unzip -o ../komikku-runtime-behavior.zip >/dev/null
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'recordSourceEvent' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'batch_import_retry' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          test -s app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
+          grep -q 'prioritizeLastQueued' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
