@@ -98,7 +98,7 @@ jobs:
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           mkdir -p app/src/main/java/eu/kanade/presentation/browse/components
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
           cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
           unzip -oq ../komikku-reader-resume.zip -d ../reader-resume
           cp ../reader-resume/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
