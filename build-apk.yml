@@ -108,8 +108,9 @@ jobs:
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
-          mkdir -p app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/tachiyomi/ui/library
+          mkdir -p app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/theme app/src/main/java/eu/kanade/tachiyomi/ui/library
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
@@ -132,6 +133,7 @@ jobs:
           grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           grep -q 'matchesAdvancedQuery' app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           grep -q 'visibleSections' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          grep -q 'dynamicLightColorScheme' app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           grep -q 'SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
