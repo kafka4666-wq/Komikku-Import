@@ -1274,7 +1274,6 @@ index 53029f64df..21bf3f4f7b 100644
 [32m+[m[32m        }[m
 [32m+[m[32m    }[m
 [32m+[m[32m}[m
-[32m+[m
 [1mdiff --git a/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt b/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
 [1mindex 531992d..c1a0f46 100644[m
 [1m--- a/app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt[m
@@ -1384,7 +1383,6 @@ index 6f85db0..b33fa66 100644
 +                    .maxSizePercent(0.04)
                      .build(),
              )
- 
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
 index 73d2e08..f7f5715 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
@@ -1392,7 +1390,6 @@ index 73d2e08..f7f5715 100644
 @@ -98,6 +98,17 @@ class CoverCache(private val context: Context) {
          }
      }
- 
 +    /**
 +     * Deletes generated cover files while preserving custom covers and manga data.
 +     *
