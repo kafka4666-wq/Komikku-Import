@@ -56,6 +56,10 @@ jobs:
           # Crash-safe logging and sync error handling are copied after the base patch
           # so they cover both importer and unrelated application failures.
           mkdir -p app/src/main/java/exh/log app/src/main/java/eu/kanade/tachiyomi/crash app/src/main/java/eu/kanade/tachiyomi/util app/src/main/java/eu/kanade/tachiyomi/data/sync
+          mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen
+          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
+          cp ../i18n-kmk/src/commonMain/moko-resources/base/strings.xml i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           cp ../app/src/main/java/exh/log/EnhancedFilePrinter.kt app/src/main/java/exh/log/EnhancedFilePrinter.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt
@@ -72,6 +76,9 @@ jobs:
           grep -q 'Sync stopped because the device ran out of memory' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
           grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
+          grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
+          grep -q 'object SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
+          grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
