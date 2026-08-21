@@ -1378,27 +1378,6 @@ index 6f85db0..b33fa66 100644
 +                    .maxSizePercent(0.04)
                      .build(),
              )
-diff --git a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
-index 73d2e08..f7f5715 100644
---- a/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
-+++ b/app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
-@@ -98,6 +98,18 @@ class CoverCache(private val context: Context) {
-         }
-     }
-+    /**
-+     * Deletes generated cover files while preserving custom covers and manga data.
-+     *
-+     * @return number of generated cover files removed.
-+     */
-+    fun clearCachedCovers(): Int {
-+        return cacheDir.listFiles().orEmpty().count { file ->
-+            file.isFile && file.delete()
-+        }
-+    }
-+
-     private fun getCacheDir(dir: String): File {
-         return context.getExternalFilesDir(dir)
-             ?: File(context.filesDir, dir).also { it.mkdirs() }
 diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
 index 0266552..5e0a3b6 100644
 --- a/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
