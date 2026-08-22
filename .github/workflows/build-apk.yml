@@ -25,8 +25,10 @@ jobs:
         run: |
           set -euo pipefail
           cp komikku-overlay.patch upstream/komikku-overlay.patch
-          mkdir -p worker-overlay
+          mkdir -p worker-overlay full-runtime-overlay full-feature-overlay
           unzip -q komikku-worker-instrumentation.zip -d worker-overlay
+          unzip -q komikku-full-runtime-integrations.zip -d full-runtime-overlay
+          unzip -q komikku-full-feature-sources.zip -d full-feature-overlay
           cd upstream
           # The patch was generated with colored git diff output. Remove ANSI escapes
           # before applying it so file headers and Kotlin lines are valid patch text.
@@ -60,16 +62,30 @@ jobs:
           # so they cover both importer and unrelated application failures.
           mkdir -p app/src/main/java/exh/log app/src/main/java/eu/kanade/tachiyomi/crash app/src/main/java/eu/kanade/tachiyomi/util app/src/main/java/eu/kanade/tachiyomi/data/sync
           mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/more app/src/main/java/eu/kanade/tachiyomi/ui/more app/src/main/java/eu/kanade/tachiyomi/ui/main
+          mkdir -p domain/src/main/java/tachiyomi/domain/manga/repository data/src/main/java/tachiyomi/data/manga data/src/main/sqldelight/tachiyomi/data
+          cp ../domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
+          cp ../data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
+          cp ../data/src/main/sqldelight/tachiyomi/data/mangas.sq data/src/main/sqldelight/tachiyomi/data/mangas.sq
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt
           cp ../i18n-kmk/src/commonMain/moko-resources/base/strings.xml i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           cp ../app/src/main/java/exh/log/EnhancedFilePrinter.kt app/src/main/java/exh/log/EnhancedFilePrinter.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
@@ -81,6 +97,32 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/notification app/src/main/java/eu/kanade/tachiyomi/ui/download app/src/main/java/eu/kanade/tachiyomi/ui/reader app/src/main/java/eu/kanade/tachiyomi/ui/history domain/src/main/java/tachiyomi/domain/source/service
+          cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          cp ../full-runtime-overlay/domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
+          mkdir -p app/src/main/java/eu/kanade/presentation/browse/components
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
+          unzip -oq ../komikku-reader-resume.zip -d ../reader-resume
+          cp ../reader-resume/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../reader-resume/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          grep -q 'showKomikkuResumePromptIfNeeded' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          grep -q 'restartCurrentChapterFromBeginning' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
+          mkdir -p app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/theme app/src/main/java/eu/kanade/tachiyomi/ui/library
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
+          cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
           grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
@@ -89,9 +131,32 @@ jobs:
           grep -q 'Sync stopped because the device ran out of memory' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
           grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
+          grep -q 'CHANNEL_KOMIKKU_IMPORT' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
+          grep -q 'reorderByPriority' app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
+          grep -q 'applyRuntimeReaderProfile' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          grep -q 'beginBulkOperation' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          grep -q 'recordUndo' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
+          grep -q 'adapterApiVersion' domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
+          grep -q 'selected = isSelected' app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
+          grep -q 'recordDuplicateDecision' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          grep -q 'recordSourceMigration' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
+          grep -q 'migration-complete' app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
+          grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          grep -q 'matchesAdvancedQuery' app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
+          grep -q 'visibleSections' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          grep -q 'dynamicLightColorScheme' app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
+          grep -q 'screen = SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           grep -q 'SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
+          grep -q 'SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
+          grep -q 'DoujinCustomisationsPreferences' app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          grep -q 'object DoujinFeatureEngine' app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
+          grep -q 'class DoujinToolsScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
+          grep -q 'class DoujinDiscoveryScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
+          grep -q 'getDuplicateLibraryEntries' domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
+          grep -q 'getDuplicateLibraryEntries' data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
+          grep -q 'getDuplicateLibraryEntries' data/src/main/sqldelight/tachiyomi/data/mangas.sq
           grep -q 'object SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
           grep -q 'collapseToolbar' app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           grep -q 'showCustomDashboard' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
@@ -99,17 +164,22 @@ jobs:
           grep -q 'Komikku Action Center' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           grep -q 'KomikkuFeatureStore' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           grep -q 'KomikkuFeatureStore.extractLinks' app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
+          grep -q 'object KomikkuExtendedFeatureStore' app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
+          grep -q 'KomikkuExtendedFeatureStore' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          grep -q 'KomikkuRuntimeFeatureEngine' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
+          grep -q 'prioritizeLastQueued' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
+          grep -q 'featureCatalog' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'ensureRuntimeMigration' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'startupSelfCheck' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'executeCommand' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'duplicateFingerprint' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          grep -q 'adaptiveLayout' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
           grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
           grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
           grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
-          # Apply the uploaded feature archive last so its expanded Kotlin files override older overlays.
-          unzip -o ../komikku-feature-upgrade.zip >/dev/null
-          unzip -o ../komikku-runtime-behavior.zip >/dev/null
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'recordSourceEvent' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'batch_import_retry' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          test -s app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
-          grep -q 'prioritizeLastQueued' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
