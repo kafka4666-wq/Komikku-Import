@@ -62,17 +62,25 @@ jobs:
           # so they cover both importer and unrelated application failures.
           mkdir -p app/src/main/java/exh/log app/src/main/java/eu/kanade/tachiyomi/crash app/src/main/java/eu/kanade/tachiyomi/util app/src/main/java/eu/kanade/tachiyomi/data/sync
           mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/more app/src/main/java/eu/kanade/tachiyomi/ui/more app/src/main/java/eu/kanade/tachiyomi/ui/main
+          mkdir -p domain/src/main/java/tachiyomi/domain/manga/repository data/src/main/java/tachiyomi/data/manga data/src/main/sqldelight/tachiyomi/data
+          cp ../domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
+          cp ../data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
+          cp ../data/src/main/sqldelight/tachiyomi/data/mangas.sq data/src/main/sqldelight/tachiyomi/data/mangas.sq
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt
@@ -139,7 +147,16 @@ jobs:
           grep -q 'dynamicLightColorScheme' app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
           grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
+          grep -q 'screen = SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           grep -q 'SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
+          grep -q 'SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
+          grep -q 'DoujinCustomisationsPreferences' app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          grep -q 'object DoujinFeatureEngine' app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
+          grep -q 'class DoujinToolsScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
+          grep -q 'class DoujinDiscoveryScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
+          grep -q 'getDuplicateLibraryEntries' domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
+          grep -q 'getDuplicateLibraryEntries' data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
+          grep -q 'getDuplicateLibraryEntries' data/src/main/sqldelight/tachiyomi/data/mangas.sq
           grep -q 'object SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
           grep -q 'collapseToolbar' app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           grep -q 'showCustomDashboard' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
