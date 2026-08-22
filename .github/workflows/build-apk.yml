@@ -138,7 +138,7 @@ jobs:
           assert_source "bounded logger queue" "LOG_QUEUE_CAPACITY" "app/src/main/java/exh/log/EnhancedFilePrinter.kt"
           assert_source "crash formatting" "formatThrowable" "app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt"
           assert_source "sync OOM message" "Sync stopped because the device ran out of memory" "app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt"
-          assert_source "memory cap" "maxSizePercent(context, 0.08)" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
+          assert_source "adaptive memory cap" "maxSizePercent(context, runtimeMemoryCachePercent)" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
           assert_source "sync startup guard" "startSyncIfNotRecentlyAttempted" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
           assert_source "import notification channel" "CHANNEL_KOMIKKU_IMPORT" "app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt"
           assert_source "download priority" "reorderByPriority" "app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt"
