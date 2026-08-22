@@ -59,7 +59,11 @@ jobs:
           assert_source "Doujin discovery" "class DoujinDiscoveryScreen" app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
           assert_source "duplicate review model" "data class DuplicateReviewEntry" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           assert_source "bounded duplicate query" "getDuplicateLibraryEntries" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
-          assert_source "paged favorites" "getFavoriteMangaPage" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          assert_source "complete duplicate scan" "Long.MAX_VALUE" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          assert_source "duplicate cover thumbnails" "thumbnailUrl" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          assert_source "direct Discover tab" "DiscoverTab" app/src/main/java/eu/kanade/tachiyomi/ui/home/HomeScreen.kt
+          assert_source "Discover extension aggregation" "getVisibleOnlineSources" app/src/main/java/eu/kanade/tachiyomi/ui/discover/DiscoverTab.kt
+          assert_source "Discover select all" "Select all" app/src/main/java/eu/kanade/tachiyomi/ui/discover/DiscoverTab.kt
           assert_source "safe removal label" "Remove from library" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           assert_source "More navigation" "onClickFeatureHub" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           assert_source "reader timestamp" "System.currentTimeMillis()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
