@@ -242,5 +242,7 @@
     <string name="pref_discord_show_discord_button_summary">Displays a button to join the Discord server</string>
     <string name="pref_category_komikku_customisation">Komikku Customisation</string>
     <string name="pref_komikku_customisation_summary">Dashboard, library, imports, sync, reader, downloads, notifications, and accessibility</string>
+    <string name="pref_category_doujin_customisations">Doujin Customisations</string>
+    <string name="pref_doujin_customisations_summary">Discovery, duplicate tools, metadata, page navigation, random browsing, and privacy</string>
     <string name="pref_komikku_customisation_reset">Reset Komikku Customisation settings</string>
 </resources>
