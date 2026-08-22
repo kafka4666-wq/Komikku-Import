@@ -123,63 +123,72 @@ jobs:
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
-          grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
-          grep -q '^class NhentaiDailyReminderWorker' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          grep -q 'LOG_QUEUE_CAPACITY' app/src/main/java/exh/log/EnhancedFilePrinter.kt
-          grep -q 'formatThrowable' app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
-          grep -q 'Sync stopped because the device ran out of memory' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
-          grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
-          grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
-          grep -q 'CHANNEL_KOMIKKU_IMPORT' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-          grep -q 'reorderByPriority' app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
-          grep -q 'applyRuntimeReaderProfile' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
-          grep -q 'beginBulkOperation' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
-          grep -q 'recordUndo' app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
-          grep -q 'adapterApiVersion' domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
-          grep -q 'selected = isSelected' app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
-          grep -q 'recordDuplicateDecision' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
-          grep -q 'recordSourceMigration' app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
-          grep -q 'migration-complete' app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
-          grep -q 'KomikkuFullFeatureEngine.adaptiveLayout' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
-          grep -q 'matchesAdvancedQuery' app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
-          grep -q 'visibleSections' app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
-          grep -q 'dynamicLightColorScheme' app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
-          grep -q 'class KomikkuCustomisationPreferences' app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
-          grep -q 'screen = SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
-          grep -q 'screen = SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
-          grep -q 'SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
-          grep -q 'SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
-          grep -q 'DoujinCustomisationsPreferences' app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
-          grep -q 'object DoujinFeatureEngine' app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
-          grep -q 'class DoujinToolsScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
-          grep -q 'class DoujinDiscoveryScreen' app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
-          grep -q 'getDuplicateLibraryEntries' domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
-          grep -q 'getDuplicateLibraryEntries' data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
-          grep -q 'getDuplicateLibraryEntries' data/src/main/sqldelight/tachiyomi/data/mangas.sq
-          grep -q 'object SettingsKomikkuCustomisationScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
-          grep -q 'collapseToolbar' app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
-          grep -q 'showCustomDashboard' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-          grep -q 'onClickLibrary' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
-          grep -q 'Komikku Action Center' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-          grep -q 'KomikkuFeatureStore' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
-          grep -q 'KomikkuFeatureStore.extractLinks' app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
-          grep -q 'object KomikkuExtendedFeatureStore' app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
-          grep -q 'KomikkuExtendedFeatureStore' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
-          grep -q 'KomikkuRuntimeFeatureEngine' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
-          grep -q 'prioritizeLastQueued' app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
-          grep -q 'featureCatalog' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'ensureRuntimeMigration' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'startupSelfCheck' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'executeCommand' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'duplicateFingerprint' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'adaptiveLayout' app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          grep -q 'pref_category_komikku_customisation' i18n-kmk/src/commonMain/moko-resources/base/strings.xml
-          grep -q 'ArrayList<Manga>' app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
-          grep -q 'hasLocalManga' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
-          test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          grep -q 'recordSourceEvent' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          grep -q 'batch_import_retry' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          assert_source() {
+            local label="$1" pattern="$2" path="$3"
+            if [[ -z "$pattern" ]]; then
+              test -s "$path" || { echo "ASSERT FAIL: $label ($path)" >&2; return 1; }
+            else
+              grep -q -- "$pattern" "$path" || { echo "ASSERT FAIL: $label ($path) pattern=$pattern" >&2; return 1; }
+            fi
+            echo "ASSERT PASS: $label"
+          }
+          assert_source "package marker" "^package exh.ui.nhentaidate$" "app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
+          assert_source "nhentai delegate marker" "prefer the visible all-language Nhentai delegate first" "app/src/main/java/exh/GalleryAdder.kt"
+          assert_source "daily worker marker" "^class NhentaiDailyReminderWorker" "app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
+          assert_source "bounded logger queue" "LOG_QUEUE_CAPACITY" "app/src/main/java/exh/log/EnhancedFilePrinter.kt"
+          assert_source "crash formatting" "formatThrowable" "app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt"
+          assert_source "sync OOM message" "Sync stopped because the device ran out of memory" "app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt"
+          assert_source "memory cap" "maxSizePercent(context, 0.08)" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
+          assert_source "sync startup guard" "startSyncIfNotRecentlyAttempted" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
+          assert_source "import notification channel" "CHANNEL_KOMIKKU_IMPORT" "app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt"
+          assert_source "download priority" "reorderByPriority" "app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt"
+          assert_source "reader runtime profile" "applyRuntimeReaderProfile" "app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt"
+          assert_source "history bulk operation" "beginBulkOperation" "app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt"
+          assert_source "history undo" "recordUndo" "app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt"
+          assert_source "source adapter API" "adapterApiVersion" "domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt"
+          assert_source "library selection" "selected = isSelected" "app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt"
+          assert_source "duplicate decision" "recordDuplicateDecision" "app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt"
+          assert_source "source migration" "recordSourceMigration" "app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt"
+          assert_source "migration completion" "migration-complete" "app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt"
+          assert_source "adaptive layout wiring" "KomikkuFullFeatureEngine.adaptiveLayout" "app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt"
+          assert_source "advanced library query" "matchesAdvancedQuery" "app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt"
+          assert_source "library visible sections" "visibleSections" "app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt"
+          assert_source "dynamic theme" "dynamicLightColorScheme" "app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt"
+          assert_source "Komikku preferences" "class KomikkuCustomisationPreferences" "app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt"
+          assert_source "Komikku settings row" "screen = SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt"
+          assert_source "Doujin settings row" "screen = SettingsDoujinCustomisationsScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt"
+          assert_source "Komikku settings search" "SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt"
+          assert_source "Doujin settings search" "SettingsDoujinCustomisationsScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt"
+          assert_source "Doujin preferences" "DoujinCustomisationsPreferences" "app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt"
+          assert_source "Doujin feature engine" "object DoujinFeatureEngine" "app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt"
+          assert_source "Doujin tools" "class DoujinToolsScreen" "app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt"
+          assert_source "Doujin discovery" "class DoujinDiscoveryScreen" "app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt"
+          assert_source "domain duplicate API" "getDuplicateLibraryEntries" "domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt"
+          assert_source "data duplicate API" "getDuplicateLibraryEntries" "data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt"
+          assert_source "SQL duplicate query" "getDuplicateLibraryEntries" "data/src/main/sqldelight/tachiyomi/data/mangas.sq"
+          assert_source "Komikku screen object" "object SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt"
+          assert_source "toolbar collapse" "collapseToolbar" "app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt"
+          assert_source "custom dashboard" "showCustomDashboard" "app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt"
+          assert_source "library shortcut" "onClickLibrary" "app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt"
+          assert_source "Action Center" "Komikku Action Center" "app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt"
+          assert_source "feature store" "KomikkuFeatureStore" "app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt"
+          assert_source "link extraction" "KomikkuFeatureStore.extractLinks" "app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt"
+          assert_source "extended feature store" "object KomikkuExtendedFeatureStore" "app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt"
+          assert_source "extended feature use" "KomikkuExtendedFeatureStore" "app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt"
+          assert_source "runtime engine" "KomikkuRuntimeFeatureEngine" "app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt"
+          assert_source "queue priority" "prioritizeLastQueued" "app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt"
+          assert_source "full feature catalog" "featureCatalog" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "runtime migration" "ensureRuntimeMigration" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "startup self check" "startupSelfCheck" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "feature command" "executeCommand" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "duplicate fingerprint" "duplicateFingerprint" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "adaptive engine" "adaptiveLayout" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
+          assert_source "Komikku strings" "pref_category_komikku_customisation" "i18n-kmk/src/commonMain/moko-resources/base/strings.xml"
+          assert_source "backup memory" "ArrayList<Manga>" "app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt"
+          assert_source "sync local manga" "hasLocalManga" "app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt"
+          assert_source "batch job nonempty" "" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
+          assert_source "batch source event" "recordSourceEvent" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
+          assert_source "batch retry" "batch_import_retry" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
