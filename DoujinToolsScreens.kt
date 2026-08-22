@@ -236,9 +236,9 @@ class DoujinDiscoveryScreen : Screen() {
                 } }
                 if (prefs.masonryLayout().get()) {
                     val columns = prefs.masonryColumns().get().toIntOrNull()?.coerceIn(2, 5) ?: 3
-                    items(results.chunked(columns)) { row -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { manga -> DiscoveryCard(manga, Modifier.weight(1f), onOpen = { DoujinFeatureEngine.rememberSeen(context, listOf(manga.id)); navigator.push(MangaScreen(manga.id)) }, onInfo = { sidePanel = manga }) }; repeat(columns - row.size) { Column(Modifier.weight(1f)) {} } } }
+                    items(results.chunked(columns)) { row -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { manga -> DiscoveryCard(manga, Modifier.weight(1f), onOpen = { DoujinFeatureEngine.rememberSeen(context, listOf(manga.id)); navigator.push(MangaScreen(manga.id)) }, onInfo = { sidePanel = manga }, onSimilar = { navigator.push(DoujinSimilarityScreen(manga.id)) }) }; repeat(columns - row.size) { Column(Modifier.weight(1f)) {} } } }
                 } else {
-                    items(results, key = { it.id }) { manga -> DiscoveryCard(manga, Modifier.fillMaxWidth().padding(horizontal = 16.dp), onOpen = { DoujinFeatureEngine.rememberSeen(context, listOf(manga.id)); navigator.push(MangaScreen(manga.id)) }, onInfo = { sidePanel = manga }) }
+                    items(results, key = { it.id }) { manga -> DiscoveryCard(manga, Modifier.fillMaxWidth().padding(horizontal = 16.dp), onOpen = { DoujinFeatureEngine.rememberSeen(context, listOf(manga.id)); navigator.push(MangaScreen(manga.id)) }, onInfo = { sidePanel = manga }, onSimilar = { navigator.push(DoujinSimilarityScreen(manga.id)) }) }
                 }
                 item { Text("The feed keeps only a bounded result window in memory and preserves the current screen state while loading another page.", Modifier.padding(16.dp), style = MaterialTheme.typography.labelSmall) }
             }
@@ -355,8 +355,8 @@ class DoujinHeatmapScreen : Screen() {
 }
 
 @Composable
-private fun DiscoveryCard(manga: Manga, modifier: Modifier, onOpen: () -> Unit, onInfo: () -> Unit) {
-    Card(modifier.clickable(onClick = onOpen)) { Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { AsyncImage(model = manga.thumbnailUrl, contentDescription = manga.title, modifier = Modifier.fillMaxWidth().size(120.dp)); Text(manga.title, maxLines = 2, style = MaterialTheme.typography.titleSmall); Text("${DoujinFeatureEngine.creatorName(manga)} · ${manga.genre.orEmpty().take(3).joinToString()}", maxLines = 2, style = MaterialTheme.typography.labelSmall); TextButton(onClick = onInfo) { Text("Metadata") } } }
+private fun DiscoveryCard(manga: Manga, modifier: Modifier, onOpen: () -> Unit, onInfo: () -> Unit, onSimilar: () -> Unit) {
+    Card(modifier.clickable(onClick = onOpen)) { Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { AsyncImage(model = manga.thumbnailUrl, contentDescription = manga.title, modifier = Modifier.fillMaxWidth().size(120.dp)); Text(manga.title, maxLines = 2, style = MaterialTheme.typography.titleSmall); Text("${DoujinFeatureEngine.creatorName(manga)} · ${manga.genre.orEmpty().take(3).joinToString()}", maxLines = 2, style = MaterialTheme.typography.labelSmall); Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { TextButton(onClick = onInfo) { Text("Metadata") }; TextButton(onClick = onSimilar) { Text("Similar") } } } }
 }
 
 @Composable
