@@ -1,219 +1,54 @@
-name: Build Komikku APK
+name: Build update-compatible Komikku APK
+
 on:
   workflow_dispatch:
   push:
     branches: [main]
+
 permissions:
   contents: read
+
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
   JAVA_TOOL_OPTIONS: -Xmx4g
+
 jobs:
   build-apk:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Check out overlay repository
-        uses: actions/checkout@v4
-      - name: Check out official Komikku source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: komikku-app/komikku
           path: upstream
-      - name: Apply Kotlin overlay and package ID
+      - name: Apply patch and authoritative overlay
+        working-directory: upstream
         shell: bash
         run: |
           set -euo pipefail
-          cp komikku-overlay.patch upstream/komikku-overlay.patch
-          mkdir -p worker-overlay full-runtime-overlay full-feature-overlay
-          unzip -q komikku-worker-instrumentation.zip -d worker-overlay
-          unzip -q komikku-full-runtime-integrations.zip -d full-runtime-overlay
-          unzip -q komikku-full-feature-sources.zip -d full-feature-overlay
-          cd upstream
-          # The patch was generated with colored git diff output. Remove ANSI escapes
-          # before applying it so file headers and Kotlin lines are valid patch text.
-          for patch in komikku-overlay.patch; do
-            perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' "$patch" > "$patch.clean"
-            mv "$patch.clean" "$patch"
-          done
-          extract_new_file() {
-            local path="$1"
-            local header="diff --git a/${path} b/${path}"
-            mkdir -p "$(dirname "$path")"
-            awk -v header="$header" '
-              $0 == header { found=1; next }
-              found && /^diff --git / { exit }
-              found && /^\+\+\+ b\// { next }
-              found && /^\+/ { sub(/^\+/, ""); print }
-            ' komikku-overlay.patch > "$path"
-            test -s "$path"
-          }
+          cp ../komikku-overlay.patch .
+          perl -pe 's/\x1b\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > p
+          mv p komikku-overlay.patch
           git apply --recount --verbose komikku-overlay.patch
-          test -s app/src/main/java/eu/kanade/tachiyomi/data/BannerProgressStatus.kt
-          test -s app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-          # Copy new Kotlin files from the overlay repository itself. Keeping these
-          # files outside the colored unified diff avoids any patch-parser ambiguity.
-          mkdir -p app/src/main/java/exh/ui/batchadd app/src/main/java/exh/ui/nhentaidate
-          cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          cp ../worker-overlay/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          cp ../app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
-          cp ../app/src/main/java/exh/GalleryAdder.kt app/src/main/java/exh/GalleryAdder.kt
-          # Crash-safe logging and sync error handling are copied after the base patch
-          # so they cover both importer and unrelated application failures.
-          mkdir -p app/src/main/java/exh/log app/src/main/java/eu/kanade/tachiyomi/crash app/src/main/java/eu/kanade/tachiyomi/util app/src/main/java/eu/kanade/tachiyomi/data/sync
-          mkdir -p app/src/main/java/eu/kanade/domain/ui app/src/main/java/eu/kanade/presentation/more/settings/screen app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/more app/src/main/java/eu/kanade/tachiyomi/ui/more app/src/main/java/eu/kanade/tachiyomi/ui/main
-          mkdir -p domain/src/main/java/tachiyomi/domain/manga/repository data/src/main/java/tachiyomi/data/manga data/src/main/sqldelight/tachiyomi/data
-          cp ../domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
-          cp ../data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
-          cp ../data/src/main/sqldelight/tachiyomi/data/mangas.sq data/src/main/sqldelight/tachiyomi/data/mangas.sq
-          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
-          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
-          cp ../app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/BulkFavoriteScreenModel.kt
-          cp ../app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt app/src/main/java/eu/kanade/presentation/components/BulkSelectionToolbar.kt
-          cp ../app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt app/src/main/java/eu/kanade/presentation/components/TabbedScreen.kt
-          cp ../i18n-kmk/src/commonMain/moko-resources/base/strings.xml i18n-kmk/src/commonMain/moko-resources/base/strings.xml
-          cp ../app/src/main/java/exh/log/EnhancedFilePrinter.kt app/src/main/java/exh/log/EnhancedFilePrinter.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt app/src/main/java/eu/kanade/tachiyomi/util/CrashLogUtil.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
-          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/cache
-          cp ../app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt app/src/main/java/eu/kanade/tachiyomi/data/cache/CoverCache.kt
-          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/backup/create app/src/main/java/eu/kanade/tachiyomi/data/sync
-          cp ../app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
-          mkdir -p app/src/main/java/eu/kanade/tachiyomi/data/notification app/src/main/java/eu/kanade/tachiyomi/ui/download app/src/main/java/eu/kanade/tachiyomi/ui/reader app/src/main/java/eu/kanade/tachiyomi/ui/history domain/src/main/java/tachiyomi/domain/source/service
-          cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
-          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt
-          cp ../full-runtime-overlay/domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
-          mkdir -p app/src/main/java/eu/kanade/presentation/browse/components
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt
-          cp ../full-runtime-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt
-          unzip -oq ../komikku-reader-resume.zip -d ../reader-resume
-          cp ../reader-resume/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
-          cp ../reader-resume/app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
-          grep -q 'showKomikkuResumePromptIfNeeded' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
-          grep -q 'restartCurrentChapterFromBeginning' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
-          mkdir -p app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/theme app/src/main/java/eu/kanade/tachiyomi/ui/library
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
-          assert_source() {
-            local label="$1" pattern="$2" path="$3"
-            if [[ -z "$pattern" ]]; then
-              test -s "$path" || { echo "ASSERT FAIL: $label ($path)" >&2; return 1; }
-            else
-              grep -q -- "$pattern" "$path" || { echo "ASSERT FAIL: $label ($path) pattern=$pattern" >&2; return 1; }
-            fi
-            echo "ASSERT PASS: $label"
-          }
-          assert_source "package marker" "^package exh.ui.nhentaidate$" "app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
-          assert_source "nhentai delegate marker" "prefer the visible all-language Nhentai delegate first" "app/src/main/java/exh/GalleryAdder.kt"
-          assert_source "daily worker marker" "^class NhentaiDailyReminderWorker" "app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt"
-          assert_source "bounded logger queue" "LOG_QUEUE_CAPACITY" "app/src/main/java/exh/log/EnhancedFilePrinter.kt"
-          assert_source "crash formatting" "formatThrowable" "app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt"
-          assert_source "sync OOM message" "Sync stopped because the device ran out of memory" "app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt"
-          assert_source "adaptive memory cap" "maxSizePercent(context, runtimeMemoryCachePercent)" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
-          assert_source "sync startup guard" "startSyncIfNotRecentlyAttempted" "app/src/main/java/eu/kanade/tachiyomi/App.kt"
-          assert_source "import notification channel" "CHANNEL_KOMIKKU_IMPORT" "app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt"
-          assert_source "download priority" "reorderByPriority" "app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt"
-          assert_source "reader runtime profile" "applyRuntimeReaderProfile" "app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt"
-          assert_source "history bulk operation" "beginBulkOperation" "app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt"
-          assert_source "history undo" "recordUndo" "app/src/main/java/eu/kanade/tachiyomi/ui/history/HistoryScreenModel.kt"
-          assert_source "source adapter API" "adapterApiVersion" "domain/src/main/java/tachiyomi/domain/source/service/SourceManager.kt"
-          assert_source "library selection" "selected = isSelected" "app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt"
-          assert_source "duplicate decision" "recordDuplicateDecision" "app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt"
-          assert_source "source migration" "recordSourceMigration" "app/src/main/java/eu/kanade/presentation/browse/components/BulkFavoriteDialogs.kt"
-          assert_source "migration completion" "migration-complete" "app/src/main/java/eu/kanade/tachiyomi/ui/browse/migration/search/MigrateSourceSearchScreen.kt"
-          assert_source "adaptive layout wiring" "KomikkuFullFeatureEngine.adaptiveLayout" "app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt"
-          assert_source "advanced library query" "matchesAdvancedQuery" "app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt"
-          assert_source "library visible sections" "visibleSections" "app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt"
-          assert_source "dynamic theme" "dynamicLightColorScheme" "app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt"
-          assert_source "Komikku preferences" "class KomikkuCustomisationPreferences" "app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt"
-          assert_source "Komikku settings row" "screen = SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt"
-          assert_source "Doujin settings row" "screen = SettingsDoujinCustomisationsScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt"
-          assert_source "Komikku settings search" "SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt"
-          assert_source "Doujin settings search" "SettingsDoujinCustomisationsScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt"
-          assert_source "Doujin preferences" "DoujinCustomisationsPreferences" "app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt"
-          assert_source "Doujin feature engine" "object DoujinFeatureEngine" "app/src/main/java/eu/kanade/domain/ui/DoujinFeatureEngine.kt"
-          assert_source "Doujin tools" "class DoujinToolsScreen" "app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt"
-          assert_source "Doujin discovery" "class DoujinDiscoveryScreen" "app/src/main/java/eu/kanade/presentation/more/DoujinToolsScreens.kt"
-          assert_source "domain duplicate API" "getDuplicateLibraryEntries" "domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt"
-          assert_source "data duplicate API" "getDuplicateLibraryEntries" "data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt"
-          assert_source "SQL duplicate query" "getDuplicateLibraryEntries" "data/src/main/sqldelight/tachiyomi/data/mangas.sq"
-          assert_source "Komikku screen object" "object SettingsKomikkuCustomisationScreen" "app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsKomikkuCustomisationScreen.kt"
-          assert_source "toolbar collapse" "collapseToolbar" "app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt"
-          assert_source "custom dashboard" "showCustomDashboard" "app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt"
-          assert_source "library shortcut" "onClickLibrary" "app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt"
-          assert_source "Action Center" "Komikku Action Center" "app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt"
-          assert_source "feature store" "KomikkuFeatureStore" "app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt"
-          assert_source "link extraction" "KomikkuFeatureStore.extractLinks" "app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt"
-          assert_source "extended feature store" "object KomikkuExtendedFeatureStore" "app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt"
-          assert_source "extended feature use" "KomikkuExtendedFeatureStore" "app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt"
-          assert_source "runtime engine" "KomikkuRuntimeFeatureEngine" "app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt"
-          assert_source "queue priority" "prioritizeLastQueued" "app/src/main/java/eu/kanade/domain/ui/KomikkuRuntimeFeatureEngine.kt"
-          assert_source "full feature catalog" "featureCatalog" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "runtime migration" "ensureRuntimeMigration" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "startup self check" "startupSelfCheck" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "feature command" "executeCommand" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "duplicate fingerprint" "duplicateFingerprint" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "adaptive engine" "adaptiveLayout" "app/src/main/java/eu/kanade/domain/ui/KomikkuFullFeatureEngine.kt"
-          assert_source "Komikku strings" "pref_category_komikku_customisation" "i18n-kmk/src/commonMain/moko-resources/base/strings.xml"
-          assert_source "backup memory" "ArrayList<Manga>" "app/src/main/java/eu/kanade/tachiyomi/data/backup/create/BackupCreator.kt"
-          assert_source "sync local manga" "hasLocalManga" "app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncManager.kt"
-          assert_source "batch job nonempty" "" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
-          assert_source "batch source event" "recordSourceEvent" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
-          assert_source "batch retry" "batch_import_retry" "app/src/main/java/exh/ui/batchadd/BatchImportJob.kt"
+          unzip -oq ../komikku-final-overlay.zip -d .
+          test -s app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          grep -Fq 'data class DuplicateReviewEntry' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          grep -Fq 'Remove from library' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
+          grep -Fq 'SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
+          grep -Fq 'System.currentTimeMillis()' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          ! grep -R -Fq 'Duplicate review is non-destructive' app/src/main/java
+          ! grep -R -Fq 'onOpenLibrary =' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          # Force the generated APK to the stable-signed baseline identity.
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
-          grep -q 'versionCode = 86' app/build.gradle.kts
-          grep -q 'versionName = "1.14.2' app/build.gradle.kts
-          sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
-          # Date discovery and library insertion run as foreground WorkManager tasks.
-          if ! grep -q 'android.permission.FOREGROUND_SERVICE_DATA_SYNC' app/src/main/AndroidManifest.xml; then
-            sed -i '/<manifest /a\
-            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\
-            <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\
-            <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />' app/src/main/AndroidManifest.xml
-          fi
-          grep -q 'android.permission.FOREGROUND_SERVICE_DATA_SYNC' app/src/main/AndroidManifest.xml
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install Android SDK packages
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
       - name: Configure stable signing
         working-directory: upstream
@@ -225,71 +60,44 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$KOMIKKU_KEYSTORE_BASE64"
-          test -n "$KOMIKKU_KEYSTORE_PASSWORD"
-          test -n "$KOMIKKU_KEY_ALIAS"
-          test -n "$KOMIKKU_KEY_PASSWORD"
-          printf '%s' "$KOMIKKU_KEYSTORE_BASE64" | base64 --decode > komikku-stable-release.jks
+          printf %s "$KOMIKKU_KEYSTORE_BASE64" | base64 -d > komikku-stable-release.jks
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("app/build.gradle.kts")
-          text = path.read_text()
-          marker = "    buildTypes {\n"
-          block = '''    signingConfigs {
-              create("stableDebug") {
-                  storeFile = rootProject.file("komikku-stable-release.jks")
-                  storePassword = System.getenv("KOMIKKU_KEYSTORE_PASSWORD") ?: error("Missing stable keystore password")
-                  keyAlias = System.getenv("KOMIKKU_KEY_ALIAS") ?: error("Missing stable key alias")
-                  keyPassword = System.getenv("KOMIKKU_KEY_PASSWORD") ?: error("Missing stable key password")
-              }
-          }
+          p=Path("app/build.gradle.kts")
+          t=p.read_text()
+          m="    buildTypes {\n"
+          b="""    signingConfigs {
+        create("stableDebug") {
+            storeFile = rootProject.file("komikku-stable-release.jks")
+            storePassword = System.getenv("KOMIKKU_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("KOMIKKU_KEY_ALIAS")
+            keyPassword = System.getenv("KOMIKKU_KEY_PASSWORD")
+        }
+    }
 
-          '''
-          if marker not in text:
-              raise SystemExit("Gradle buildTypes marker not found")
-          text = text.replace(marker, block + marker, 1)
-          debug_marker = "        val debug by getting {\n"
-          debug_replacement = debug_marker + '            signingConfig = signingConfigs.getByName("stableDebug")\n'
-          if debug_marker not in text:
-              raise SystemExit("Gradle debug build type marker not found")
-          text = text.replace(debug_marker, debug_replacement, 1)
-          path.write_text(text)
+"""
+          t=t.replace(m,b+m,1)
+          d="        val debug by getting {\n"
+          t=t.replace(d,d+"            signingConfig = signingConfigs.getByName(\"stableDebug\")\n",1)
+          p.write_text(t)
           PY
-          grep -q 'create("stableDebug")' app/build.gradle.kts
-          grep -q 'signingConfig = signingConfigs.getByName("stableDebug")' app/build.gradle.kts
-      - name: Make Gradle executable
+      - name: Build APK
         working-directory: upstream
-        run: chmod +x ./gradlew
-      - name: Build stable-signed debug APK
-        working-directory: upstream
-        env:
-          KOMIKKU_KEYSTORE_PASSWORD: ${{ secrets.KOMIKKU_KEYSTORE_PASSWORD }}
-          KOMIKKU_KEY_ALIAS: ${{ secrets.KOMIKKU_KEY_ALIAS }}
-          KOMIKKU_KEY_PASSWORD: ${{ secrets.KOMIKKU_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-      - name: Validate and locate universal APK
+        run: chmod +x ./gradlew && ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Validate APK
         working-directory: upstream
         run: |
           set -euo pipefail
-          APK=$(find app/build/outputs/apk -type f -name '*universal*debug.apk' | head -n 1)
+          APK=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           test -n "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='86' versionName='1.14.2'" /tmp/komikku-badging.txt
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify "$APK"
+          $ANDROID_HOME/build-tools/35.0.0/aapt2 dump packagename "$APK" | grep -Fx com.manus.komikku
+          $ANDROID_HOME/build-tools/35.0.0/aapt2 dump badging "$APK" | tee /tmp/badging.txt
+          grep -Fq "versionCode='86'" /tmp/badging.txt
+          grep -Fq "versionName='1.14.2'" /tmp/badging.txt
           sha256sum "$APK"
-          echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
-      - name: Upload universal APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-stable-signed-universal-debug
-          path: ${{ env.APK_PATH }}
+          name: Komikku-com.manus.komikku-stable-signed
+          path: upstream/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
-          retention-days: 30
-      - name: Upload build reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: komikku-build-reports
-          path: upstream/app/build/reports/**
-          if-no-files-found: ignore
-          retention-days: 30
