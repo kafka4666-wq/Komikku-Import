@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           cp ../komikku-overlay.patch .
-          perl -pe 's/\x1b\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > p
+          perl -pe 's/\\x1b\\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > p
           mv p komikku-overlay.patch
           git apply --recount --verbose komikku-overlay.patch
           unzip -oq ../komikku-final-overlay.zip -d .
@@ -61,26 +61,7 @@ jobs:
           set -euo pipefail
           test -n "$KOMIKKU_KEYSTORE_BASE64"
           printf %s "$KOMIKKU_KEYSTORE_BASE64" | base64 -d > komikku-stable-release.jks
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("app/build.gradle.kts")
-          t=p.read_text()
-          m="    buildTypes {\n"
-          b="""    signingConfigs {
-        create("stableDebug") {
-            storeFile = rootProject.file("komikku-stable-release.jks")
-            storePassword = System.getenv("KOMIKKU_KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("KOMIKKU_KEY_ALIAS")
-            keyPassword = System.getenv("KOMIKKU_KEY_PASSWORD")
-        }
-    }
-
-"""
-          t=t.replace(m,b+m,1)
-          d="        val debug by getting {\n"
-          t=t.replace(d,d+"            signingConfig = signingConfigs.getByName(\"stableDebug\")\n",1)
-          p.write_text(t)
-          PY
+          python3 -c 'from pathlib import Path; p=Path("app/build.gradle.kts"); t=p.read_text(); b="    signingConfigs {\\n        create(\\"stableDebug\\") {\\n            storeFile = rootProject.file(\\"komikku-stable-release.jks\\")\\n            storePassword = System.getenv(\\"KOMIKKU_KEYSTORE_PASSWORD\\")\\n            keyAlias = System.getenv(\\"KOMIKKU_KEY_ALIAS\\")\\n            keyPassword = System.getenv(\\"KOMIKKU_KEY_PASSWORD\\")\\n        }\\n    }\\n\\n"; t=t.replace("    buildTypes {\\n",b+"    buildTypes {\\n",1); t=t.replace("        val debug by getting {\\n","        val debug by getting {\\n            signingConfig = signingConfigs.getByName(\\"stableDebug\\")\\n",1); p.write_text(t)'
       - name: Build APK
         working-directory: upstream
         run: chmod +x ./gradlew && ./gradlew :app:assembleDebug --no-daemon --stacktrace
