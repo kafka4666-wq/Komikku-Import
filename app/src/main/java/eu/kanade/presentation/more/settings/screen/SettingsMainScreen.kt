@@ -84,7 +84,7 @@ object SettingsMainScreen : Screen() {
 
     @Composable
     fun Content(twoPane: Boolean) {
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
         val backPress = LocalBackPress.currentOrThrow
         val containerColor = if (twoPane) getPalerSurface() else MaterialTheme.colorScheme.surface
         val topBarState = rememberTopAppBarState()
@@ -113,7 +113,10 @@ object SettingsMainScreen : Screen() {
             content = { contentPadding ->
                 val state = rememberLazyListState()
                 // SY -->
-                val items = items.filter { it.screen !is SearchableSettings || it.screen.isEnabled() }
+                val items = items.filter { item ->
+                    item.screen === SettingsDoujinCustomisationsScreen ||
+                        item.screen !is SearchableSettings || item.screen.isEnabled()
+                }
                 // SY <--
                 val indexSelected = if (twoPane) {
                     items.indexOfFirst { it.screen::class == navigator.items.first()::class }
@@ -195,6 +198,12 @@ object SettingsMainScreen : Screen() {
             subtitleRes = KMR.strings.pref_komikku_customisation_summary,
             icon = Icons.Outlined.Tune,
             screen = SettingsKomikkuCustomisationScreen,
+        ),
+        Item(
+            titleRes = KMR.strings.pref_category_doujin_customisations,
+            subtitleRes = KMR.strings.pref_doujin_customisations_summary,
+            icon = Icons.Outlined.Explore,
+            screen = SettingsDoujinCustomisationsScreen,
         ),
         Item(
             titleRes = MR.strings.pref_category_library,

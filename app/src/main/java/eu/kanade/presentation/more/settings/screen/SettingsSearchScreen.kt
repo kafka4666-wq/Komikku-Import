@@ -46,7 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.navigator.LocalNavigator
-import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.presentation.components.UpIcon
 import eu.kanade.presentation.more.settings.Preference
 import eu.kanade.presentation.util.Screen
@@ -61,7 +60,7 @@ class SettingsSearchScreen : Screen() {
 
     @Composable
     override fun Content() {
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
         val softKeyboardController = LocalSoftwareKeyboardController.current
         val focusManager = LocalFocusManager.current
         val focusRequester = remember { FocusRequester() }
@@ -261,7 +260,9 @@ private fun SearchResult(
 @NonRestartableComposable
 private fun getIndex() = settingScreens
     // SY -->
-    .filter(SearchableSettings::isEnabled)
+    .filter { screen ->
+        screen === SettingsDoujinCustomisationsScreen || screen.isEnabled()
+    }
     // SY <--
     .map { screen ->
         SettingsData(
@@ -288,6 +289,7 @@ private fun getLocalizedBreadcrumb(path: String, node: String?, isLtr: Boolean):
 private val settingScreens = listOf(
     SettingsAppearanceScreen,
     SettingsKomikkuCustomisationScreen,
+    SettingsDoujinCustomisationsScreen,
     SettingsLibraryScreen,
     SettingsReaderScreen,
     SettingsDownloadScreen,
