@@ -82,20 +82,45 @@ class DoujinToolsScreen : Screen() {
             LazyColumn(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { Text("A compact doujin catalog layer for very large libraries. No scanner deletes, merges, overwrites personal data, or changes WebDAV data automatically.", Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium) }
                 item { ToolCard("Discovery workspace", "Paged cover-first browsing with latest, popular, random, recommended, fuzzy, tag, creator, source, and masonry modes.") { Button(onClick = { navigator.push(DoujinDiscoveryScreen()) }) { Text("Open Discovery") } } }
-                item { ToolCard("Duplicate Scanner", "Find real library entries using source link, normalized/alternate titles, creator, tags, and metadata similarity.") {
-                    Button(enabled = !loading, onClick = { launchBounded {
-                        val entries = withContext(Dispatchers.IO) { repository.getDuplicateLibraryEntries(500) }
-                        val weights = DoujinFeatureEngine.parseTagWeights("")
-                        duplicateGroups = entries.groupBy { DoujinFeatureEngine.titleKey(it) }.values.filter { it.size > 1 }.map { group ->
-                            group.map { manga ->
-                                val peer = group.firstOrNull { it.id != manga.id }
-                                val scored = peer?.let { DoujinFeatureEngine.duplicateCandidate(manga, it, weights) }
-                                DoujinFeatureEngine.DuplicateCandidate(manga, scored?.confidence ?: 100, scored?.signals ?: listOf("same normalized title"))
-                            }
-                        }.take(200)
-                        message = "Found ${duplicateGroups.size} bounded review groups. Compare, keep, ignore, or mark not-duplicate manually."
-                    }) { Text(if (loading) "Scanning…" else "Scan library") }
-                } }
+                item {
+                    ToolCard(
+                        title = "Duplicate Scanner",
+                        subtitle = "Find real library entries using source link, normalized/alternate titles, creator, tags, and metadata similarity.",
+                    ) {
+                        Button(
+                            enabled = !loading,
+                            onClick = {
+                                launchBounded {
+                                    val entries = withContext(Dispatchers.IO) {
+                                        repository.getDuplicateLibraryEntries(500)
+                                    }
+                                    val weights = DoujinFeatureEngine.parseTagWeights("")
+                                    duplicateGroups = entries
+                                        .groupBy { DoujinFeatureEngine.titleKey(it) }
+                                        .values
+                                        .filter { it.size > 1 }
+                                        .map { group ->
+                                            group.map { manga ->
+                                                val peer = group.firstOrNull { it.id != manga.id }
+                                                val scored = peer?.let {
+                                                    DoujinFeatureEngine.duplicateCandidate(manga, it, weights)
+                                                }
+                                                DoujinFeatureEngine.DuplicateCandidate(
+                                                    manga = manga,
+                                                    confidence = scored?.confidence ?: 100,
+                                                    signals = scored?.signals ?: listOf("same normalized title"),
+                                                )
+                                            }
+                                        }
+                                        .take(200)
+                                    message = "Found ${duplicateGroups.size} bounded review groups. Compare, keep, ignore, or mark not-duplicate manually."
+                                }
+                            },
+                        ) {
+                            Text(if (loading) "Scanning…" else "Scan library")
+                        }
+                    }
+                }
                 items(duplicateGroups) { group ->
                     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Possible duplicate group", style = MaterialTheme.typography.titleSmall)
@@ -195,7 +220,14 @@ class DoujinDiscoveryScreen : Screen() {
                         .filter { DoujinFeatureEngine.tagExpressionMatches(it, include, exclude, exact, optional, DoujinFeatureEngine.personalTags(context, it.id)) }
                         .filter { query.isBlank() || DoujinFeatureEngine.fuzzyScore(query, it) >= 0.32f }
                         .filter { it.id !in seen || !prefs.rememberSeen().get() }
-                        .sortedByDescending { when (mode) { "oldest" -> -it.dateAdded; "alphabetical" -> -DoujinFeatureEngine.normalize(it.title).hashCode(); "random" -> kotlin.random.Random.nextInt(); else -> DoujinFeatureEngine.discoveryScore(it, query, required, weights) } }
+                        .sortedByDescending { manga ->
+                            when (mode) {
+                                "oldest" -> -manga.dateAdded.toDouble()
+                                "alphabetical" -> -DoujinFeatureEngine.normalize(manga.title).hashCode().toDouble()
+                                "random" -> kotlin.random.Random.nextDouble()
+                                else -> DoujinFeatureEngine.discoveryScore(manga, query, required, weights).toDouble()
+                            }
+                        }
                         .toList()
                     results = if (reset) filtered.distinctBy { it.id }.take(300) else (results + filtered).distinctBy { it.id }.take(300)
                     offset = pageOffset + page.size
