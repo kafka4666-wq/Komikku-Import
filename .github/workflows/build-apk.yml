@@ -1,40 +1,39 @@
 name: Build update-compatible Komikku APK
 
-
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-
+    branches:
+      - main
 
 permissions:
   contents: read
-
 
 env:
   GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
   JAVA_TOOL_OPTIONS: -Xmx4g
 
-
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Checkout overlay
+        uses: actions/checkout@v4
+      - name: Checkout upstream
+        uses: actions/checkout@v4
         with:
           repository: komikku-app/komikku
           path: upstream
-      - name: Apply patch and authoritative overlay
-        working-directory: upstream
+      - name: Apply patch and final overlay
         shell: bash
         run: |
           set -euo pipefail
+          cd upstream
           cp ../komikku-overlay.patch .
-          perl -pe 's/\\x1b\\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > p
-          mv p komikku-overlay.patch
-          git apply --recount --verbose komikku-overlay.patch
+          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > clean.patch
+          mv clean.patch komikku-overlay.patch
+          git apply --recount komikku-overlay.patch
           unzip -oq ../komikku-final-overlay.zip -d .
           test -s app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           grep -Fq 'data class DuplicateReviewEntry' app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
@@ -42,18 +41,20 @@ jobs:
           grep -Fq 'SettingsDoujinCustomisationsScreen' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           grep -Fq 'System.currentTimeMillis()' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           ! grep -R -Fq 'Duplicate review is non-destructive' app/src/main/java
-          ! grep -R -Fq 'onOpenLibrary =' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          ! grep -Fq 'onOpenLibrary =' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '21'
           cache: gradle
-      - uses: android-actions/setup-android@v3
-      - name: Install SDK
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Configure stable signing
         working-directory: upstream
         env:
@@ -61,13 +62,37 @@ jobs:
           KOMIKKU_KEYSTORE_PASSWORD: ${{ secrets.KOMIKKU_KEYSTORE_PASSWORD }}
           KOMIKKU_KEY_ALIAS: ${{ secrets.KOMIKKU_KEY_ALIAS }}
           KOMIKKU_KEY_PASSWORD: ${{ secrets.KOMIKKU_KEY_PASSWORD }}
+        shell: bash
         run: |
           set -euo pipefail
           test -n "$KOMIKKU_KEYSTORE_BASE64"
-          printf %s "$KOMIKKU_KEYSTORE_BASE64" | base64 -d > komikku-stable-release.jks
-          python3 -c 'from pathlib import Path; p=Path("app/build.gradle.kts"); t=p.read_text(); b="    signingConfigs {\n        create(\"stableDebug\") {\n            storeFile = rootProject.file(\"komikku-stable-release.jks\")\n            storePassword = System.getenv(\"KOMIKKU_KEYSTORE_PASSWORD\")\n            keyAlias = System.getenv(\"KOMIKKU_KEY_ALIAS\")\n            keyPassword = System.getenv(\"KOMIKKU_KEY_PASSWORD\")\n        }\n    }\n\n"; t=t.replace("    buildTypes {\n",b+"    buildTypes {\n",1); t=t.replace("        val debug by getting {\n","        val debug by getting {\n            signingConfig = signingConfigs.getByName(\"stableDebug\")\n",1); p.write_text(t)'
-
+          printf '%s' "$KOMIKKU_KEYSTORE_BASE64" | base64 -d > komikku-stable-release.jks
+          python3 -c 'from pathlib import Path; p=Path("app/build.gradle.kts"); t=p.read_text(); b="    signingConfigs {\n        create(\"stableDebug\") {\n            storeFile = rootProject.file(\"komikku-stable-release.jks\")\n            storePassword = System.getenv(\"KOMIKKU_KEYSTORE_PASSWORD\") ?: error(\"missing password\")\n            keyAlias = System.getenv(\"KOMIKKU_KEY_ALIAS\") ?: error(\"missing alias\")\n            keyPassword = System.getenv(\"KOMIKKU_KEY_PASSWORD\") ?: error(\"missing key password\")\n        }\n    }\n\n"; t=t.replace("    buildTypes {\n",b+"    buildTypes {\n",1); t=t.replace("        val debug by getting {\n","        val debug by getting {\n            signingConfig = signingConfigs.getByName(\"stableDebug\")\n",1); p.write_text(t)'
       - name: Build APK
         working-directory: upstream
+        env:
+          KOMIKKU_KEYSTORE_PASSWORD: ${{ secrets.KOMIKKU_KEYSTORE_PASSWORD }}
+          KOMIKKU_KEY_ALIAS: ${{ secrets.KOMIKKU_KEY_ALIAS }}
+          KOMIKKU_KEY_PASSWORD: ${{ secrets.KOMIKKU_KEY_PASSWORD }}
         run: chmod +x ./gradlew && ./gradlew :app:assembleDebug --no-daemon --stacktrace
       - name: Validate APK
+        working-directory: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk -type f -name '*debug.apk' | head -n 1)
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/badging.txt
+          grep -Fq "package: name='com.manus.komikku'" /tmp/badging.txt
+          grep -Fq "versionCode='86'" /tmp/badging.txt
+          grep -Fq "versionName='1.14.2'" /tmp/badging.txt
+          echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
+          sha256sum "$APK"
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Komikku-com.manus.komikku-stable-signed
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 30
