@@ -84,6 +84,10 @@ jobs:
           grep -q 'versionCode = 86' app/build.gradle.kts
           grep -q 'versionName = "1.14.2' app/build.gradle.kts
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
+          perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
+          perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[\s\S]*?android:launchMode=")singleTop#${1}singleTask#' app/src/main/AndroidManifest.xml
+          grep -q 'android:alwaysRetainTaskState="true"' app/src/main/AndroidManifest.xml
+          grep -q 'android:launchMode="singleTask"' app/src/main/AndroidManifest.xml
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
