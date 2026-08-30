@@ -80,6 +80,7 @@ fun MoreScreen(
     onClickAbout: () -> Unit,
     onClickBatchAdd: () -> Unit,
     onClickNhentaiDateImport: () -> Unit,
+    onClickTorrentImport: () -> Unit,
     onClickUpdates: () -> Unit,
     onClickHistory: () -> Unit,
     onClickLibrary: () -> Unit,
@@ -293,6 +294,14 @@ fun MoreScreen(
                         title = "Nhentai Book Import",
                         icon = Icons.Outlined.CalendarMonth,
                         onPreferenceClick = onClickNhentaiDateImport,
+                    )
+                }
+                item {
+                    TextPreferenceWidget(
+                        title = "Torrent",
+                        subtitle = "Stream supported CBZ/ZIP books from Sukebei/Nyaa links",
+                        icon = Icons.Outlined.GetApp,
+                        onPreferenceClick = onClickTorrentImport,
                     )
                 }
             }

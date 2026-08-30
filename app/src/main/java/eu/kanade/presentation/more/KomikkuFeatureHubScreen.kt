@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -45,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import cafe.adriel.voyager.navigator.LocalNavigator
 import eu.kanade.domain.ui.KomikkuFeatureStore
 import eu.kanade.domain.ui.KomikkuExtendedFeatureStore
@@ -67,6 +69,7 @@ import tachiyomi.presentation.core.components.material.padding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.jvm.Transient
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -76,11 +79,12 @@ data class DuplicateReviewEntry(
     val title: String,
     val url: String,
     val sourceId: Long,
+    val thumbnailUrl: String?,
 )
 
 /** A direct action center for workflows that should not be hidden in Settings. */
 class KomikkuFeatureHubScreen(
-    private val initialText: String? = null,
+    @field:Transient private val initialText: String? = null,
 ) : Screen() {
     @Composable
     override fun Content() {
@@ -125,27 +129,16 @@ class KomikkuFeatureHubScreen(
         fun scanDuplicateLibrary() {
             if (duplicateScanRunning) return
             duplicateScanRunning = true
-            Toast.makeText(context, "Scanning up to $MAX_DUPLICATE_SCAN_ENTRIES library entries…", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Scanning the complete Library for duplicate titles…", Toast.LENGTH_SHORT).show()
             coroutineScope.launch {
                 val result = withContext(Dispatchers.IO) {
                     runCatching {
                         val repository = Injekt.get<MangaRepository>()
-                        val indexedCandidates = repository
-                            .getDuplicateLibraryEntries(limit = MAX_DUPLICATE_GROUPS * 8L)
-                        val pagedCandidates = buildList {
-                            var offset = 0L
-                            while (size < MAX_DUPLICATE_SCAN_ENTRIES) {
-                                val page = repository.getFavoriteMangaPage(
-                                    limit = DUPLICATE_PAGE_SIZE,
-                                    offset = offset,
-                                )
-                                if (page.isEmpty()) break
-                                addAll(page.take(MAX_DUPLICATE_SCAN_ENTRIES - size))
-                                if (page.size < DUPLICATE_PAGE_SIZE) break
-                                offset += page.size
-                            }
-                        }
-                        (indexedCandidates + pagedCandidates)
+                        // SQLDelight performs the complete favorite-library duplicate search in the database.
+                        // Long.MAX_VALUE removes the former 5,000-row application cap without materializing
+                        // every unique library title in a second in-memory grouping map.
+                        repository
+                            .getDuplicateLibraryEntries(limit = Long.MAX_VALUE)
                             .asSequence()
                             .distinctBy { it.id }
                             .groupBy { manga ->
@@ -167,6 +160,7 @@ class KomikkuFeatureHubScreen(
                                         title = manga.title.replace(Regex("\\s+"), " ").trim().take(160),
                                         url = manga.url.take(320),
                                         sourceId = manga.source,
+                                        thumbnailUrl = manga.thumbnailUrl,
                                     )
                                 }
                             }
@@ -175,7 +169,7 @@ class KomikkuFeatureHubScreen(
                 }
                 duplicateScanRunning = false
                 result.onSuccess { groups ->
-                    KomikkuFullFeatureEngine.recordRecovery(context, "duplicate-review", "${groups.size} groups", "opened")
+                    KomikkuFullFeatureEngine.recordRecovery(context, "duplicate-review", "${groups.size} groups from complete library", "opened")
                     duplicateReview = groups
                 }.onFailure { error ->
                     Toast.makeText(
@@ -491,15 +485,24 @@ class KomikkuFeatureHubScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (groups.isEmpty()) {
-                            Text("No duplicate candidates were found in this bounded scan of up to $MAX_DUPLICATE_SCAN_ENTRIES library entries.")
-                            Text("The scan compares normalized title, creator, and artist fingerprints. Entries outside the scan window or with substantially different metadata may require another pass after sorting the library.")
+                            Text("No duplicate candidates were found in the complete Library scan.")
+                            Text("The database search covers all favorited/library entries and groups normalized duplicate titles. Results are displayed in review groups; no entry is removed automatically.")
                         } else {
                             Text("Found ${groups.size} candidate groups from real favorite/library entries. No entry is removed automatically. Review each row before using Remove from library; that action unfavorites the entry and keeps its manga record, downloads, history, notes, and tags.")
                         }
                         groups.take(12).forEachIndexed { index, group ->
                             Text("Group ${index + 1}", style = MaterialTheme.typography.titleSmall)
                             group.take(4).forEach { entry ->
-                                Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    AsyncImage(
+                                        model = entry.thumbnailUrl,
+                                        contentDescription = entry.title,
+                                        modifier = Modifier.size(64.dp),
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
                                     Text(entry.title, style = MaterialTheme.typography.bodyMedium)
                                     Text("Source ${entry.sourceId} · ID ${entry.mangaId}", style = MaterialTheme.typography.bodySmall)
                                     Text(entry.url, style = MaterialTheme.typography.bodySmall)
@@ -513,6 +516,7 @@ class KomikkuFeatureHubScreen(
                                             Toast.makeText(context, "Ignored for this review", Toast.LENGTH_SHORT).show()
                                         }) { Text("Ignore") }
                                         TextButton(onClick = { removalCandidate = entry }) { Text("Remove from library") }
+                                    }
                                     }
                                 }
                             }
@@ -844,8 +848,6 @@ class KomikkuFeatureHubScreen(
     }
 
     private companion object {
-        const val MAX_DUPLICATE_GROUPS = 50
-        const val DUPLICATE_PAGE_SIZE = 200L
-        const val MAX_DUPLICATE_SCAN_ENTRIES = 5_000
+        const val MAX_DUPLICATE_GROUPS = 500
     }
 }

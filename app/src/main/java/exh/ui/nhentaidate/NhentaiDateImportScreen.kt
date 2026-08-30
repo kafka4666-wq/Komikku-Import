@@ -62,6 +62,7 @@ import tachiyomi.presentation.core.components.material.padding
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -80,20 +81,17 @@ class NhentaiDateImportScreen : Screen() {
         var excludedTags by remember { mutableStateOf("") }
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission(),
-        ) { granted ->
-            if (granted) {
-                started = true
-                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
-            }
-        }
+        ) { /* Notifications are optional; the import has already started. */ }
         fun startImport() {
+            // Never gate the actual import on notification permission. On Android 13+
+            // a denied/dismissed prompt previously left the button looking idle and
+            // prevented the worker from ever being enqueued.
+            started = true
+            NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                started = true
-                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
             }
         }
 
@@ -225,13 +223,20 @@ class NhentaiDateImportWorker(
             .split(',').map(String::trim).filter(String::isNotBlank).distinct()
         if (startDate > endDate) return Result.failure()
 
-        val queueFile = File(applicationContext.cacheDir, "nhentai-import-${System.currentTimeMillis()}.txt")
+        val queueId = inputData.getString(KEY_QUEUE_ID)
+            ?: "legacy-${startDate}-${endDate}-${System.currentTimeMillis()}"
+        val queueFile = File(applicationContext.cacheDir, "nhentai-import-$queueId.txt")
         val doneFile = File("${queueFile.absolutePath}.done")
+        val startedFile = File("${queueFile.absolutePath}.started")
         queueFile.parentFile?.mkdirs()
-        queueFile.writeText("")
-        status.begin(total = 0, events = listOf("Adding manga…"))
+        if (!queueFile.exists()) queueFile.createNewFile()
+        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Adding manga…"))
         setForegroundSafely()
-        BatchImportJob.startFromFile(applicationContext, queueFile)
+        // WorkManager can retry discovery after a transient error. Keep the original
+        // queue worker alive instead of replacing it and losing already discovered URLs.
+        if (startedFile.createNewFile()) {
+            BatchImportJob.startFromFile(applicationContext, queueFile)
+        }
 
         return try {
             val found = fetchGalleryUrls(startDate, endDate, excludedTags, queueFile)
@@ -242,9 +247,16 @@ class NhentaiDateImportWorker(
             }
             Result.success()
         } catch (error: Throwable) {
-            doneFile.writeText("done")
-            status.restore(0, 0, 0, 1, listOf("[FAILED] nhentai date discovery — ${error.message.orEmpty()}"), running = false)
-            applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+            // Do not create .done here. The queue worker must continue draining URLs
+            // already discovered while WorkManager retries discovery.
+            status.restore(
+                queueFile.readCompleteQueueLines().size,
+                0,
+                0,
+                1,
+                listOf("[RETRYING] nhentai date discovery — ${error.message.orEmpty()}"),
+                running = true,
+            )
             Result.retry()
         }
     }
@@ -289,9 +301,12 @@ class NhentaiDateImportWorker(
         }
         filters += excludedTags.map { "-tags:$it" }
         val query = filters.joinToString(" ")
-        val all = LinkedHashSet<String>()
+        // A WorkManager retry must resume the same queue rather than starting
+        // from an empty set and risking loss of already discovered pages.
+        val all = LinkedHashSet<String>(queueFile.readCompleteQueueLines())
         var page = 1
         var totalPages = MAX_PAGES
+        var transientFailures = 0
 
         while (page <= totalPages && page <= MAX_PAGES) {
             BatchImportRequestLimiter.await()
@@ -308,9 +323,18 @@ class NhentaiDateImportWorker(
             }
             if (response.code == 404) break
             if (!response.isSuccessful) {
+                val code = response.code
                 response.close()
-                break
+                if (code == 408 || code == 425 || code in 500..599) {
+                    transientFailures++
+                    if (transientFailures <= DISCOVERY_RETRIES) {
+                        delay((15_000L * transientFailures).coerceAtMost(60_000L))
+                        continue
+                    }
+                }
+                throw IOException("Nhentai search HTTP $code")
             }
+            transientFailures = 0
             val json = JSONObject(response.use { it.body.string() })
             val results = json.optJSONArray("result") ?: break
             if (results.length() == 0) break
@@ -327,17 +351,42 @@ class NhentaiDateImportWorker(
         return all.size
     }
 
+    /**
+     * Discovery appends URLs while the importer drains this file. Ignore an
+     * unterminated final line so a partially written URL cannot be skipped.
+     */
+    private fun File.readCompleteQueueLines(): List<String> = runCatching {
+        if (!exists()) return@runCatching emptyList()
+        val text = readText()
+        val end = text.lastIndexOf('\n')
+        if (end < 0) return@runCatching emptyList()
+        text.substring(0, end)
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toList()
+    }.getOrDefault(emptyList())
+
     companion object {
         private const val KEY_START_DATE = "start_date"
         private const val KEY_END_DATE = "end_date"
         private const val KEY_EXCLUDED_TAGS = "excluded_tags"
+        private const val KEY_QUEUE_ID = "queue_id"
         private const val MAX_PAGES = 400
+        private const val DISCOVERY_RETRIES = 5
         private const val DAY_MS = 86_400_000L
         private const val TAG = "nhentai-date-import"
 
         fun start(context: Context, startDate: String, endDate: String = startDate, excludedTags: String = "") {
             val request = OneTimeWorkRequestBuilder<NhentaiDateImportWorker>()
-                .setInputData(androidx.work.workDataOf(KEY_START_DATE to startDate, KEY_END_DATE to endDate, KEY_EXCLUDED_TAGS to excludedTags))
+                .setInputData(
+                    androidx.work.workDataOf(
+                        KEY_START_DATE to startDate,
+                        KEY_END_DATE to endDate,
+                        KEY_EXCLUDED_TAGS to excludedTags,
+                        KEY_QUEUE_ID to System.currentTimeMillis().toString(),
+                    ),
+                )
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()

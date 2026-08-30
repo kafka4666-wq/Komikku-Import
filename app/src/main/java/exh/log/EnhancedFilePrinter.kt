@@ -40,22 +40,26 @@ class EnhancedFilePrinter internal constructor(
     private var worker: Worker? = null
 
     override fun println(logLevel: Int, tag: String, msg: String) {
-        val timeMillis = System.currentTimeMillis()
-        if (USE_WORKER) {
-            val worker = worker ?: return
-            if (!worker.isStarted()) {
-                worker.start()
+        // Logging must never be able to terminate the application, especially while
+        // the process is already close to its heap limit.
+        try {
+            val timeMillis = System.currentTimeMillis()
+            if (USE_WORKER) {
+                val worker = worker ?: return
+                if (!worker.isStarted()) worker.start()
+                worker.enqueue(
+                    LogItem(
+                        timeMillis,
+                        logLevel,
+                        tag.take(MAX_TAG_LENGTH),
+                        msg.take(MAX_MESSAGE_LENGTH),
+                    ),
+                )
+            } else {
+                doPrintln(timeMillis, logLevel, tag, msg)
             }
-            worker.enqueue(
-                LogItem(
-                    timeMillis,
-                    logLevel,
-                    tag.take(MAX_TAG_LENGTH),
-                    msg.take(MAX_MESSAGE_LENGTH),
-                ),
-            )
-        } else {
-            doPrintln(timeMillis, logLevel, tag, msg)
+        } catch (_: Throwable) {
+            // Do not allocate, print, or rethrow from the OOM/error path.
         }
     }
 
@@ -63,17 +67,21 @@ class EnhancedFilePrinter internal constructor(
      * Do the real job of writing log to file.
      */
     private fun doPrintln(timeMillis: Long, logLevel: Int, tag: String, msg: String) {
+        try {
+            doPrintlnSafely(timeMillis, logLevel, tag, msg)
+        } catch (_: Throwable) {
+            // A broken file provider, formatter, or low-memory condition must not
+            // kill the logger worker or the application process.
+        }
+    }
+
+    private fun doPrintlnSafely(timeMillis: Long, logLevel: Int, tag: String, msg: String) {
         val lastFileName = writer.lastFileName
         if (fileNameGenerator.isFileNameChangeable) {
             val newFileName = fileNameGenerator.generateFileName(logLevel, System.currentTimeMillis())
-            require(
-                !(
-                    newFileName == null ||
-                        newFileName.trim {
-                            it <= ' '
-                        }.isEmpty()
-                    ),
-            ) { "File name should not be empty." }
+            if (newFileName == null || newFileName.trim { it <= ' ' }.isEmpty()) {
+                return
+            }
             if (newFileName != lastFileName) {
                 if (writer.isOpened) {
                     writer.close()
@@ -221,20 +229,31 @@ class EnhancedFilePrinter internal constructor(
          */
         fun start() {
             synchronized(this) {
-                Thread(this).start()
+                if (started) return
                 started = true
+                try {
+                    Thread(this, "komikku-log-writer").apply { isDaemon = true }.start()
+                } catch (_: Throwable) {
+                    started = false
+                }
             }
         }
 
         override fun run() {
             try {
-                var log: LogItem
-                while (logs.take().also { log = it } != null) {
+                while (!Thread.currentThread().isInterrupted) {
+                    val log = logs.take()
                     doPrintln(log.timeMillis, log.level, log.tag, log.msg)
                 }
-            } catch (e: InterruptedException) {
-                e.printStackTrace()
-                synchronized(this) { started = false }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (_: Throwable) {
+                // The worker is disposable; the next log call can safely restart it.
+            } finally {
+                synchronized(this) {
+                    started = false
+                    logs.clear()
+                }
             }
         }
     }
@@ -295,8 +314,7 @@ class EnhancedFilePrinter internal constructor(
             if (bufferedWriter != null) {
                 try {
                     bufferedWriter?.close()
-                } catch (e: IOException) {
-                    e.printStackTrace()
+                } catch (_: IOException) {
                     return false
                 } finally {
                     bufferedWriter = null
@@ -329,9 +347,9 @@ class EnhancedFilePrinter internal constructor(
          * Use worker, write logs asynchronously.
          */
         private const val USE_WORKER = true
-        private const val LOG_QUEUE_CAPACITY = 512
-        private const val MAX_TAG_LENGTH = 128
-        private const val MAX_MESSAGE_LENGTH = 16_384
+        private const val LOG_QUEUE_CAPACITY = 128
+        private const val MAX_TAG_LENGTH = 64
+        private const val MAX_MESSAGE_LENGTH = 2_048
     }
 
     init {

@@ -26,6 +26,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
@@ -74,6 +75,7 @@ import eu.kanade.domain.manga.model.readingMode
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.domain.ui.KomikkuFullFeatureEngine
 import eu.kanade.domain.ui.DoujinFeatureEngine
+import eu.kanade.domain.ui.DoujinCustomisationsPreferences
 import eu.kanade.presentation.reader.ChapterListDialog
 import eu.kanade.presentation.reader.DisplayRefreshHost
 import eu.kanade.presentation.reader.OrientationSelectDialog
@@ -137,6 +139,7 @@ import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import logcat.LogPriority
 import tachiyomi.core.common.Constants
+import tachiyomi.core.common.preference.PreferenceStore
 import tachiyomi.core.common.i18n.pluralStringResource
 import tachiyomi.core.common.i18n.stringResource
 import tachiyomi.core.common.util.lang.launchIO
@@ -214,16 +217,20 @@ class ReaderActivity : BaseActivity() {
      * Called when the activity is created. Initializes the presenter and configuration.
      */
     override fun onCreate(savedInstanceState: Bundle?) {
+        val cosmeticPreferences = Injekt.get<DoujinCustomisationsPreferences>()
+        val coverTransitionEnabled = cosmeticPreferences.coverTransition().get()
+        val pageTransition = cosmeticPreferences.pageTransitions().get()
+        if (cosmeticPreferences.hideSensitiveCovers().get()) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
         registerSecureActivity(this)
+        val transitionEnter = if (!coverTransitionEnabled || pageTransition == "instant") 0 else R.anim.shared_axis_x_push_enter
+        val transitionExit = if (!coverTransitionEnabled || pageTransition == "instant") 0 else R.anim.shared_axis_x_push_exit
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(
-                OVERRIDE_TRANSITION_OPEN,
-                R.anim.shared_axis_x_push_enter,
-                R.anim.shared_axis_x_push_exit,
-            )
+            overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, transitionEnter, transitionExit)
         } else {
             @Suppress("DEPRECATION")
-            overridePendingTransition(R.anim.shared_axis_x_push_enter, R.anim.shared_axis_x_push_exit)
+            overridePendingTransition(transitionEnter, transitionExit)
         }
 
         enableEdgeToEdge()
@@ -307,7 +314,9 @@ class ReaderActivity : BaseActivity() {
                         viewModel.state.value.viewerChapters?.let(::setChapters)
                     }
                     ReaderViewModel.Event.PageChanged -> {
-                        displayRefreshHost.flash()
+                        if (Injekt.get<DoujinCustomisationsPreferences>().microInteractions().get()) {
+                            displayRefreshHost.flash()
+                        }
                         signalReaderInput("page-change", KomikkuFullFeatureEngine.gestureAction(this@ReaderActivity, "page-change"))
                     }
                     is ReaderViewModel.Event.SetOrientation -> {
@@ -342,6 +351,10 @@ class ReaderActivity : BaseActivity() {
             // KMK <--
             val state by viewModel.state.collectAsState()
             val showPageNumber by readerPreferences.showPageNumber().collectAsState()
+            val cosmeticPreferences = remember { DoujinCustomisationsPreferences(Injekt.get<PreferenceStore>()) }
+            val showPageCount by cosmeticPreferences.showPageCount().collectAsState()
+            val showReadingProgress by cosmeticPreferences.showReadingProgress().collectAsState()
+            val ambientReaderBackground by cosmeticPreferences.ambientReaderBackground().collectAsState()
             val settingsScreenModel = remember {
                 ReaderSettingsScreenModel(
                     readerState = viewModel.state,
@@ -353,8 +366,8 @@ class ReaderActivity : BaseActivity() {
             var showDoujinReaderTools by remember { mutableStateOf(false) }
             var stealthEnabled by remember { mutableStateOf(false) }
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                if (!state.menuVisible && showPageNumber) {
+            Box(modifier = Modifier.fillMaxSize().background(if (ambientReaderBackground) ComposeColor.Black.copy(alpha = 0.08f) else ComposeColor.Transparent)) {
+                if (!state.menuVisible && showPageNumber && (showPageCount || showReadingProgress)) {
                     ReaderPageIndicator(
                         // SY -->
                         currentPage = state.currentPageText,
@@ -393,7 +406,7 @@ class ReaderActivity : BaseActivity() {
                                     if (mangaId >= 0L && chapterId >= 0L) {
                                         DoujinFeatureEngine.toggleBookmark(
                                             context,
-                                            DoujinFeatureEngine.PageBookmark(mangaId, chapterId, state.currentPage.coerceAtLeast(0)),
+                                            DoujinFeatureEngine.PageBookmark(mangaId, chapterId, state.currentPage.coerceAtLeast(0), System.currentTimeMillis()),
                                         )
                                         DoujinFeatureEngine.markReading(
                                             context,
@@ -602,6 +615,7 @@ class ReaderActivity : BaseActivity() {
     }
 
     override fun onPause() {
+        applyRecentsPrivacy(inBackground = true)
         lifecycleScope.launchNonCancellable {
             viewModel.updateHistory()
         }
@@ -626,10 +640,26 @@ class ReaderActivity : BaseActivity() {
         // <-- AM (DISCORD)
 
                 setMenuVisibility(viewModel.state.value.menuVisible)
+        applyRecentsPrivacy(inBackground = false)
         applyRuntimeReaderProfile()
     }
 
+    private fun applyRecentsPrivacy(inBackground: Boolean) {
+        val preferences = DoujinCustomisationsPreferences(Injekt.get<PreferenceStore>())
+        val secure = preferences.hideSensitiveCovers().get() || (inBackground && preferences.blurCoversInRecents().get())
+        if (secure) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else if (!preferences.hideSensitiveCovers().get()) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
     private fun applyRuntimeReaderProfile() {
+        val cosmeticPreferences = Injekt.get<DoujinCustomisationsPreferences>()
+        if (cosmeticPreferences.stealthReader().get()) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            setMenuVisibility(false)
+        }
         val mangaId = runtimeProfileMangaId ?: return
         val profile = KomikkuFullFeatureEngine.readerProfile(this, "manga:$mangaId")
         if (profile.immersive) setMenuVisibility(false)

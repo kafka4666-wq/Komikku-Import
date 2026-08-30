@@ -41,6 +41,8 @@ import eu.kanade.domain.SYDomainModule
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.sync.SyncPreferences
 import eu.kanade.domain.ui.UiPreferences
+import eu.kanade.domain.ui.KomikkuFullFeatureEngine
+import eu.kanade.domain.ui.KomikkuCustomisationPreferences
 import eu.kanade.domain.ui.model.setAppCompatDelegateThemeMode
 import eu.kanade.tachiyomi.core.security.PrivacyPreferences
 import eu.kanade.tachiyomi.crash.CrashActivity
@@ -99,7 +101,6 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.security.Security
-import java.time.Instant
 
 class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factory {
 
@@ -144,8 +145,20 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
         // SY -->
         Injekt.importModule(SYPreferenceModule(this))
         Injekt.importModule(SYDomainModule())
-        // SY <--
-
+        val customisationPreferences = KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>())
+        KomikkuFullFeatureEngine.applyCustomisationValues(
+            applicationContext,
+            customisationPreferences.libraryLayout().get(),
+            customisationPreferences.performanceMode().get(),
+            customisationPreferences.preloadPolicy().get(),
+            customisationPreferences.animationMode().get(),
+            customisationPreferences.readingProgressPrompt().get(),
+        )
+        // Apply bounded runtime migrations and record a privacy-safe startup check. This does not
+        // touch backup.proto or force a library resync when the app returns from background.
+        KomikkuFullFeatureEngine.ensureRuntimeMigration(applicationContext, currentVersion = 2)
+        KomikkuFullFeatureEngine.startupSelfCheck(applicationContext)
+        // SY -->
         setupExhLogging() // EXH logging
         if (!LogcatLogger.isInstalled) {
             val minLogPriority = when {
@@ -254,6 +267,29 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
     }
 
     override fun newImageLoader(context: Context): ImageLoader {
+        val runtimePerformance = KomikkuFullFeatureEngine.performance(this)
+        val runtimeAnimationScale = KomikkuFullFeatureEngine.animationScale(this)
+        val runtimeDiskCachePercent = when (runtimePerformance) {
+            KomikkuFullFeatureEngine.Performance.PERFORMANCE -> 0.06
+            KomikkuFullFeatureEngine.Performance.BATTERY_SAVER -> 0.025
+            else -> 0.04
+        }
+        val runtimeMemoryCachePercent = when {
+            DeviceUtil.isLowRamDevice(this) -> 0.04
+            runtimePerformance == KomikkuFullFeatureEngine.Performance.PERFORMANCE -> 0.10
+            runtimePerformance == KomikkuFullFeatureEngine.Performance.BATTERY_SAVER -> 0.05
+            else -> 0.08
+        }
+        val runtimeFetcherParallelism = when (runtimePerformance) {
+            KomikkuFullFeatureEngine.Performance.PERFORMANCE -> 8
+            KomikkuFullFeatureEngine.Performance.BATTERY_SAVER -> 3
+            else -> 5
+        }
+        val runtimeDecoderParallelism = when (runtimePerformance) {
+            KomikkuFullFeatureEngine.Performance.PERFORMANCE -> 3
+            KomikkuFullFeatureEngine.Performance.BATTERY_SAVER -> 1
+            else -> 2
+        }
         return ImageLoader.Builder(this).apply {
             val callFactoryLazy = lazy { Injekt.get<NetworkHelper>().client }
             components {
@@ -277,7 +313,7 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
             diskCache(
                 DiskCache.Builder()
                     .directory(context.cacheDir.resolve("image_cache"))
-                    .maxSizePercent(0.04)
+                    .maxSizePercent(runtimeDiskCachePercent)
                     .build(),
             )
 
@@ -285,19 +321,20 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
                 MemoryCache.Builder()
                     // Keep the cover cache useful without allowing it to consume most of
                     // the heap on large libraries. Disk cache remains available at 4%.
-                    .maxSizePercent(context, 0.08)
+                    .maxSizePercent(context, runtimeMemoryCachePercent)
                     .build(),
             )
 
-            crossfade((300 * this@App.animatorDurationScale).toInt())
+            crossfade((300 * this@App.animatorDurationScale * runtimeAnimationScale).toInt())
             allowRgb565(DeviceUtil.isLowRamDevice(this@App))
             // KMK -->
             if (EHLogLevel.isExtraLogging()) logger(DebugLogger())
             // KMK <--
 
             // Coil spawns a new thread for every image load by default
-            fetcherCoroutineContext(Dispatchers.IO.limitedParallelism(8))
-            decoderCoroutineContext(Dispatchers.IO.limitedParallelism(3))
+            fetcherCoroutineContext(Dispatchers.IO.limitedParallelism(runtimeFetcherParallelism))
+                decoderCoroutineContext(Dispatchers.IO.limitedParallelism(runtimeDecoderParallelism))
+
         }
             .build()
     }
@@ -390,8 +427,12 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 
         val logFolder = Injekt.get<StorageManager>().getLogsDirectory()
 
-        if (logFolder != null) {
-                        printers += EnhancedFilePrinter
+        // The EXH file printer allocates date-formatting and file-wrapper objects on
+        // every log rotation. On very large libraries this can amplify memory pressure.
+        // Keep ordinary diagnostics on logcat/Crashlytics and enable file logging only
+        // when the user explicitly selects extreme logging for troubleshooting.
+        if (logFolder != null && EHLogLevel.isExtremeLogging()) {
+            printers += EnhancedFilePrinter
                 .Builder(logFolder) {
                     fileNameGenerator = object : DateFileNameGenerator() {
                         override fun generateFileName(logLevel: Int, timestamp: Long): String {
@@ -402,7 +443,8 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
                         }
                     }
                     flattener { timeMillis, level, tag, message ->
-                        "${Instant.ofEpochMilli(timeMillis)} ${LogLevel.getShortLevelName(level)}/${tag.take(128)}: ${message.take(16_384)}"
+                        // Avoid java.time/SimpleDateFormat allocations in the low-memory path.
+                        "${timeMillis} ${LogLevel.getShortLevelName(level)}/${tag.take(64)}: ${message.take(2_048)}"
                     }
                     backupStrategy = NeverBackupStrategy()
                 }

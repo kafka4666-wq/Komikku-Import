@@ -68,11 +68,11 @@ class MangaRepositoryImpl(
     }
 
     override suspend fun getLibraryManga(): List<LibraryManga> {
-        return handler.awaitList { libraryViewQueries.library(MangaMapper::mapLibraryManga) }
+        return handler.awaitList { libraryViewQueries.libraryFast(MangaMapper::mapLibraryManga) }
     }
 
     override fun getLibraryMangaAsFlow(): Flow<List<LibraryManga>> {
-        return handler.subscribeToList { libraryViewQueries.library(MangaMapper::mapLibraryManga) }
+        return handler.subscribeToList { libraryViewQueries.libraryFast(MangaMapper::mapLibraryManga) }
     }
 
     override fun getFavoritesBySourceId(sourceId: Long): Flow<List<Manga>> {

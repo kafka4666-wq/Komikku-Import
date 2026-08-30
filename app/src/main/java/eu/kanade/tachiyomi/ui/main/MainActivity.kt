@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -35,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -51,11 +53,11 @@ import androidx.lifecycle.lifecycleScope
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.NavigatorDisposeBehavior
-import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.connections.service.ConnectionsPreferences
 import eu.kanade.domain.source.interactor.GetIncognitoState
 import eu.kanade.domain.sync.SyncPreferences
+import eu.kanade.domain.ui.KomikkuFullFeatureEngine
 import eu.kanade.presentation.components.AppStateBanners
 import eu.kanade.presentation.components.DownloadedOnlyBannerBackgroundColor
 import eu.kanade.presentation.components.IncognitoModeBannerBackgroundColor
@@ -77,6 +79,7 @@ import eu.kanade.tachiyomi.data.BackupRestoreStatus
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.LibraryUpdateStatus
 import eu.kanade.tachiyomi.data.SyncStatus
+import eu.kanade.tachiyomi.data.TorrentImportStatus
 import eu.kanade.tachiyomi.data.backup.create.BackupCreateJob
 import eu.kanade.tachiyomi.data.cache.ChapterCache
 import eu.kanade.tachiyomi.data.coil.MangaCoverMetadata
@@ -153,6 +156,7 @@ class MainActivity : BaseActivity() {
     private val syncPreferences: SyncPreferences by injectLazy()
     private val backupRestoreStatus: BackupRestoreStatus by injectLazy()
     private val batchImportStatus: BatchImportStatus by injectLazy()
+    private val torrentImportStatus: TorrentImportStatus by injectLazy()
     private val syncStatus: SyncStatus by injectLazy()
     private val libraryUpdateStatus: LibraryUpdateStatus by injectLazy()
     // KMK <--
@@ -224,6 +228,14 @@ class MainActivity : BaseActivity() {
         setComposeContent {
             val context = LocalContext.current
 
+            // Release the platform splash only after Compose has produced its first
+            // frame. This prevents a short blank hand-off before the Library screen.
+            LaunchedEffect(Unit) {
+                withFrameNanos {
+                    ready = true
+                }
+            }
+
             var incognito by remember { mutableStateOf(getIncognitoState.await(null)) }
             val downloadOnly by preferences.downloadedOnly().collectAsState()
             val indexing by downloadCache.isInitializing.collectAsState()
@@ -231,6 +243,8 @@ class MainActivity : BaseActivity() {
             val restoringState by backupRestoreStatus.isRunning.collectAsState()
             val batchImporting by batchImportStatus.isRunning.collectAsState()
             val batchImportProgress by batchImportStatus.progress.collectAsState()
+            val torrentImporting by torrentImportStatus.isRunning.collectAsState()
+            val torrentImportProgress by torrentImportStatus.progress.collectAsState()
             val syncingState by syncStatus.isRunning.collectAsState()
             val updatingState by libraryUpdateStatus.isRunning.collectAsState()
             val restoringProgressBanner by backupPreferences.showRestoringProgressBanner().collectAsState()
@@ -248,7 +262,7 @@ class MainActivity : BaseActivity() {
             val statusBarBackgroundColor = when {
                 // KMK -->
                 updating -> UpdatingBannerBackgroundColor
-                batchImporting -> MaterialTheme.colorScheme.primary
+                batchImporting || torrentImporting -> MaterialTheme.colorScheme.primary
                 syncing -> SyncingBannerBackgroundColor
                 restoring -> RestoringBannerBackgroundColor
                 // KMK <--
@@ -318,6 +332,8 @@ class MainActivity : BaseActivity() {
                             restoring = restoring,
                             batchImporting = batchImporting,
                             batchImportProgress = batchImportProgress,
+                            torrentImporting = torrentImporting,
+                            torrentImportProgress = torrentImportProgress,
                             syncing = syncing,
                             updating = updating,
                             progress = updatingProgress.takeIf { updating }
@@ -554,7 +570,7 @@ class MainActivity : BaseActivity() {
     @Composable
     private fun CheckForUpdates() {
         val context = LocalContext.current
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
 
         // App updates
         LaunchedEffect(Unit) {
@@ -591,7 +607,7 @@ class MainActivity : BaseActivity() {
 
     @Composable
     private fun ShowOnboarding() {
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
 
         LaunchedEffect(Unit) {
             if (!preferences.shownOnboardingFlow().get() && navigator.lastItem !is OnboardingScreen) {
@@ -642,6 +658,37 @@ class MainActivity : BaseActivity() {
                 splashAnim.start()
             }
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) {
+            return super.dispatchKeyEvent(event)
+        }
+        val modifierPressed = event.isCtrlPressed || event.isMetaPressed
+        if (!modifierPressed) return super.dispatchKeyEvent(event)
+        val currentNavigator = navigator ?: return super.dispatchKeyEvent(event)
+        val action = when (event.keyCode) {
+            KeyEvent.KEYCODE_F -> {
+                currentNavigator.popUntilRoot()
+                currentNavigator.push(GlobalSearchScreen())
+                "search"
+            }
+            KeyEvent.KEYCODE_L -> {
+                lifecycleScope.launch { HomeScreen.openTab(HomeScreen.Tab.Library()) }
+                "library"
+            }
+            KeyEvent.KEYCODE_D -> {
+                lifecycleScope.launch { HomeScreen.openTab(HomeScreen.Tab.More(toDownloads = true)) }
+                "downloads"
+            }
+            KeyEvent.KEYCODE_H -> {
+                lifecycleScope.launch { HomeScreen.openTab(HomeScreen.Tab.History) }
+                "history"
+            }
+            else -> null
+        } ?: return super.dispatchKeyEvent(event)
+        KomikkuFullFeatureEngine.recordInput(applicationContext, "keyboard:${event.keyCode}", action)
+        return true
     }
 
     private fun handleIntentAction(intent: Intent, navigator: Navigator): Boolean {
@@ -722,7 +769,8 @@ class MainActivity : BaseActivity() {
             lifecycleScope.launch { HomeScreen.openTab(tabToOpen) }
         }
 
-        ready = true
+        // The initial splash is released by the first Compose frame. Do not release
+        // it from intent handling, which can run before the Library content paints.
         return true
     }
 
@@ -739,6 +787,6 @@ class MainActivity : BaseActivity() {
 }
 
 // Splash screen
-private const val SPLASH_MIN_DURATION = 500 // ms
+private const val SPLASH_MIN_DURATION = 1200 // ms
 private const val SPLASH_MAX_DURATION = 5000 // ms
 private const val SPLASH_EXIT_ANIM_DURATION = 400L // ms

@@ -1,0 +1,92 @@
+Komikku custom APK verification guide
+======================================
+
+Final deliverables
+------------------
+APK: Komikku-com.manus.komikku-v1.14.2-torrent-readable-baseline-fix.apk
+Package: com.manus.komikku
+Version name: 1.14.2
+Version code: 86
+Final repository commit: 72d6d0d933cb7e32fb03c58a2a1bf9c38e5e9791
+Repository: https://github.com/kafka4666-wq/Komikku-Import
+Branch: main
+
+Build and artifact
+------------------
+Authoritative workflow: .github/workflows/build-apk.yml
+CI run: 33291382978
+CI URL: https://github.com/kafka4666-wq/Komikku-Import/actions/runs/33291382978
+CI head SHA: db050cabcf3e87c7121d78f0a931b408c6eab00d
+CI result: completed / success
+Artifact name: Komikku-com.manus.komikku-stable-signed-universal-debug
+Artifact ID: 9726111651
+Artifact URL: https://github.com/kafka4666-wq/Komikku-Import/actions/runs/33291382978/artifacts/9726111651
+
+Overlay verification
+--------------------
+Local final overlay SHA-256: ed9e52124240a5b007d24e3a8edb6f55035ff176955b77e43edff9bf01e6f1db
+Remote main overlay SHA-256: ed9e52124240a5b007d24e3a8edb6f55035ff176955b77e43edff9bf01e6f1db
+Local and remote overlay bytes: MATCH
+Overlay ZIP integrity: PASS (unzip -tq)
+Focused Torrent ZIP/CBZ range and storage-safety verifier: PASS
+
+APK verification
+----------------
+APK size: 192,647,970 bytes
+APK SHA-256: 0022c98ac183979197352ebc5cc3df07eeaae57bc52f1989772701e7c6862048
+APK ZIP integrity: PASS (unzip -tq)
+aapt badging: package com.manus.komikku, versionCode 86, versionName 1.14.2
+APK Signature Scheme v2: VERIFIED
+APK Signature Scheme v1: false (expected; the workflow requires v2)
+Signer certificate SHA-256: 1f410f0cd1afd4af40820b0a39b602d8fb9cbb4b117a0c29b39ee9f80fd5eac0
+Signer certificate DN: CN=Komikku Custom Release, O=Komikku, C=US
+Manifest checks: ReaderActivity launchMode singleTask (raw value 2) and MainActivity task-retention hardening were applied by the authoritative workflow. CI completed the manifest assertions for alwaysRetainTaskState=true and MainActivity singleTask.
+
+Durable Torrent restoration
+---------------------------
+Torrent import now persists the validated metainfo bytes in app-private filesDir/torrent_catalog/<info-hash>/torrent.metainfo, the stable archive book index, and a restoration record containing the original input, hash, archive count, and update timestamp. Library association is also recorded by stable book key and manga ID.
+
+The manager remains lazy: normal startup, library scrolling, and source browsing do not initialize libtorrent or restore every torrent. The supplied readable baseline APK was decompiled and compared before this rebuild. Its proven activation behavior was preserved: after a handle is ready, the requested archive is activated immediately and requestRange controls the exact needed pieces. The previous cold-restore-only priority transition waits were removed because they could leave restored books loading indefinitely while waiting for a native priority state change. On a cover, page-list, or reader request, the manager first checks memory, then loads durable metadata and the book index. If needed it can fall back to a persisted magnet URI, validate newly resolved metainfo and hash, rebuild the minimal catalog, and start a short-lived selective session.
+
+Only the requested CBZ/ZIP archive is promoted. Unrelated torrent files remain ignored. The existing ZIP central-directory, local-header, image-entry, compression, size, and temporary-piece-budget checks remain active; partial or corrupt archives do not reach the reader. The active archive is released after response bytes are copied, and temporary torrent data is cleaned without deleting the durable catalog metadata.
+
+Cover behavior
+--------------
+TorrentSource.COVER_PREFIX and the narrow MangaCoverFetcher branch remain intact. MangaCoverFetcher continues to invoke TorrentStreamManager.readCover(bookKey) through the asynchronous cover pipeline, without permanent disk caching. A cover request before the first manual reader open can now trigger lazy restoration and fetch only the selected archive ranges needed to validate the archive and read its first image. If peers or metadata are unavailable, the normal fallback remains available and future retries are not poisoned by a permanent false-negative cache.
+
+Import and regression preservation
+---------------------------------
+The existing Torrent screen accepts Sukebei/Nyaa detail pages, direct .torrent URLs, and magnets. TorrentImportWorker remains a foreground data-sync WorkManager job with progress state, app-header banner, and separate notification channels/actions for Pause, Resume, and Cancel. Existing ZIP/CBZ validation, selected-file streaming, Nhentai import workflows, WebDAV one-file sync, Discover, duplicate review, large-library safeguards, reader lifecycle hardening, Doujin customisations, and recommended-profile marker are preserved in the final overlay.
+
+Crash-log remediation
+---------------------
+The complete supplied DOC-20260829-WA0019.txt was inspected. Eleven fatal trace groups were identified.
+
+* Missing android.content.Context: targeted fix added by explicitly registering Context in AppModule; this addresses HistoryScreenModel construction after recreation.
+* Missing KomikkuCustomisationPreferences: targeted core AppModule factory registration added; duplicate domain registration removed.
+* Missing DoujinCustomisationsPreferences during ReaderActivity startup: targeted core AppModule factory registration added.
+* Voyager CompositionLocal is null: current overlay uses nullable LocalNavigator.current in KomikkuFeatureHubScreen instead of currentOrThrow.
+* BadParcelableException / NotSerializableException for MoreTab synthetic lambda: current overlay stores only transient initial text and pushes the screen without captured callback lambdas.
+* Logging OutOfMemoryError: current overlay restricts file logging to explicit extreme logging, avoids date formatter allocation in the flattener, and bounds messages.
+* OkHttp TaskRunner Check failed: one trace has only OkHttp internal frames and no actionable application source location; it is explicitly recorded as unresolved third-party/internal evidence rather than masked by a catch-all.
+* Native Scudo allocator blocks: five entries contain only libc/scudo frames without an application allocation site; no safe targeted source correction can be inferred.
+
+The diagnostic summary is also included inside the final overlay as crash-log-diagnostic-summary.txt.
+
+Important limitations
+---------------------
+Torrent streaming requires temporary cache space and peers that provide the required metainfo and selected archive pieces. Cover or reader restoration cannot succeed when no peers provide the needed data, when metadata is malformed or missing, or when the selected archive no longer exists. The app streams selected archive content and does not retain a permanent full-torrent download. The sandbox and CI can verify source, deterministic ZIP checks, compilation, artifact identity, signing, and packaging; they cannot prove every external swarm, device notification implementation, Xiaomi-specific lifecycle behavior, or native allocator behavior.
+
+Device test checklist
+---------------------
+1. Install the APK as an update over the existing com.manus.komikku installation. Do not uninstall and do not clear data.
+2. Confirm More > Torrent is directly beneath Nhentai Book Import.
+3. Import a legal/test torrent or the supplied Sukebei example. Confirm the import screen, persistent header banner, and notification show progress.
+4. Test Pause, Resume, and Cancel from both the screen and the notification, confirming the worker state and banner remain accurate.
+5. Before opening a Torrent book, return to Library and confirm its cover can begin fetching through the normal cover pipeline. A temporary fallback is acceptable only while data or peers are unavailable; retry later.
+6. Open an imported book and confirm the reader waits for a valid archive and never serves a partial or corrupt ZIP/CBZ.
+7. Force-stop Komikku or restart the device after importing. Reopen the app and request a previously imported cover or reader page. Confirm the manager restores from durable metadata rather than failing solely because its old in-memory catalog was lost.
+8. Test a torrent with unavailable peers and confirm the error is clear and actionable rather than an endless spinner.
+9. Regression-test a small Nhentai import, large-library browsing, a normal reader chapter, Discover, duplicate review with covers, and the WebDAV one-file sync path.
+
+End of guide.

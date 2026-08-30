@@ -30,6 +30,19 @@ class GlobalExceptionHandler private constructor(
     }
 
     override fun uncaughtException(thread: Thread, exception: Throwable) {
+        // OkHttp has a known worker-only invariant failure on some Android 16/device
+        // combinations. The affected worker is disposable; do not terminate the whole
+        // application for this isolated TaskRunner thread. All other exceptions keep
+        // the normal crash-reporting path below.
+        if (isIsolatedOkHttpTaskRunnerFailure(thread, exception)) {
+            try {
+                logcat(LogPriority.WARN) { "Ignoring isolated OkHttp TaskRunner failure; the worker will be recreated by the next request." }
+            } catch (_: Throwable) {
+                // Never turn defensive crash handling into another crash.
+            }
+            return
+        }
+
         // Crash reporting must never become a second crash, especially when the
         // original failure is an OutOfMemoryError during synchronization.
         try {
@@ -47,6 +60,14 @@ class GlobalExceptionHandler private constructor(
             // Fall through to Android's default crash handling.
         }
         defaultHandler.uncaughtException(thread, exception)
+    }
+
+    private fun isIsolatedOkHttpTaskRunnerFailure(thread: Thread, exception: Throwable): Boolean {
+        if (!thread.name.contains("OkHttp", ignoreCase = true)) return false
+        return exception.stackTrace.any { frame ->
+            frame.className == "okhttp3.internal.concurrent.TaskRunner" &&
+                frame.methodName == "afterRun"
+        }
     }
 
     private fun launchActivity(

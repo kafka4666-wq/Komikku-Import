@@ -26,12 +26,15 @@ import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -46,10 +49,15 @@ import androidx.compose.ui.semantics.selected
 import eu.kanade.presentation.manga.components.MangaCover
 import eu.kanade.presentation.manga.components.MangaCoverHide
 import eu.kanade.presentation.manga.components.RatioSwitchToPanorama
+import eu.kanade.domain.ui.DoujinCustomisationsPreferences
 import exh.debug.DebugToggles
+import tachiyomi.core.common.preference.PreferenceStore
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.components.BadgeGroup
 import tachiyomi.presentation.core.i18n.stringResource
+import tachiyomi.presentation.core.util.collectAsState
 import tachiyomi.presentation.core.util.selectedBackground
 import tachiyomi.domain.manga.model.MangaCover as MangaCoverModel
 
@@ -89,18 +97,49 @@ fun MangaCompactGridItem(
     coverBadgeEnd: @Composable (RowScope.() -> Unit)? = null,
     // KMK -->
     libraryColored: Boolean = true,
+    appearance: DoujinCardAppearance? = null,
     // KMK <--
 ) {
     // KMK -->
-    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { libraryColored }
-    val onBgColor = coverData.dominantCoverColors?.second.takeIf { libraryColored }
+    val cardAppearance = appearance ?: rememberDoujinCardAppearance()
+    val cornerRadius = cardAppearance.cornerRadius
+    val cardStyle = cardAppearance.cardStyle
+    val dynamicCoverColors = cardAppearance.dynamicCoverColors
+    val coverFade = cardAppearance.coverFade
+    val coverGradient = cardAppearance.coverGradient
+    val cardShadow = cardAppearance.cardShadow
+    val coverShadow = cardAppearance.coverShadow
+    val coverHighlight = cardAppearance.coverHighlight
+    val compactMode = cardAppearance.compactMode
+    val titlePosition = cardAppearance.titlePosition
+    val coverSize = cardAppearance.coverSize
+    val customCoverSize = cardAppearance.customCoverSize
+    val metadataDensity = cardAppearance.metadataDensity
+    val coverWidth = when (coverSize) { "small" -> 0.84f; "large" -> 1f; "custom" -> customCoverSize.coerceIn(70, 100) / 100f; else -> 0.92f }
+    val cardShape = RoundedCornerShape(cornerRadius.coerceIn(0, 32).dp)
+    val useDynamicColors = libraryColored && dynamicCoverColors
+    val coverAlphaForStyle = if (coverFade) coverAlpha * 0.92f else coverAlpha
+    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { useDynamicColors }
+    val onBgColor = coverData.dominantCoverColors?.second.takeIf { useDynamicColors }
+    val coverEffectModifier = Modifier
+        .then(if (coverShadow) Modifier.shadow(1.dp, cardShape) else Modifier)
+        .then(if (coverHighlight) Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), cardShape) else Modifier)
     // KMK <--
     GridItemSelectable(
         isSelected = isSelected,
         onClick = onClick,
         onLongClick = onLongClick,
+        shape = cardShape,
+        shadowElevation = if (cardStyle == "minimal" || !cardShadow || compactMode) 0.dp else 2.dp,
+        cardSurface = when (cardStyle) {
+            "glass" -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+            "editorial" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+            "detailed" -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+            else -> Color.Transparent
+        },
     ) {
         MangaGridCover(
+            modifier = Modifier.fillMaxWidth(coverWidth).then(coverEffectModifier),
             cover = {
                 // KMK -->
                 if (DebugToggles.HIDE_COVER_IMAGE_ONLY_SHOW_COLOR.enabled) {
@@ -120,19 +159,21 @@ fun MangaCompactGridItem(
                             .fillMaxWidth(),
                         data = coverData,
                         // KMK -->
-                        alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlpha,
+                        alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlphaForStyle,
+                        shape = cardShape,
                         bgColor = bgColor ?: MaterialTheme.colorScheme.surface.takeIf { isSelected },
                         tint = onBgColor,
                         // KMK <--
                     )
                 }
             },
-            badgesStart = coverBadgeStart,
-            badgesEnd = coverBadgeEnd,
+            badgesStart = coverBadgeStart.takeIf { cardStyle != "minimal" },
+            badgesEnd = coverBadgeEnd.takeIf { cardStyle != "minimal" },
             content = {
-                if (title != null) {
+                if (title != null && titlePosition != "hidden") {
                     CoverTextOverlay(
                         title = title,
+                        showGradient = coverGradient,
                         onClickContinueReading = onClickContinueReading,
                     )
                 } else if (onClickContinueReading != null) {
@@ -147,8 +188,17 @@ fun MangaCompactGridItem(
                 }
             },
         )
+            if (title != null && titlePosition == "below") {
+                GridItemTitle(
+                    modifier = Modifier.padding(4.dp),
+                    title = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    minLines = 1,
+                    maxLines = when (metadataDensity) { "minimal" -> 1; "detailed" -> 3; else -> 2 },
+                )
+            }
+        }
     }
-}
 
 /**
  * Title overlay for [MangaCompactGridItem]
@@ -156,9 +206,10 @@ fun MangaCompactGridItem(
 @Composable
 private fun BoxScope.CoverTextOverlay(
     title: String,
+    showGradient: Boolean,
     onClickContinueReading: (() -> Unit)? = null,
 ) {
-    Box(
+    if (showGradient) Box(
         modifier = Modifier
             .clip(RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp))
             .background(
@@ -223,20 +274,51 @@ fun MangaComfortableGridItem(
     coverRatio: MutableFloatState = remember { mutableFloatStateOf(1f) },
     usePanoramaCover: Boolean,
     fitToPanoramaCover: Boolean = false,
-    // KMK <--
+    preserveCoverAspect: Boolean = false,
+    appearance: DoujinCardAppearance? = null,
+    // KMK <—
 ) {
     // KMK -->
+    val cardAppearance = appearance ?: rememberDoujinCardAppearance()
+    val cornerRadius = cardAppearance.cornerRadius
+    val cardStyle = cardAppearance.cardStyle
+    val dynamicCoverColors = cardAppearance.dynamicCoverColors
+    val coverFade = cardAppearance.coverFade
+    val cardShadow = cardAppearance.cardShadow
+    val coverShadow = cardAppearance.coverShadow
+    val coverHighlight = cardAppearance.coverHighlight
+    val compactMode = cardAppearance.compactMode
+    val titlePosition = cardAppearance.titlePosition
+    val coverSize = cardAppearance.coverSize
+    val customCoverSize = cardAppearance.customCoverSize
+    val metadataDensity = cardAppearance.metadataDensity
+    val coverWidth = when (coverSize) { "small" -> 0.84f; "large" -> 1f; "custom" -> customCoverSize.coerceIn(70, 100) / 100f; else -> 0.92f }
+    val cardShape = RoundedCornerShape(cornerRadius.coerceIn(0, 32).dp)
     val coverIsWide = coverRatio.floatValue <= RatioSwitchToPanorama
-    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { libraryColored }
-    val onBgColor = coverData.dominantCoverColors?.second.takeIf { libraryColored }
+    val useDynamicColors = libraryColored && dynamicCoverColors
+    val coverAlphaForStyle = if (coverFade) coverAlpha * 0.92f else coverAlpha
+    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { useDynamicColors }
+    val onBgColor = coverData.dominantCoverColors?.second.takeIf { useDynamicColors }
+    val coverEffectModifier = Modifier
+        .then(if (coverShadow) Modifier.shadow(1.dp, cardShape) else Modifier)
+        .then(if (coverHighlight) Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), cardShape) else Modifier)
     // KMK <--
     GridItemSelectable(
         isSelected = isSelected,
         onClick = onClick,
         onLongClick = onLongClick,
+        shape = cardShape,
+        shadowElevation = if (cardStyle == "minimal" || !cardShadow || compactMode) 0.dp else 2.dp,
+        cardSurface = when (cardStyle) {
+            "glass" -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+            "editorial" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+            "detailed" -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+            else -> Color.Transparent
+        },
     ) {
         Column {
             MangaGridCover(
+                modifier = Modifier.fillMaxWidth(coverWidth).then(coverEffectModifier),
                 cover = {
                     // KMK -->
                     if (DebugToggles.HIDE_COVER_IMAGE_ONLY_SHOW_COLOR.enabled) {
@@ -256,7 +338,8 @@ fun MangaComfortableGridItem(
                                     .fillMaxWidth(),
                                 data = coverData,
                                 // KMK -->
-                                alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlpha,
+                                alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlphaForStyle,
+                                shape = cardShape,
                                 bgColor = bgColor ?: MaterialTheme.colorScheme.surface.takeIf { isSelected },
                                 tint = onBgColor,
                                 onCoverLoaded = { _, result ->
@@ -275,7 +358,8 @@ fun MangaComfortableGridItem(
                                     .fillMaxWidth(),
                                 data = coverData,
                                 // KMK -->
-                                alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlpha,
+                                alpha = if (isSelected) GRID_SELECTED_COVER_ALPHA else coverAlphaForStyle,
+                                shape = cardShape,
                                 bgColor = bgColor ?: MaterialTheme.colorScheme.surface.takeIf { isSelected },
                                 tint = onBgColor,
                                 onCoverLoaded = { _, result ->
@@ -293,14 +377,16 @@ fun MangaComfortableGridItem(
                     }
                 },
                 // KMK -->
-                ratio = if (fitToPanoramaCover && usePanoramaCover && coverIsWide) {
+                ratio = if (preserveCoverAspect) {
+                    coverRatio.floatValue.coerceIn(0.45f, 2.4f)
+                } else if (fitToPanoramaCover && usePanoramaCover && coverIsWide) {
                     MangaCover.Panorama.ratio
                 } else {
                     MangaCover.Book.ratio
                 },
                 // KMK <--
-                badgesStart = coverBadgeStart,
-                badgesEnd = coverBadgeEnd,
+                badgesStart = coverBadgeStart.takeIf { cardStyle != "minimal" },
+                badgesEnd = coverBadgeEnd.takeIf { cardStyle != "minimal" },
                 content = {
                     if (onClickContinueReading != null) {
                         ContinueReadingButton(
@@ -314,12 +400,12 @@ fun MangaComfortableGridItem(
                     }
                 },
             )
-            GridItemTitle(
+            if (titlePosition != "hidden") GridItemTitle(
                 modifier = Modifier.padding(4.dp),
                 title = title,
                 style = MaterialTheme.typography.titleSmall,
-                minLines = 2,
-                maxLines = titleMaxLines,
+                minLines = if (metadataDensity == "minimal") 1 else 2,
+                maxLines = if (metadataDensity == "minimal") 1 else if (metadataDensity == "detailed") 3 else titleMaxLines,
             )
         }
     }
@@ -394,12 +480,17 @@ private fun GridItemSelectable(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.small,
+    shadowElevation: Dp = 0.dp,
+    cardSurface: Color = Color.Transparent,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     Box(
         modifier = modifier
-            .clip(MaterialTheme.shapes.small)
+            .clip(shape)
+            .background(cardSurface, shape)
+            .shadow(shadowElevation, shape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
@@ -444,15 +535,31 @@ fun MangaListItem(
     onClickContinueReading: (() -> Unit)? = null,
     // KMK -->
     libraryColored: Boolean = true,
+    appearance: DoujinCardAppearance? = null,
     // KMK <--
 ) {
     // KMK -->
-    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { libraryColored }
-    val onBgColor = coverData.dominantCoverColors?.second.takeIf { libraryColored }
+    val cardAppearance = appearance ?: rememberDoujinCardAppearance()
+    val cornerRadius = cardAppearance.cornerRadius
+    val dynamicCoverColors = cardAppearance.dynamicCoverColors
+    val coverFade = cardAppearance.coverFade
+    val cardShadow = cardAppearance.cardShadow
+    val coverShadow = cardAppearance.coverShadow
+    val coverHighlight = cardAppearance.coverHighlight
+    val compactMode = cardAppearance.compactMode
+    val cardShape = RoundedCornerShape(cornerRadius.coerceIn(0, 32).dp)
+    val useDynamicColors = libraryColored && dynamicCoverColors
+    val bgColor = coverData.dominantCoverColors?.first?.let { Color(it) }.takeIf { useDynamicColors }
+    val onBgColor = coverData.dominantCoverColors?.second.takeIf { useDynamicColors }
+    val coverEffectModifier = Modifier
+        .then(if (coverShadow) Modifier.shadow(1.dp, cardShape) else Modifier)
+        .then(if (coverHighlight) Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), cardShape) else Modifier)
     // KMK <--
     Row(
         modifier = Modifier
             .selectedBackground(isSelected)
+            .clip(cardShape)
+            .shadow(if (cardShadow) 2.dp else 0.dp, cardShape)
             .height(56.dp)
             .combinedClickable(
                 onClick = onClick,
@@ -479,7 +586,8 @@ fun MangaListItem(
                     .fillMaxHeight(),
                 data = coverData,
                 // KMK -->
-                alpha = coverAlpha,
+                alpha = if (coverFade) coverAlpha * 0.92f else coverAlpha,
+                shape = cardShape,
                 bgColor = bgColor ?: MaterialTheme.colorScheme.surface.takeIf { isSelected },
                 tint = onBgColor,
                 size = MangaCover.Size.Big,

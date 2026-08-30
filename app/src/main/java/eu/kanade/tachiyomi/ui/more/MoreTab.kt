@@ -14,7 +14,6 @@ import cafe.adriel.voyager.core.model.rememberScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
-import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.LocalTabNavigator
 import cafe.adriel.voyager.navigator.tab.TabOptions
 import eu.kanade.core.preference.asState
@@ -37,6 +36,7 @@ import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
+import exh.ui.torrent.TorrentImportScreen
 import exh.ui.nhentaidate.NhentaiDateImportWorker
 import exh.ui.nhentaidate.NhentaiDailyReminderWorker
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,7 +59,7 @@ data object MoreTab : Tab {
             val isSelected = LocalTabNavigator.current.current.key == key
             val image = AnimatedImageVector.animatedVectorResource(R.drawable.anim_more_enter)
             return TabOptions(
-                index = 4u,
+                index = 5u,
                 title = stringResource(MR.strings.label_more),
                 icon = rememberAnimatedVectorPainter(image, isSelected),
             )
@@ -72,7 +72,7 @@ data object MoreTab : Tab {
     @Composable
     override fun Content() {
         val context = LocalContext.current
-        val navigator = LocalNavigator.currentOrThrow
+        val navigator = LocalNavigator.current ?: return
         val tabNavigator = LocalTabNavigator.current
         val screenModel = rememberScreenModel { MoreScreenModel() }
         val downloadQueueState by screenModel.downloadQueueState.collectAsState()
@@ -98,11 +98,12 @@ data object MoreTab : Tab {
             // SY -->
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
+            onClickTorrentImport = { navigator.push(TorrentImportScreen()) },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },
             onClickFeatureHub = {
-                navigator.push(KomikkuFeatureHubScreen(onOpenLibrary = { tabNavigator.current = LibraryTab }))
+                navigator.push(KomikkuFeatureHubScreen())
             },
             // SY <--> 
             // KMK -->

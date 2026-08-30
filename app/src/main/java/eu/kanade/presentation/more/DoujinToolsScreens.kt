@@ -373,7 +373,6 @@ class DoujinBookmarksScreen : Screen() {
         Scaffold(topBar = { TopAppBar(title = { Text("Page Bookmarks") }, navigationIcon = { TextButton(onClick = navigator::pop) { Text("Back") } }) }) { padding -> LazyColumn(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(6.dp)) { item { OutlinedTextField(query, { query = it; bookmarks = DoujinFeatureEngine.bookmarks(context, query = it) }, Modifier.fillMaxWidth().padding(16.dp), label = { Text("Search notes or page") }) }; items(bookmarks) { bookmark -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) { TextButton(onClick = { navigator.push(MangaScreen(bookmark.mangaId)) }) { Text("Page ${bookmark.page}${if (bookmark.note.isBlank()) "" else " · ${bookmark.note}"}") }; TextButton(onClick = { DoujinFeatureEngine.deleteBookmark(context, bookmark); bookmarks = DoujinFeatureEngine.bookmarks(context, query = query) }) { Text("Delete") } } } } }
         }
     }
-}
 
 class DoujinHeatmapScreen : Screen() {
     @Composable

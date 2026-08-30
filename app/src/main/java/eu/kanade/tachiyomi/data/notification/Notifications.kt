@@ -30,6 +30,10 @@ object Notifications {
     const val ID_KOMIKKU_RECOVERY = -1802
     const val ID_KOMIKKU_DIAGNOSTICS = -1803
     const val ID_KOMIKKU_SCHEDULED = -1804
+    const val CHANNEL_TORRENT_PROGRESS = "torrent_import_progress_channel"
+    const val CHANNEL_TORRENT_COMPLETE = "torrent_import_complete_channel"
+    const val ID_TORRENT_PROGRESS = -1805
+    const val ID_TORRENT_COMPLETE = -1806
     const val ID_DOWNLOAD_IMAGE = 2
 
     /**
@@ -84,6 +88,16 @@ object Notifications {
      */
     const val CHANNEL_INCOGNITO_MODE = "incognito_mode_channel"
     const val ID_INCOGNITO_MODE = -701
+
+    /**
+     * Notification channel and ids used by large batch imports.
+     */
+    const val CHANNEL_BATCH_IMPORT_PROGRESS = "batch_import_progress_channel"
+    const val ID_BATCH_IMPORT_PROGRESS = -801
+    const val CHANNEL_BATCH_IMPORT_COMPLETE = "batch_import_complete_channel"
+    const val ID_BATCH_IMPORT_COMPLETE = -802
+    const val CHANNEL_NHENTAI_REMINDER = "nhentai_daily_reminder_channel"
+    const val ID_NHENTAI_DAILY_REMINDER = -803
 
     // AM (DISCORD) -->
     /**
@@ -180,6 +194,16 @@ object Notifications {
                     setGroup(GROUP_KOMIKKU)
                     setShowBadge(false)
                 },
+                buildNotificationChannel(CHANNEL_TORRENT_PROGRESS, IMPORTANCE_LOW) {
+                    setName("Torrent progress")
+                    setGroup(GROUP_KOMIKKU)
+                    setShowBadge(false)
+                },
+                buildNotificationChannel(CHANNEL_TORRENT_COMPLETE, IMPORTANCE_DEFAULT) {
+                    setName("Torrent completion")
+                    setGroup(GROUP_KOMIKKU)
+                    setShowBadge(false)
+                },
                 buildNotificationChannel(CHANNEL_LIBRARY_PROGRESS, IMPORTANCE_LOW) {
                     setName(context.stringResource(MR.strings.channel_progress))
                     setGroup(GROUP_LIBRARY)
@@ -221,6 +245,18 @@ object Notifications {
                 },
                 buildNotificationChannel(CHANNEL_INCOGNITO_MODE, IMPORTANCE_LOW) {
                     setName(context.stringResource(MR.strings.pref_incognito_mode))
+                },
+                buildNotificationChannel(CHANNEL_BATCH_IMPORT_PROGRESS, IMPORTANCE_LOW) {
+                    setName("Batch import progress")
+                    setShowBadge(false)
+                },
+                buildNotificationChannel(CHANNEL_BATCH_IMPORT_COMPLETE, IMPORTANCE_DEFAULT) {
+                    setName("Batch import complete")
+                    setShowBadge(false)
+                },
+                buildNotificationChannel(CHANNEL_NHENTAI_REMINDER, IMPORTANCE_DEFAULT) {
+                    setName("nhentai daily reminder")
+                    setShowBadge(true)
                 },
                 buildNotificationChannel(CHANNEL_APP_UPDATE, IMPORTANCE_HIGH) {
                     setGroup(GROUP_APK_UPDATES)
