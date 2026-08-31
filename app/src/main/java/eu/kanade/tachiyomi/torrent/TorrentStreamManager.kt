@@ -567,7 +567,10 @@ class TorrentStreamManager(
             null,
             priorities,
             null,
-            TorrentFlags.AUTO_MANAGED.or_(TorrentFlags.UPDATE_SUBSCRIBE).or_(TorrentFlags.UPLOAD_MODE),
+            // Match the older working APK: upload mode is not enabled during a readable stream.
+            // Setting it at creation can leave the selected ZIP-directory piece at 0/1 until the
+            // request window has already expired.
+            TorrentFlags.AUTO_MANAGED.or_(TorrentFlags.UPDATE_SUBSCRIBE),
         )
         startedCatalogs += catalog.hash
     }
@@ -730,7 +733,6 @@ class TorrentStreamManager(
         // them concurrently from different peers.
         active.handle.setSequentialRange(firstPiece, lastPiece)
         active.handle.resume()
-        active.handle.unsetFlags(TorrentFlags.UPLOAD_MODE)
         Log.d(LOG_TAG, "range-request purpose=$purpose book=${book.key} fileIndex=${book.fileIndex} fileSize=${book.size} pieceSize=$pieceLength offset=$offset length=$length firstPiece=$firstPiece lastPiece=$lastPiece requiredPieces=${requested.size} selected=${active.requestedPieces.size}")
         var reannounced = false
         var lastAvailable = requested.count(active.handle::havePiece)
@@ -779,7 +781,6 @@ class TorrentStreamManager(
             Log.d(LOG_TAG, "range-ready purpose=$purpose book=${book.key} requiredPieces=${requested.size} bytesReceived=${requested.size * pieceLength}")
         } finally {
             requested.forEach { piece -> runCatching { active.handle.resetPieceDeadline(piece) } }
-            active.handle.setFlags(TorrentFlags.UPLOAD_MODE)
         }
     }
 
