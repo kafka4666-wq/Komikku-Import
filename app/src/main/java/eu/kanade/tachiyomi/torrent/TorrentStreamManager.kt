@@ -86,6 +86,7 @@ class TorrentStreamManager(
         // are arriving; the old two-by-five-second retry loop repeatedly abandoned live requests.
         const val INITIAL_PEER_TIMEOUT_MILLIS = 30_000L
         const val STALLED_TRANSFER_TIMEOUT_MILLIS = 30_000L
+        const val PIECE_DEADLINE_MILLIS = 15_000
         // Includes native session setup and ZIP parsing around the selected-piece wait. This is a
         // final guard: a blocked native call must never leave the UI spinner forever.
         const val REQUEST_TOTAL_TIMEOUT_MILLIS = 180_000L
@@ -723,6 +724,9 @@ class TorrentStreamManager(
         // priority changes. The selected pieces alone are promoted and therefore requested.
         newPieces.forEach { piece ->
             active.handle.piecePriority(piece, Priority.TOP_PRIORITY)
+            // A deadline is the libtorrent streaming primitive: it moves each requested piece to
+            // the front of the picker without making the rest of the archive eligible.
+            active.handle.setPieceDeadline(piece, PIECE_DEADLINE_MILLIS)
             active.requestedPieces += piece
         }
         // This only narrows the sequential picker window; it does not replace the explicit piece
@@ -778,6 +782,7 @@ class TorrentStreamManager(
             }
             Log.d(LOG_TAG, "range-ready purpose=$purpose book=${book.key} requiredPieces=${requested.size} bytesReceived=${requested.size * pieceLength}")
         } finally {
+            requested.forEach { piece -> runCatching { active.handle.resetPieceDeadline(piece) } }
             active.handle.setFlags(TorrentFlags.UPLOAD_MODE)
         }
     }
