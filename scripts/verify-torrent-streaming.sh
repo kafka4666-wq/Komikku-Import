@@ -19,20 +19,23 @@ required = (
     'private fun restoreCatalog(hash: String): TorrentCatalog?',
     'private suspend fun ensureArchiveIndex(book: TorrentBook): ArchiveIndex',
     'private suspend fun requestRange(',
-    'handle.filePriority(book.fileIndex, Priority.TOP_PRIORITY)',
+    'active.handle.filePriority(book.fileIndex, Priority.IGNORE)',
     'setSequentialRange(firstPiece, lastPiece)',
     'TorrentImportControl.awaitResume(context)',
     'TorrentImportControl.isCancelled(context)',
     'registerLibraryManga(book.key, manga.id)',
-    'const val REQUEST_DEADLINE_MILLIS = 5_000L',
+    'const val INITIAL_PEER_TIMEOUT_MILLIS = 30_000L',
+    'const val STALLED_TRANSFER_TIMEOUT_MILLIS = 30_000L',
     'const val REQUEST_TOTAL_TIMEOUT_MILLIS = 180_000L',
-    'range-retry purpose=',
-    'temporary=true',
+    'range-reannounce purpose=',
+    'availableRequiredPieces=',
+    'temporary=true diskCacheDeleted=true',
 )
 for marker in required:
     assert marker in manager + worker, f'missing durable/readable marker: {marker}'
 assert 'prefetchCovers(' not in worker, 'fast import must not race asynchronous cover warming'
-assert 'saveDirectory.deleteRecursively()' not in manager, 'catalog metadata must not be deleted during page cleanup'
+assert 'active.catalog.saveDirectory.deleteRecursively()' in manager, 'transient piece storage must be deleted during page cleanup'
+assert 'catalogDirectory(hash)' in manager, 'catalog metadata must remain separate from transient piece storage'
 assert 'readSelectedEntry(active, book, entry)' in manager, 'reader must use the selected ZIP entry path'
 assert 'waitForCompleteArchive(active, book)' not in manager, 'streaming must never fall back to a complete archive download'
 assert 'ensureArchive(book: TorrentBook)' not in manager, 'streaming must not materialize a complete archive'
@@ -49,5 +52,5 @@ with tempfile.TemporaryDirectory() as d:
         z.writestr('001.png', b'page')
     with zipfile.ZipFile(p) as z:
         assert set(z.namelist()) == {'cover.jpg', '001.png'}
-print('PASS: selective ZIP-range Torrent streaming, durable catalog, import timing, cover path, and finite failure handling')
+print('PASS: selective piece-only ZIP-range Torrent streaming, durable catalog, bounded transient cleanup, import timing, cover path, and finite failure handling')
 PY

@@ -78,13 +78,16 @@ class TorrentStreamManager(
         const val MAX_ZIP_ENTRIES = 10_000
         const val MAX_COMPRESSED_PAGE_BYTES = 24L * 1024L * 1024L
         const val MAX_UNCOMPRESSED_PAGE_BYTES = 48L * 1024L * 1024L
-        const val TEMPORARY_PIECE_BUDGET_BYTES = 64L * 1024L * 1024L
-        // A cold mobile torrent connection needs time to announce, connect and be unchoked before
-        // its first ZIP directory/page piece can arrive. This is deliberately finite, but cannot
-        // honestly be a five-second guarantee for an arbitrary public swarm.
-        const val REQUEST_DEADLINE_MILLIS = 5_000L
+        // libtorrent4j 2.1.0-39 uses disk-backed storage for completed pieces. Keep the
+        // workspace strictly bounded and remove it when the active request ends; this is not a
+        // claim of memory-only operation.
+        const val TEMPORARY_PIECE_BUDGET_BYTES = 32L * 1024L * 1024L
+        // These are independent guards. A healthy transfer is allowed to continue while pieces
+        // are arriving; the old two-by-five-second retry loop repeatedly abandoned live requests.
+        const val INITIAL_PEER_TIMEOUT_MILLIS = 30_000L
+        const val STALLED_TRANSFER_TIMEOUT_MILLIS = 30_000L
         // Includes native session setup and ZIP parsing around the selected-piece wait. This is a
-        // second independent guard: a blocked native call must never leave the UI spinner forever.
+        // final guard: a blocked native call must never leave the UI spinner forever.
         const val REQUEST_TOTAL_TIMEOUT_MILLIS = 180_000L
         const val INDEX_CACHE_ENTRIES = 12
     }
@@ -518,6 +521,9 @@ class TorrentStreamManager(
             ?: restoreCatalog(book.torrentHash)
             ?: error("Torrent session metadata is unavailable. Re-import the torrent to restore its session.")
         migrateLegacyCatalog(catalog.hash)
+        // A previous request removes its transient workspace; recreate only the bounded cache
+        // directory before attaching a fresh native handle.
+        catalog.saveDirectory.mkdirs()
         startSelectiveSession(catalog)
         val handle = waitForHandle(catalog)
         // New downloads are auto-managed by libtorrent by default. A short-lived interactive
@@ -546,10 +552,11 @@ class TorrentStreamManager(
         // Match the readable baseline’s proven activation sequence. Do not wait for a native
         // priority transition here: after a cold restore that transition can be delayed forever.
         // requestRange immediately promotes only the exact pieces needed for the ZIP operation.
-        active.handle.filePriority(book.fileIndex, Priority.DEFAULT)
-        active.handle.filePriority(book.fileIndex, Priority.TOP_PRIORITY)
+        // Keep every file ignored. Explicit piece priorities below are the only data selection
+        // mechanism; promoting a file would make all of its pieces eligible for download.
+        active.handle.filePriority(book.fileIndex, Priority.IGNORE)
         active.handle.resume()
-        Log.d(LOG_TAG, "archive-activated book=${book.key}")
+        Log.d(LOG_TAG, "archive-activated book=${book.key} mode=piece-only")
     }
 
     private fun startSelectiveSession(catalog: TorrentCatalog) {
@@ -711,48 +718,67 @@ class TorrentStreamManager(
         val pieceLength = active.catalog.info.pieceLength().toLong().coerceAtLeast(1L)
         val prospectiveBytes = (active.requestedPieces.size.toLong() + newPieces.size.toLong()) * pieceLength
         require(prospectiveBytes <= TEMPORARY_PIECE_BUDGET_BYTES) {
-            "This $purpose needs more than the 64 MiB temporary streaming limit. The archive will not be downloaded in full."
+            "This $purpose needs more than the 32 MiB temporary streaming limit. The archive will not be downloaded in full."
         }
-        // Keep the selected archive materialized. Without a file-level TOP priority, some
-        // libtorrent builds discard explicitly requested directory pieces when the file was
-        // previously registered as IGNORE, producing the ZIP-directory timeout shown to users.
-        active.handle.filePriority(book.fileIndex, Priority.TOP_PRIORITY)
+        // Do not call filePriority here: libtorrent resets all piece priorities whenever a file
+        // priority changes. The selected pieces alone are promoted and therefore requested.
         newPieces.forEach { piece ->
             active.handle.piecePriority(piece, Priority.TOP_PRIORITY)
             active.requestedPieces += piece
         }
-        // Ask the native picker to fill this narrow selected range first. The piece budget above
-        // remains the hard cap; no whole file is promoted or awaited.
+        // This only narrows the sequential picker window; it does not replace the explicit piece
+        // priorities. All required pieces are submitted before waiting, so the engine can request
+        // them concurrently from different peers.
         active.handle.setSequentialRange(firstPiece, lastPiece)
         active.handle.resume()
         active.handle.unsetFlags(TorrentFlags.UPLOAD_MODE)
-        Log.d(LOG_TAG, "range-request purpose=$purpose pieces=$firstPiece..$lastPiece selected=${active.requestedPieces.size}")
-        var retried = false
+        val pieceLength = active.catalog.info.pieceLength().toLong().coerceAtLeast(1L)
+        Log.d(LOG_TAG, "range-request purpose=$purpose book=${book.key} fileIndex=${book.fileIndex} fileSize=${book.size} pieceSize=$pieceLength offset=$offset length=$length firstPiece=$firstPiece lastPiece=$lastPiece requiredPieces=${requested.size} selected=${active.requestedPieces.size}")
+        var reannounced = false
+        var lastAvailable = requested.count(active.handle::havePiece)
+        val requestStartedNanos = System.nanoTime()
+        var lastProgressNanos = requestStartedNanos
+        val initialDeadlineNanos = requestStartedNanos + INITIAL_PEER_TIMEOUT_MILLIS * 1_000_000L
         try {
             while (requested.any { !active.handle.havePiece(it) }) {
                 TorrentImportControl.awaitResume(context)
                 check(!TorrentImportControl.isCancelled(context)) { "Torrent streaming was canceled." }
                 val now = System.nanoTime()
+                val available = requested.count(active.handle::havePiece)
+                if (available > lastAvailable) {
+                    lastAvailable = available
+                    lastProgressNanos = now
+                }
                 if (now >= active.nextDiagnosticNanos) {
                     val peerCount = runCatching { active.handle.peerInfo().size }.getOrDefault(-1)
-                    Log.d(LOG_TAG, "range-wait purpose=$purpose book=${book.key} peers=$peerCount dht=${session?.isDhtRunning() == true}")
+                    val status = runCatching { active.handle.status() }.getOrNull()
+                    val availability = runCatching { active.handle.pieceAvailability() }.getOrNull()
+                    val requiredAvailability = availability?.let { pieces -> requested.map { pieces.getOrElse(it) { 0 } } }
+                    val missing = requested.size - available
+                    val state = when {
+                        peerCount == 0 -> "finding-peers"
+                        available == requested.size -> "ready"
+                        available > 0 -> "receiving"
+                        else -> "waiting-for-required-pieces"
+                    }
+                    Log.d(LOG_TAG, "range-wait purpose=$purpose book=${book.key} fileIndex=${book.fileIndex} fileSize=${book.size} pieceSize=$pieceLength offset=$offset length=$length firstPiece=$firstPiece lastPiece=$lastPiece requiredPieces=${requested.size} peers=${status?.numPeers() ?: peerCount} seeds=${status?.numSeeds() ?: -1} downloadSpeed=${status?.downloadPayloadRate() ?: -1} uploadSpeed=${status?.uploadPayloadRate() ?: -1} pieceAvailability=${requiredAvailability ?: "unknown"} dht=${session?.isDhtRunning() == true} availableRequiredPieces=$available missingRequiredPieces=$missing bytesReceived=${available * pieceLength} state=$state elapsedMs=${(now - requestStartedNanos) / 1_000_000L} stalledMs=${(now - lastProgressNanos) / 1_000_000L}")
                     active.nextDiagnosticNanos = now + 5_000_000_000L
                 }
-                if (System.nanoTime() >= active.deadlineNanos) {
-                    if (!retried) {
-                        retried = true
-                        active.deadlineNanos = System.nanoTime() + REQUEST_DEADLINE_MILLIS * 1_000_000L
-                        runCatching { active.handle.forceReannounce() }
-                        active.handle.resume()
-                        Log.w(LOG_TAG, "range-retry purpose=$purpose book=${book.key} selected=${active.requestedPieces.size}")
-                        continue
-                    }
-                    Log.w(LOG_TAG, "range-timeout purpose=$purpose book=${book.key} selected=${active.requestedPieces.size}")
-                    error("The requested $purpose was not available after two 5-second attempts. Retry this page or cover; the torrent record was retained.")
+                if (!reannounced && now >= initialDeadlineNanos) {
+                    reannounced = true
+                    runCatching { active.handle.forceReannounce() }
+                    active.handle.resume()
+                    Log.w(LOG_TAG, "range-reannounce purpose=$purpose book=${book.key} availableRequiredPieces=$available")
+                }
+                val deadline = if (lastAvailable == 0 && !reannounced) initialDeadlineNanos else lastProgressNanos + STALLED_TRANSFER_TIMEOUT_MILLIS * 1_000_000L
+                if (now >= deadline) {
+                    val peerCount = runCatching { active.handle.peerInfo().size }.getOrDefault(-1)
+                    val state = if (peerCount == 0) "no-peers" else "data-stalled"
+                    error("Torrent $purpose unavailable ($state): $lastAvailable/${requested.size} required pieces received. Retry this page or cover; no archive was downloaded in full.")
                 }
                 delay(50)
             }
-            Log.d(LOG_TAG, "range-ready purpose=$purpose book=${book.key}")
+            Log.d(LOG_TAG, "range-ready purpose=$purpose book=${book.key} requiredPieces=${requested.size} bytesReceived=${requested.size * pieceLength}")
         } finally {
             active.handle.setFlags(TorrentFlags.UPLOAD_MODE)
         }
@@ -835,10 +861,12 @@ class TorrentStreamManager(
             activeStream = null
             current
         }
-        // Keep only bounded sparse piece data for the current session. Catalog metadata remains in
-        // filesDir, but no complete archive is promoted or treated as a durable library download.
+        // libtorrent4j writes completed pieces to disk. The catalog metadata remains in filesDir,
+        // while this cache directory is strictly transient and removed after every active request.
         runCatching { active.handle.pause() }
-        Log.d(LOG_TAG, "stream-release book=${active.bookKey} pieces=${active.requestedPieces.size} temporary=true")
+        runCatching { session?.remove(active.handle) }
+        runCatching { active.catalog.saveDirectory.deleteRecursively() }
+        Log.d(LOG_TAG, "stream-release book=${active.bookKey} pieces=${active.requestedPieces.size} temporary=true diskCacheDeleted=true")
     }
 
     private fun findSignatureFromEnd(bytes: ByteArray, signature: Long): Int {
