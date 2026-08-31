@@ -167,7 +167,6 @@ class TorrentStreamManager(
         val handle: TorrentHandle,
         val archive: File,
         val requestedPieces: MutableSet<Int> = linkedSetOf(),
-        var deadlineNanos: Long = System.nanoTime() + REQUEST_DEADLINE_MILLIS * 1_000_000L,
         var nextDiagnosticNanos: Long = System.nanoTime(),
     )
 
@@ -732,7 +731,6 @@ class TorrentStreamManager(
         active.handle.setSequentialRange(firstPiece, lastPiece)
         active.handle.resume()
         active.handle.unsetFlags(TorrentFlags.UPLOAD_MODE)
-        val pieceLength = active.catalog.info.pieceLength().toLong().coerceAtLeast(1L)
         Log.d(LOG_TAG, "range-request purpose=$purpose book=${book.key} fileIndex=${book.fileIndex} fileSize=${book.size} pieceSize=$pieceLength offset=$offset length=$length firstPiece=$firstPiece lastPiece=$lastPiece requiredPieces=${requested.size} selected=${active.requestedPieces.size}")
         var reannounced = false
         var lastAvailable = requested.count(active.handle::havePiece)
