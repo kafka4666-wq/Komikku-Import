@@ -543,20 +543,23 @@ class TorrentStreamManager(
     }
 
     /**
-     * Libtorrent does not materialize a file whose file priority is IGNORE, even when an explicitly
-     * selected piece completes. Temporarily activate the one archive being read so its selected
-     * pieces are written to the request workspace, then immediately set every archive piece back
-     * to IGNORE. [requestRange] is the only code path allowed to promote the few required pieces.
+     * Activate the target file so libtorrent writes selected pieces, then restore a piece-only
+     * baseline. A file-level IGNORE priority suppresses storage even when a piece is promoted, so
+     * it cannot be used as the activation step. [requestRange] is the only code path allowed to
+     * promote the few required pieces.
      */
     private fun activateOnlyRequestedArchivePieces(active: ActiveStream, book: TorrentBook) {
-        // Match the readable baseline’s proven activation sequence. Do not wait for a native
-        // priority transition here: after a cold restore that transition can be delayed forever.
-        // requestRange immediately promotes only the exact pieces needed for the ZIP operation.
-        // Keep every file ignored. Explicit piece priorities below are the only data selection
-        // mechanism; promoting a file would make all of its pieces eligible for download.
-        active.handle.filePriority(book.fileIndex, Priority.IGNORE)
+        // File activation is needed for disk-backed range reads, but it would otherwise make every
+        // piece in the CBZ eligible. Reset the target file's piece priorities immediately, before
+        // requestRange promotes only the exact ZIP-directory/header/image pieces.
+        active.handle.filePriority(book.fileIndex, Priority.NORMAL)
+        val firstFilePiece = active.catalog.info.mapFile(book.fileIndex, 0L, 1).piece()
+        val lastFilePiece = active.catalog.info.mapFile(book.fileIndex, (book.size - 1L).coerceAtLeast(0L), 1).piece()
+        for (piece in firstFilePiece..lastFilePiece) {
+            active.handle.piecePriority(piece, Priority.IGNORE)
+        }
         active.handle.resume()
-        Log.d(LOG_TAG, "archive-activated book=${book.key} mode=piece-only")
+        Log.d(LOG_TAG, "archive-activated book=${book.key} mode=piece-only filePieces=$firstFilePiece-$lastFilePiece")
     }
 
     private fun startSelectiveSession(catalog: TorrentCatalog) {
