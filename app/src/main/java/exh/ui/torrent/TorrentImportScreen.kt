@@ -85,7 +85,7 @@ class TorrentImportScreen : Screen() {
                     Text("Torrent", style = MaterialTheme.typography.titleLarge)
                 }
                 Text(
-                    "Paste a Sukebei/Nyaa detail page, magnet, or direct .torrent URL. Komikku reads the torrent file list first, adds supported CBZ/ZIP items to the library, and fetches only the selected archive while you read. Filename and embedded metadata are used without inventing external details.",
+                    "Paste a Sukebei/Nyaa detail page, magnet, or direct .torrent URL. Komikku reads the torrent file list first, then adds supported CBZ/ZIP items to the library one at a time. Only the selected archive is fetched while you read. Filename and embedded metadata are used without inventing external details.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(
@@ -101,7 +101,7 @@ class TorrentImportScreen : Screen() {
                     enabled = !torrentState.running && link.isNotBlank(),
                     onClick = ::importTorrent,
                 ) {
-                    Text(if (torrentState.running) "Adding torrent books…" else "Add all books to library")
+                    Text(if (torrentState.running) "Adding torrent books…" else "Add books one by one")
                 }
                 if (torrentState.running || torrentState.total > 0) {
                     Text(

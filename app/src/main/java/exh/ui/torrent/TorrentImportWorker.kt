@@ -148,7 +148,10 @@ class TorrentImportWorker(
     companion object {
         private const val TAG = "torrent-import"
         private const val INPUT_LINK = "torrent_link"
-        private const val BATCH_SIZE = 100
+        // The older working APK registered torrent books one at a time. Keeping one book per
+        // transaction avoids opening multiple torrent-backed streams and makes each library item
+        // independently readable even when the torrent contains many archives.
+        private const val BATCH_SIZE = 1
         private const val CANCELED_MESSAGE = "Torrent import canceled."
 
         fun start(context: Context, link: String) {
