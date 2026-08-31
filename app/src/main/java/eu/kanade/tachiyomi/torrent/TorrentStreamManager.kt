@@ -543,23 +543,14 @@ class TorrentStreamManager(
     }
 
     /**
-     * Activate the target file so libtorrent writes selected pieces, then restore a piece-only
-     * baseline. A file-level IGNORE priority suppresses storage even when a piece is promoted, so
-     * it cannot be used as the activation step. [requestRange] is the only code path allowed to
-     * promote the few required pieces.
+     * Use the activation sequence from the older APK that successfully opened torrent books.
+     * Explicit range and deadline requests still limit what is waited for and read by the app.
      */
     private fun activateOnlyRequestedArchivePieces(active: ActiveStream, book: TorrentBook) {
-        // File activation is needed for disk-backed range reads, but it would otherwise make every
-        // piece in the CBZ eligible. Reset the target file's piece priorities immediately, before
-        // requestRange promotes only the exact ZIP-directory/header/image pieces.
-        active.handle.filePriority(book.fileIndex, Priority.NORMAL)
-        val firstFilePiece = active.catalog.info.mapFile(book.fileIndex, 0L, 1).piece()
-        val lastFilePiece = active.catalog.info.mapFile(book.fileIndex, (book.size - 1L).coerceAtLeast(0L), 1).piece()
-        for (piece in firstFilePiece..lastFilePiece) {
-            active.handle.piecePriority(piece, Priority.IGNORE)
-        }
+        active.handle.filePriority(book.fileIndex, Priority.DEFAULT)
+        active.handle.filePriority(book.fileIndex, Priority.TOP_PRIORITY)
         active.handle.resume()
-        Log.d(LOG_TAG, "archive-activated book=${book.key} mode=piece-only filePieces=$firstFilePiece-$lastFilePiece")
+        Log.d(LOG_TAG, "archive-activated book=${book.key} mode=legacy-readable fileIndex=${book.fileIndex}")
     }
 
     private fun startSelectiveSession(catalog: TorrentCatalog) {
@@ -723,8 +714,10 @@ class TorrentStreamManager(
         require(prospectiveBytes <= TEMPORARY_PIECE_BUDGET_BYTES) {
             "This $purpose needs more than the 32 MiB temporary streaming limit. The archive will not be downloaded in full."
         }
-        // Do not call filePriority here: libtorrent resets all piece priorities whenever a file
-        // priority changes. The selected pieces alone are promoted and therefore requested.
+        // The older working APK promoted the active archive file before individual pieces. This
+        // keeps libtorrent materializing the sparse file; the range and piece deadline still limit
+        // the data needed before ZIP parsing and page decoding can proceed.
+        active.handle.filePriority(book.fileIndex, Priority.TOP_PRIORITY)
         newPieces.forEach { piece ->
             active.handle.piecePriority(piece, Priority.TOP_PRIORITY)
             // A deadline is the libtorrent streaming primitive: it moves each requested piece to
