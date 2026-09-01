@@ -46,45 +46,54 @@ class TorrentImportWorker(
     override suspend fun doWork(): Result {
         val link = inputData.getString(INPUT_LINK)?.trim().orEmpty()
         if (link.isBlank()) return Result.failure()
-        TorrentImportControl.reset(context)
-        status.begin(link.takeLast(80))
-        setForegroundSafely()
+        // Ensure we always attempt to pause active streaming/session on exit to avoid leaked
+        // native handles or lingering downloads. The inner try handles normal flow and
+        // specific exceptions while the outer finally performs cleanup.
         return try {
-            val result = manager.importLink(link)
-            status.begin(result.torrentName, result.books.size, "Adding recognized books…")
-            postProgress(context)
-            result.books.chunked(BATCH_SIZE).forEach { batch ->
-                TorrentImportControl.awaitResume(context)
-                check(!TorrentImportControl.isCancelled(context)) { CANCELED_MESSAGE }
-                addBatch(batch)
+            TorrentImportControl.reset(context)
+            status.begin(link.takeLast(80))
+            setForegroundSafely()
+            try {
+                val result = manager.importLink(link)
+                status.begin(result.torrentName, result.books.size, "Adding recognized books…")
                 postProgress(context)
-            }
-            val snapshot = status.state.value
-            status.finish("Torrent import complete")
-            postComplete(
-                context,
-                "Torrent import complete",
-                "100% • ${snapshot.completed}/${snapshot.total} processed • ${snapshot.added} added • ${snapshot.failed} failed",
-            )
-            Result.success()
-        } catch (error: IllegalStateException) {
-            if (error.message == CANCELED_MESSAGE || TorrentImportControl.isCancelled(context)) {
+                result.books.chunked(BATCH_SIZE).forEach { batch ->
+                    TorrentImportControl.awaitResume(context)
+                    check(!TorrentImportControl.isCancelled(context)) { CANCELED_MESSAGE }
+                    addBatch(batch)
+                    postProgress(context)
+                }
+                val snapshot = status.state.value
+                status.finish("Torrent import complete")
+                postComplete(
+                    context,
+                    "Torrent import complete",
+                    "100% • ${snapshot.completed}/${snapshot.total} processed • ${snapshot.added} added • ${snapshot.failed} failed",
+                )
+                Result.success()
+            } catch (error: IllegalStateException) {
+                if (error.message == CANCELED_MESSAGE || TorrentImportControl.isCancelled(context)) {
+                    status.fail("Torrent import canceled")
+                    postComplete(context, "Torrent import canceled", "The Torrent queue was canceled.")
+                    Result.success()
+                } else {
+                    status.fail(error.message ?: "Torrent import failed")
+                    postComplete(context, "Torrent import failed", status.state.value.message)
+                    Result.failure()
+                }
+            } catch (cancelled: CancellationException) {
                 status.fail("Torrent import canceled")
                 postComplete(context, "Torrent import canceled", "The Torrent queue was canceled.")
-                Result.success()
-            } else {
+                throw cancelled
+            } catch (error: Throwable) {
                 status.fail(error.message ?: "Torrent import failed")
                 postComplete(context, "Torrent import failed", status.state.value.message)
                 Result.failure()
             }
-        } catch (cancelled: CancellationException) {
-            status.fail("Torrent import canceled")
-            postComplete(context, "Torrent import canceled", "The Torrent queue was canceled.")
-            throw cancelled
-        } catch (error: Throwable) {
-            status.fail(error.message ?: "Torrent import failed")
-            postComplete(context, "Torrent import failed", status.state.value.message)
-            Result.failure()
+        } finally {
+            // Best-effort cleanup: pause any active sessions and clear transient control flags.
+            runCatching { TorrentImportControl.reset(context) }
+            runCatching { manager.pauseAll() }
         }
     }
 

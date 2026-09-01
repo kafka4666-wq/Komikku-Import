@@ -75,15 +75,29 @@ class TorrentSource(
         val raw = page.url.substringBefore("#")
         val encoded = page.url.substringAfter('#', "")
         val entry = java.net.URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
-        val (bytes, contentType) = manager.readPage(raw, entry)
         val request = Request.Builder().url("https://torrent.invalid/page").build()
-        return Response.Builder()
-            .request(request)
-            .protocol(Protocol.HTTP_1_1)
-            .code(200)
-            .message("OK")
-            .body(bytes.toResponseBody(contentType.toMediaType()))
-            .build()
+        return try {
+            val (bytes, contentType) = manager.readPage(raw, entry)
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(bytes.toResponseBody(contentType.toMediaType()))
+                .build()
+        } catch (error: Throwable) {
+            // If streaming fails (no peers, malformed archive, timeouts), return a clear HTTP error
+            // response so the image pipeline and caller can handle it gracefully.
+            val body = "Torrent streaming error: ${error.message ?: "unknown"}"
+                .toResponseBody("text/plain".toMediaType())
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(502)
+                .message("Bad Gateway")
+                .body(body)
+                .build()
+        }
     }
 
     private fun booksPage(books: List<TorrentStreamManager.TorrentBook>, page: Int): MangasPage {
