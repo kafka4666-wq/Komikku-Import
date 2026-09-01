@@ -79,7 +79,6 @@ import eu.kanade.tachiyomi.data.BackupRestoreStatus
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.LibraryUpdateStatus
 import eu.kanade.tachiyomi.data.SyncStatus
-import eu.kanade.tachiyomi.data.TorrentImportStatus
 import eu.kanade.tachiyomi.data.backup.create.BackupCreateJob
 import eu.kanade.tachiyomi.data.cache.ChapterCache
 import eu.kanade.tachiyomi.data.coil.MangaCoverMetadata
@@ -156,7 +155,6 @@ class MainActivity : BaseActivity() {
     private val syncPreferences: SyncPreferences by injectLazy()
     private val backupRestoreStatus: BackupRestoreStatus by injectLazy()
     private val batchImportStatus: BatchImportStatus by injectLazy()
-    private val torrentImportStatus: TorrentImportStatus by injectLazy()
     private val syncStatus: SyncStatus by injectLazy()
     private val libraryUpdateStatus: LibraryUpdateStatus by injectLazy()
     // KMK <--
@@ -243,8 +241,6 @@ class MainActivity : BaseActivity() {
             val restoringState by backupRestoreStatus.isRunning.collectAsState()
             val batchImporting by batchImportStatus.isRunning.collectAsState()
             val batchImportProgress by batchImportStatus.progress.collectAsState()
-            val torrentImporting by torrentImportStatus.isRunning.collectAsState()
-            val torrentImportProgress by torrentImportStatus.progress.collectAsState()
             val syncingState by syncStatus.isRunning.collectAsState()
             val updatingState by libraryUpdateStatus.isRunning.collectAsState()
             val restoringProgressBanner by backupPreferences.showRestoringProgressBanner().collectAsState()
@@ -262,7 +258,7 @@ class MainActivity : BaseActivity() {
             val statusBarBackgroundColor = when {
                 // KMK -->
                 updating -> UpdatingBannerBackgroundColor
-                batchImporting || torrentImporting -> MaterialTheme.colorScheme.primary
+                batchImporting -> MaterialTheme.colorScheme.primary
                 syncing -> SyncingBannerBackgroundColor
                 restoring -> RestoringBannerBackgroundColor
                 // KMK <--
@@ -332,8 +328,6 @@ class MainActivity : BaseActivity() {
                             restoring = restoring,
                             batchImporting = batchImporting,
                             batchImportProgress = batchImportProgress,
-                            torrentImporting = torrentImporting,
-                            torrentImportProgress = torrentImportProgress,
                             syncing = syncing,
                             updating = updating,
                             progress = updatingProgress.takeIf { updating }

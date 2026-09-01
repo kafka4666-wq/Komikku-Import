@@ -3,7 +3,7 @@ name: Build update-compatible Komikku APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, fix/torrent-streaming]
+    branches: [main]
 
 permissions:
   contents: read
@@ -71,8 +71,6 @@ jobs:
           assert_source "library safeguards" "visibleSections" app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
-          chmod +x scripts/verify-torrent-streaming.sh
-          scripts/verify-torrent-streaming.sh
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts

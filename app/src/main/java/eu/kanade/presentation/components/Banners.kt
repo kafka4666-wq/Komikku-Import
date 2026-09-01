@@ -88,8 +88,6 @@ fun AppStateBanners(
     restoring: Boolean,
     batchImporting: Boolean,
     batchImportProgress: Float,
-    torrentImporting: Boolean,
-    torrentImportProgress: Float,
     syncing: Boolean,
     updating: Boolean,
     // KMK <--
@@ -105,18 +103,17 @@ fun AppStateBanners(
         val indexingPlaceable = subcompose(0) {
             AnimatedVisibility(
                 // KMK -->
-                visible = indexing || restoring || batchImporting || torrentImporting || syncing || updating,
+                visible = indexing || restoring || batchImporting || syncing || updating,
                 // KMK <--
                 enter = expandVertically(),
                 exit = shrinkVertically(),
             ) {
                 IndexingDownloadBanner(
                     modifier = Modifier.windowInsetsPadding(mainInsets),
-                    backgroundColor = if (batchImporting || torrentImporting) BatchImportBannerBackgroundColor else IndexingBannerBackgroundColor,
+                    backgroundColor = if (batchImporting) BatchImportBannerBackgroundColor else IndexingBannerBackgroundColor,
                     // KMK -->
                     text = when {
                         batchImporting -> "Adding manga${if (batchImportProgress > 0f) " (${percentFormatter.format(batchImportProgress)})" else "…"}"
-                        torrentImporting -> "Adding torrent books${if (torrentImportProgress > 0f) " (${percentFormatter.format(torrentImportProgress)})" else "…"}"
                         updating -> progress?.let {
                             stringResource(
                                 MR.strings.notification_updating_progress,

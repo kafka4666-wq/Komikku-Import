@@ -12,8 +12,6 @@ import eu.kanade.tachiyomi.source.online.all.Lanraragi
 import eu.kanade.tachiyomi.source.online.all.MangaDex
 import eu.kanade.tachiyomi.source.online.all.MergedSource
 import eu.kanade.tachiyomi.source.online.all.NHentai
-import eu.kanade.tachiyomi.source.online.TorrentSource
-import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import eu.kanade.tachiyomi.source.online.all.Pururin
 import eu.kanade.tachiyomi.source.online.english.EightMuses
 import exh.log.xLogD
@@ -59,7 +57,6 @@ class AndroidSourceManager(
     override val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
 
     private val downloadManager: DownloadManager by injectLazy()
-    private val torrentStreamManager: TorrentStreamManager by injectLazy()
 
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
 
@@ -101,7 +98,6 @@ class AndroidSourceManager(
                                 sourcePreferences.allowLocalSourceHiddenFolders()::get,
                                 // SY <--
                             ),
-                            TorrentSource.ID to TorrentSource(torrentStreamManager),
                         ),
                     ).apply {
                         // KMK -->

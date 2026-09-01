@@ -36,7 +36,6 @@ import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
-import exh.ui.torrent.TorrentImportScreen
 import exh.ui.nhentaidate.NhentaiDateImportWorker
 import exh.ui.nhentaidate.NhentaiDailyReminderWorker
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -98,7 +97,6 @@ data object MoreTab : Tab {
             // SY -->
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
-            onClickTorrentImport = { navigator.push(TorrentImportScreen()) },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },

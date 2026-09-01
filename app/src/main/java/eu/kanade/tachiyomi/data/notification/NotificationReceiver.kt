@@ -11,10 +11,6 @@ import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.data.library.LibraryUpdateJob
 import exh.ui.batchadd.BatchImportJob
 import exh.ui.nhentaidate.NhentaiDateImportWorker
-import exh.ui.torrent.TorrentImportWorker
-import eu.kanade.tachiyomi.data.TorrentImportStatus
-import eu.kanade.tachiyomi.torrent.TorrentImportControl
-import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import eu.kanade.tachiyomi.data.sync.SyncDataJob
 import eu.kanade.tachiyomi.data.updater.AppUpdateDownloadJob
 import eu.kanade.tachiyomi.ui.main.MainActivity
@@ -86,19 +82,6 @@ class NotificationReceiver : BroadcastReceiver() {
             ACTION_CANCEL_BATCH_IMPORT -> {
                 BatchImportJob.cancel(context)
                 NhentaiDateImportWorker.stop(context)
-            }
-            ACTION_PAUSE_TORRENT_IMPORT -> {
-                TorrentImportControl.pause(context)
-                launchIO { Injekt.get<TorrentStreamManager>().pauseAll() }
-            }
-            ACTION_RESUME_TORRENT_IMPORT -> {
-                TorrentImportControl.resume(context)
-                launchIO { Injekt.get<TorrentStreamManager>().resumeAll() }
-            }
-            ACTION_CANCEL_TORRENT_IMPORT -> {
-                TorrentImportWorker.cancel(context)
-                Injekt.get<TorrentImportStatus>().fail("Torrent import canceled")
-                launchIO { Injekt.get<TorrentStreamManager>().pauseAll() }
             }
             // Cancel library update and dismiss notification
             ACTION_CANCEL_LIBRARY_UPDATE -> cancelLibraryUpdate(context)
@@ -315,9 +298,6 @@ class NotificationReceiver : BroadcastReceiver() {
         private const val ACTION_PAUSE_BATCH_IMPORT = "$ID.$NAME.ACTION_PAUSE_BATCH_IMPORT"
         private const val ACTION_RESUME_BATCH_IMPORT = "$ID.$NAME.ACTION_RESUME_BATCH_IMPORT"
         private const val ACTION_CANCEL_BATCH_IMPORT = "$ID.$NAME.ACTION_CANCEL_BATCH_IMPORT"
-        private const val ACTION_PAUSE_TORRENT_IMPORT = "$ID.$NAME.ACTION_PAUSE_TORRENT_IMPORT"
-        private const val ACTION_RESUME_TORRENT_IMPORT = "$ID.$NAME.ACTION_RESUME_TORRENT_IMPORT"
-        private const val ACTION_CANCEL_TORRENT_IMPORT = "$ID.$NAME.ACTION_CANCEL_TORRENT_IMPORT"
 
         private const val ACTION_DISMISS_NOTIFICATION = "$ID.$NAME.ACTION_DISMISS_NOTIFICATION"
 
@@ -394,16 +374,6 @@ class NotificationReceiver : BroadcastReceiver() {
 
         internal fun cancelBatchImportPendingBroadcast(context: Context): PendingIntent =
             batchImportPendingBroadcast(context, ACTION_CANCEL_BATCH_IMPORT, 9003)
-
-        internal fun pauseTorrentImportPendingBroadcast(context: Context): PendingIntent =
-            batchImportPendingBroadcast(context, ACTION_PAUSE_TORRENT_IMPORT, 9011)
-
-        internal fun resumeTorrentImportPendingBroadcast(context: Context): PendingIntent =
-            batchImportPendingBroadcast(context, ACTION_RESUME_TORRENT_IMPORT, 9012)
-
-        internal fun cancelTorrentImportPendingBroadcast(context: Context): PendingIntent =
-            batchImportPendingBroadcast(context, ACTION_CANCEL_TORRENT_IMPORT, 9013)
-
         private fun batchImportPendingBroadcast(context: Context, action: String, requestCode: Int): PendingIntent {
             val intent = Intent(context, NotificationReceiver::class.java).apply {
                 this.action = action

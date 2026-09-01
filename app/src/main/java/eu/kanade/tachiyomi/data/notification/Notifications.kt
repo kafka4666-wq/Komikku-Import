@@ -30,10 +30,6 @@ object Notifications {
     const val ID_KOMIKKU_RECOVERY = -1802
     const val ID_KOMIKKU_DIAGNOSTICS = -1803
     const val ID_KOMIKKU_SCHEDULED = -1804
-    const val CHANNEL_TORRENT_PROGRESS = "torrent_import_progress_channel"
-    const val CHANNEL_TORRENT_COMPLETE = "torrent_import_complete_channel"
-    const val ID_TORRENT_PROGRESS = -1805
-    const val ID_TORRENT_COMPLETE = -1806
     const val ID_DOWNLOAD_IMAGE = 2
 
     /**
@@ -191,16 +187,6 @@ object Notifications {
                 },
                 buildNotificationChannel(CHANNEL_KOMIKKU_SCHEDULED, IMPORTANCE_DEFAULT) {
                     setName("Scheduled jobs")
-                    setGroup(GROUP_KOMIKKU)
-                    setShowBadge(false)
-                },
-                buildNotificationChannel(CHANNEL_TORRENT_PROGRESS, IMPORTANCE_LOW) {
-                    setName("Torrent progress")
-                    setGroup(GROUP_KOMIKKU)
-                    setShowBadge(false)
-                },
-                buildNotificationChannel(CHANNEL_TORRENT_COMPLETE, IMPORTANCE_DEFAULT) {
-                    setName("Torrent completion")
                     setGroup(GROUP_KOMIKKU)
                     setShowBadge(false)
                 },
