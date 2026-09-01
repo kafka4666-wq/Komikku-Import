@@ -3,7 +3,7 @@ name: Build update-compatible Komikku APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, fix/torrent-streaming]
 
 permissions:
   contents: read
