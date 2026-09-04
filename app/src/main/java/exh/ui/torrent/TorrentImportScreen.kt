@@ -9,7 +9,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteSweep
@@ -17,6 +21,7 @@ import androidx.compose.material.icons.outlined.GetApp
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,6 +42,7 @@ import androidx.core.content.ContextCompat
 import eu.kanade.tachiyomi.data.TorrentImportStatus
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.torrent.TorrentImportControl
+import eu.kanade.tachiyomi.torrent.TorrentImportInput
 import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import kotlinx.coroutines.launch
 import uy.kohesive.injekt.Injekt
@@ -51,6 +57,10 @@ class TorrentImportScreen : Screen() {
         val torrentState by importStatus.state.collectAsState()
         val scope = rememberCoroutineScope()
         var link by remember { mutableStateOf("") }
+        var resolvedLink by remember { mutableStateOf("") }
+        var previewBooks by remember { mutableStateOf(emptyList<TorrentStreamManager.TorrentBook>()) }
+        var selectedBooks by remember { mutableStateOf(setOf<String>()) }
+        var fetchingMetadata by remember { mutableStateOf(false) }
         var status by remember { mutableStateOf("") }
         var paused by remember { mutableStateOf(TorrentImportControl.isPaused(context)) }
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -65,14 +75,49 @@ class TorrentImportScreen : Screen() {
             }
         }
 
+        fun fetchMetadata() {
+            val normalized = link.trim()
+            val validationError = TorrentImportInput.validationError(normalized)
+            if (validationError != null) {
+                status = validationError
+                previewBooks = emptyList()
+                selectedBooks = emptySet()
+                resolvedLink = ""
+                return
+            }
+            fetchingMetadata = true
+            status = "Fetching torrent metadata…"
+            scope.launch {
+                runCatching { manager.importLink(normalized) }
+                    .onSuccess { result ->
+                        resolvedLink = normalized
+                        previewBooks = result.books
+                        selectedBooks = result.books.mapTo(linkedSetOf()) { it.key }
+                        status = "Metadata ready. Select books to add."
+                    }
+                    .onFailure { error ->
+                        resolvedLink = ""
+                        previewBooks = emptyList()
+                        selectedBooks = emptySet()
+                        status = error.message ?: "Torrent metadata could not be loaded."
+                    }
+                fetchingMetadata = false
+            }
+        }
+
         fun importTorrent() {
-            if (torrentState.running || link.isBlank()) return
+            val normalized = link.trim()
+            if (torrentState.running || selectedBooks.isEmpty()) return
+            if (resolvedLink != normalized) {
+                status = "This link changed. Fetch metadata again before importing."
+                return
+            }
             paused = false
             TorrentImportControl.reset(context)
-            importStatus.begin(link.trim().takeLast(80))
+            importStatus.begin(normalized.takeLast(80), selectedBooks.size, "Adding selected books…")
             status = "Starting Torrent import…"
             requestNotificationsIfNeeded()
-            TorrentImportWorker.start(context, link.trim())
+            TorrentImportWorker.start(context, normalized, selectedBooks.toList())
         }
 
         Scaffold { contentPadding ->
@@ -90,7 +135,14 @@ class TorrentImportScreen : Screen() {
                 )
                 OutlinedTextField(
                     value = link,
-                    onValueChange = { link = it },
+                    onValueChange = {
+                        link = it
+                        if (resolvedLink.isNotBlank() && resolvedLink != it.trim()) {
+                            resolvedLink = ""
+                            previewBooks = emptyList()
+                            selectedBooks = emptySet()
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Sukebei/Nyaa, magnet, or .torrent link") },
                     placeholder = { Text("https://sukebei.nyaa.si/view/4051004") },
@@ -98,10 +150,65 @@ class TorrentImportScreen : Screen() {
                 )
                 Button(
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !torrentState.running && link.isNotBlank(),
+                    enabled = !torrentState.running && !fetchingMetadata && link.isNotBlank(),
+                    onClick = ::fetchMetadata,
+                ) {
+                    Text(if (fetchingMetadata) "Fetching metadata…" else "Fetch file list")
+                }
+                if (previewBooks.isNotEmpty()) {
+                    val allSelected = selectedBooks.size == previewBooks.size
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            enabled = !torrentState.running,
+                            onClick = {
+                                selectedBooks = if (allSelected) emptySet() else previewBooks.mapTo(linkedSetOf()) { it.key }
+                            },
+                        ) {
+                            Text(if (allSelected) "Unselect all" else "Select all")
+                        }
+                        Text(
+                            modifier = Modifier.weight(1f).padding(top = 12.dp),
+                            text = "${selectedBooks.size}/${previewBooks.size} selected",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(previewBooks, key = { it.key }) { book ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Checkbox(
+                                    checked = selectedBooks.contains(book.key),
+                                    onCheckedChange = { checked ->
+                                        selectedBooks = selectedBooks.toMutableSet().apply {
+                                            if (checked) add(book.key) else remove(book.key)
+                                        }
+                                    },
+                                )
+                                Text(
+                                    text = "${book.title} (${book.size / (1024 * 1024)} MiB)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
+                    }
+                }
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !torrentState.running && selectedBooks.isNotEmpty() && resolvedLink == link.trim(),
                     onClick = ::importTorrent,
                 ) {
-                    Text(if (torrentState.running) "Adding torrent books…" else "Add books one by one")
+                    Text(if (torrentState.running) "Adding torrent books…" else "Add selected books")
                 }
                 if (torrentState.running || torrentState.total > 0) {
                     Text(

@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.tachiyomi.source.online.TorrentSource
 import eu.kanade.tachiyomi.torrent.TorrentImportControl
+import eu.kanade.tachiyomi.torrent.TorrentImportInput
 import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import eu.kanade.tachiyomi.util.system.cancelNotification
 import eu.kanade.tachiyomi.util.system.notificationBuilder
@@ -45,15 +46,22 @@ class TorrentImportWorker(
 
     override suspend fun doWork(): Result {
         val link = inputData.getString(INPUT_LINK)?.trim().orEmpty()
+        val selectedKeys = TorrentImportInput.decodeSelectedKeys(inputData.getString(INPUT_SELECTED_KEYS))
         if (link.isBlank()) return Result.failure()
         TorrentImportControl.reset(context)
         status.begin(link.takeLast(80))
         setForegroundSafely()
         return try {
             val result = manager.importLink(link)
-            status.begin(result.torrentName, result.books.size, "Adding recognized books…")
+            val queue = if (selectedKeys.isEmpty()) {
+                result.books
+            } else {
+                result.books.filter { it.key in selectedKeys }
+            }
+            require(queue.isNotEmpty()) { "No selected torrent books were found. Refresh metadata and try again." }
+            status.begin(result.torrentName, queue.size, "Adding selected books…")
             postProgress(context)
-            result.books.chunked(BATCH_SIZE).forEach { batch ->
+            queue.chunked(BATCH_SIZE).forEach { batch ->
                 TorrentImportControl.awaitResume(context)
                 check(!TorrentImportControl.isCancelled(context)) { CANCELED_MESSAGE }
                 addBatch(batch)
@@ -148,15 +156,21 @@ class TorrentImportWorker(
     companion object {
         private const val TAG = "torrent-import"
         private const val INPUT_LINK = "torrent_link"
+        private const val INPUT_SELECTED_KEYS = "torrent_selected_keys"
         // The older working APK registered torrent books one at a time. Keeping one book per
         // transaction avoids opening multiple torrent-backed streams and makes each library item
         // independently readable even when the torrent contains many archives.
         private const val BATCH_SIZE = 1
         private const val CANCELED_MESSAGE = "Torrent import canceled."
 
-        fun start(context: Context, link: String) {
+        fun start(context: Context, link: String, selectedKeys: Collection<String> = emptyList()) {
             val request = OneTimeWorkRequestBuilder<TorrentImportWorker>()
-                .setInputData(workDataOf(INPUT_LINK to link))
+                .setInputData(
+                    workDataOf(
+                        INPUT_LINK to link,
+                        INPUT_SELECTED_KEYS to TorrentImportInput.encodeSelectedKeys(selectedKeys),
+                    ),
+                )
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
