@@ -135,8 +135,9 @@ class GlobalExceptionHandler private constructor(
         fun getThrowableFromIntent(intent: Intent): Throwable? {
             return try {
                 Json.decodeFromString(ThrowableSerializer, intent.getStringExtra(INTENT_EXTRA)!!)
-            } catch (e: Exception) {
-                logcat(LogPriority.ERROR, e) { "Wasn't able to retrieve throwable from intent" }
+            } catch (_: Throwable) {
+                // CrashActivity must remain usable even when the original crash was
+                // an OutOfMemoryError and decoding the serialized payload allocates.
                 null
             }
         }
