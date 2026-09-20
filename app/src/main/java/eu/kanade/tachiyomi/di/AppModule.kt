@@ -16,7 +16,6 @@ import eu.kanade.tachiyomi.data.BackupRestoreStatus
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.LibraryUpdateStatus
 import eu.kanade.tachiyomi.data.SyncStatus
-import eu.kanade.tachiyomi.data.TorrentImportStatus
 import eu.kanade.tachiyomi.data.cache.ChapterCache
 import eu.kanade.tachiyomi.data.cache.CoverCache
 import eu.kanade.tachiyomi.data.cache.PagePreviewCache
@@ -31,7 +30,6 @@ import eu.kanade.tachiyomi.extension.ExtensionManager
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.source.AndroidSourceManager
-import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import eu.kanade.tachiyomi.util.system.isDebugBuildType
 import exh.eh.EHentaiUpdateHelper
 import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
@@ -172,8 +170,6 @@ class AppModule(val app: Application) : InjektModule {
         addSingletonFactory { CoverCache(app) }
 
         addSingletonFactory { NetworkHelper(app, get(), get()) }
-        // Keep native torrent initialization lazy; do not touch it in the warm-start block below.
-        addSingletonFactory { TorrentStreamManager(app) }
         addSingletonFactory { JavaScriptEngine(app) }
 
         addSingletonFactory<SourceManager> { AndroidSourceManager(app, get(), get()) }
@@ -202,7 +198,6 @@ class AppModule(val app: Application) : InjektModule {
         // KMK -->
         addSingletonFactory { BackupRestoreStatus() }
         addSingletonFactory { BatchImportStatus() }
-        addSingletonFactory { TorrentImportStatus() }
         addSingletonFactory { SyncStatus() }
         addSingletonFactory { LibraryUpdateStatus() }
         // KMK <--

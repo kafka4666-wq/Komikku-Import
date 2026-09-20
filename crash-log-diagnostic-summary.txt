@@ -14,11 +14,12 @@ Inspection scope: complete 3,585-line supplied log. Eleven fatal trace groups we
 5. BadParcelableException / NotSerializableException — 2 crashes. Cause: Voyager attempted to serialize a synthetic MoreTab lambda captured by KomikkuFeatureHubScreen. Correction was already present: KomikkuFeatureHubScreen stores only a @Transient initialText value and MoreTab constructs it without lambdas.
 
 6. Logging OutOfMemoryError — 2 crashes. First relevant frame: App.setupExhLogging lambda / EnhancedFilePrinter. Correction was already present: file logging is restricted to explicitly selected extreme logging, the flattener avoids SimpleDateFormat/date-time allocations, and messages are bounded to 2,048 characters.
+The crash-recovery decoder is also bounded: oversized serialized payloads are rejected before JSON decoding, and malformed payloads produce a minimal fallback without logging during low-memory recovery.
 
 7. OkHttp TaskRunner IllegalStateException: Check failed — 1 crash. The supplied trace contains only OkHttp internal TaskRunner.afterRun and no application frame or actionable cause. No safe source-level correction can be attributed from this log alone; it is recorded as an unresolved third-party/internal diagnostic limitation rather than hidden with a catch-all.
 
 8. Native Scudo allocator diagnostics — 5 native diagnostic blocks. The supplied entries contain libc/scudo frames but no Kotlin/Java application frame, allocation site, or cause. They cannot be safely mapped to a targeted application change from this file alone.
 
-Non-fatal diagnostics such as JobCancellationException during screen teardown and temporary RealImageLoader 'No cover specified'/'Invalid image' messages were not treated as crashes. Torrent cover failures remain retryable and do not fabricate cover data.
+Non-fatal diagnostics such as JobCancellationException during screen teardown and temporary RealImageLoader 'No cover specified'/'Invalid image' messages were not treated as crashes.
 
-Verification note: the focused ZIP/CBZ range and storage-safety verifier passes. CI is the authoritative Kotlin/Gradle compilation check. Live peer availability, device-specific native allocator behavior, and every external torrent swarm cannot be proven in the sandbox.
+Verification note: CI is the authoritative Kotlin/Gradle compilation check. Device-specific native allocator behavior cannot be proven in the sandbox.

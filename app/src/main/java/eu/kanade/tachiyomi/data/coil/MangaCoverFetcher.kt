@@ -1,16 +1,13 @@
 package eu.kanade.tachiyomi.data.coil
 
-import android.graphics.BitmapFactory
 import androidx.core.net.toUri
 import coil3.Extras
 import coil3.ImageLoader
-import coil3.asImage
 import coil3.decode.DataSource
 import coil3.decode.ImageSource
 import coil3.disk.DiskCache
 import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
-import coil3.fetch.ImageFetchResult
 import coil3.fetch.SourceFetchResult
 import coil3.getOrDefault
 import coil3.request.Options
@@ -20,8 +17,6 @@ import eu.kanade.tachiyomi.data.cache.CoverCache
 import eu.kanade.tachiyomi.data.coil.MangaCoverFetcher.Companion.USE_CUSTOM_COVER_KEY
 import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.source.online.HttpSource
-import eu.kanade.tachiyomi.source.online.TorrentSource
-import eu.kanade.tachiyomi.torrent.TorrentStreamManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,7 +38,6 @@ import tachiyomi.domain.manga.model.MangaCover
 import tachiyomi.domain.manga.model.asMangaCover
 import tachiyomi.domain.source.service.SourceManager
 import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.io.File
 import java.io.IOException
@@ -88,13 +82,6 @@ class MangaCoverFetcher(
      * Called each time a cover is displayed
      */
     override suspend fun fetch(): FetchResult {
-        // Torrent images are streamed into the active request and intentionally never use the
-        // generated-cover cache or Coil's on-disk cache. This branch also bypasses legacy
-        // Torrent-generated cover files left by earlier APK versions.
-        if (url?.startsWith(TorrentSource.COVER_PREFIX) == true) {
-            return torrentCoverLoader(url.substringAfter(TorrentSource.COVER_PREFIX))
-        }
-
         // Use custom cover if exists
         val useCustomCover = options.extras.getOrDefault(USE_CUSTOM_COVER_KEY)
         if (useCustomCover) {
@@ -141,19 +128,6 @@ class MangaCoverFetcher(
             source = ImageSource(source = source, fileSystem = FileSystem.SYSTEM),
             mimeType = "image/*",
             dataSource = DataSource.DISK,
-        )
-    }
-
-    private suspend fun torrentCoverLoader(bookKey: String): FetchResult {
-        val (bytes, mimeType) = Injekt.get<TorrentStreamManager>().readCover(bookKey)
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            ?: error("Torrent cover bytes could not be decoded as $mimeType.")
-        // ImageFetchResult intentionally has no ImageSource. Coil can retain a decoded bitmap in
-        // process memory while it is visible, but has no source file to insert into its disk cache.
-        return ImageFetchResult(
-            image = bitmap.asImage(),
-            isSampled = false,
-            dataSource = DataSource.NETWORK,
         )
     }
 
