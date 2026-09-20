@@ -88,7 +88,6 @@ jobs:
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'versionCode = 86' app/build.gradle.kts
           grep -q 'versionName = "1.14.2' app/build.gradle.kts
-          perl -0pi -e 's#(<application\b[^>]*?)(>)#$1 android:largeHeap="true"$2#' app/src/main/AndroidManifest.xml
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
