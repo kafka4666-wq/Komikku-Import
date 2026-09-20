@@ -39,6 +39,11 @@ jobs:
           # complete compatible source family and therefore cannot be partially
           # overwritten by older runtime/feature archives.
           unzip -oq ../komikku-final-overlay.zip -d .
+          # JitPack no longer serves the upstream FlexibleAdapter commit as a
+          # resolvable AAR/JAR. Use the compatible Maven Central release so
+          # dependency resolution is deterministic and the build reaches Kotlin compilation.
+          sed -i 's#com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533#eu.davidea:flexible-adapter:5.1.0#g' gradle/libs.versions.toml
+          grep -q 'eu.davidea:flexible-adapter:5.1.0' gradle/libs.versions.toml
           # The worker copy remains available for the legacy importer path, but
           # the final archive wins if it contains the same source.
           if test -f ../worker-overlay/BatchImportJob.kt; then
