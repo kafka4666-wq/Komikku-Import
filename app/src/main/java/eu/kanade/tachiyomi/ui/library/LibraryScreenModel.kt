@@ -66,11 +66,13 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -788,20 +790,28 @@ class LibraryScreenModel(
                 .drop(1)
                 .debounce(15_000L)
                 .collect { emit(it) }
-        }
+        }.conflate()
         return combine(
-            getLibraryManga.subscribe(),
+            // Database observers can emit the same snapshot repeatedly while a large
+            // library is settling. Do not rematerialize every LibraryItem for each one.
+            getLibraryManga.subscribe()
+                .distinctUntilChanged()
+                .conflate(),
             getLibraryItemPreferencesFlow(),
             downloadChanges,
         ) { libraryManga, preferences, _ ->
             // Resolve source metadata once per source instead of performing repeated lookups for every card.
             val sourcesById = sourceManager.getAll().associateBy { it.id }
-            libraryManga.map { manga ->
+            // Build in cancellable batches. collectLatest can then abandon a stale
+            // 300k-item refresh instead of waiting for one uninterrupted map operation.
+            val items = ArrayList<LibraryItem>(libraryManga.size)
+            libraryManga.forEachIndexed { index, manga ->
+                if (index % 256 == 0) yield()
                 // Display mode based on user preference: take it from global library setting or category
                 // KMK -->
                 val source = sourcesById[manga.manga.source] ?: sourceManager.getOrStub(manga.manga.source)
                 // KMK <--
-                LibraryItem(
+                items += LibraryItem(
                     libraryManga = manga,
                     downloadCount = if (preferences.downloadBadge) {
                         // SY -->
@@ -848,6 +858,7 @@ class LibraryScreenModel(
                     // KMK <--
                 )
             }
+            items
         }
     }
 
