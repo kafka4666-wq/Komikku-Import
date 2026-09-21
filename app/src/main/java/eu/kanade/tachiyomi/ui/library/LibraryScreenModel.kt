@@ -784,13 +784,16 @@ class LibraryScreenModel(
         // The cache emits once immediately and again after its filesystem index is renewed.
         // Do not rebuild all 81k+ LibraryItems twice during cold start; keep the first
         // emission for fast rendering and coalesce later badge refreshes.
-        val downloadChanges = flow {
-            emit(Unit)
+        val downloadChanges = flow<Any> {
+            emit(Any())
             downloadCache.changes
                 .drop(1)
                 .debounce(15_000L)
-                .collect { emit(it) }
+                .collect { emit(Any()) }
         }.conflate()
+        var previousItemsById = emptyMap<Long, LibraryItem>()
+        var previousPreferences: ItemPreferences? = null
+        var previousDownloadRefresh: Any? = null
         return combine(
             // Database observers can emit the same snapshot repeatedly while a large
             // library is settling. Do not rematerialize every LibraryItem for each one.
@@ -799,19 +802,29 @@ class LibraryScreenModel(
                 .conflate(),
             getLibraryItemPreferencesFlow(),
             downloadChanges,
-        ) { libraryManga, preferences, _ ->
+        ) { libraryManga, preferences, downloadRefresh ->
             // Resolve source metadata once per source instead of performing repeated lookups for every card.
             val sourcesById = sourceManager.getAll().associateBy { it.id }
+            val preferencesChanged = previousPreferences != preferences
+            val downloadsChanged = previousDownloadRefresh !== downloadRefresh
+            if (preferencesChanged || downloadsChanged) previousItemsById = emptyMap()
             // Build in cancellable batches. collectLatest can then abandon a stale
             // 300k-item refresh instead of waiting for one uninterrupted map operation.
             val items = ArrayList<LibraryItem>(libraryManga.size)
+            val nextItemsById = HashMap<Long, LibraryItem>(libraryManga.size)
             libraryManga.forEachIndexed { index, manga ->
                 if (index % 256 == 0) yield()
+                val previous = previousItemsById[manga.manga.id]
+                if (!preferencesChanged && !downloadsChanged && previous?.libraryManga == manga) {
+                    items += previous
+                    nextItemsById[manga.manga.id] = previous
+                    return@forEachIndexed
+                }
                 // Display mode based on user preference: take it from global library setting or category
                 // KMK -->
                 val source = sourcesById[manga.manga.source] ?: sourceManager.getOrStub(manga.manga.source)
                 // KMK <--
-                items += LibraryItem(
+                val item = LibraryItem(
                     libraryManga = manga,
                     downloadCount = if (preferences.downloadBadge) {
                         // SY -->
@@ -857,7 +870,12 @@ class LibraryScreenModel(
                     },
                     // KMK <--
                 )
+                items += item
+                nextItemsById[manga.manga.id] = item
             }
+            previousItemsById = nextItemsById
+            previousPreferences = preferences
+            previousDownloadRefresh = downloadRefresh
             items
         }
     }
