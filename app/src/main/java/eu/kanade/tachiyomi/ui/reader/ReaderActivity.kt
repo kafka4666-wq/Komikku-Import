@@ -667,15 +667,28 @@ class ReaderActivity : BaseActivity() {
     }
 
     private fun showKomikkuResumePromptIfNeeded() {
+        // The prompt is launched from a coroutine and can race with ReaderActivity
+        // finishing. Showing a dialog after onStop/onDestroy causes BadTokenException.
+        if (
+            isFinishing ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) ||
+            !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        ) {
+            return
+        }
         val currentChapter = viewModel.state.value.viewerChapters?.currChapter ?: return
         val savedPage = currentChapter.chapter.last_page_read
         if (savedPage <= 0 || currentChapter.chapter.read || !KomikkuFullFeatureEngine.readingProgressPrompt(this)) return
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Continue reading?")
-            .setMessage("Resume at page ${savedPage + 1}, or start this chapter again?")
-            .setPositiveButton("Resume", null)
-            .setNegativeButton("Start over") { _, _ -> viewModel.restartCurrentChapterFromBeginning() }
-            .show()
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Continue reading?")
+                .setMessage("Resume at page ${savedPage + 1}, or start this chapter again?")
+                .setPositiveButton("Resume", null)
+                .setNegativeButton("Start over") { _, _ -> viewModel.restartCurrentChapterFromBeginning() }
+                .show()
+        } catch (_: WindowManager.BadTokenException) {
+            // The activity can stop between the lifecycle check and show().
+        }
     }
 
     private fun signalReaderInput(input: String, action: String) {
