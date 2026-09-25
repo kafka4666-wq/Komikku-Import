@@ -274,7 +274,7 @@ object BatchImageTextExtractor {
     private val genericUrlRegex = Regex("(?i)https?://\\S+")
     private val trailingByArtistRegex = Regex("(?i)^(.{3,120}?)\\s+by\\s+([\\p{L}\\p{N}][\\p{L}\\p{N}'’ _.-]{1,50})\\.?\\s*$")
     private val leadingArtistRegex = Regex("^\\s*\\[([^]]{2,55})]\\s*(.{3,120})$")
-    private val creatorDashTitleRegex = Regex("(?i)^\\s*(?:\\d+\\.\\s*)?([^:|\\-–—]{2,50}?)\\s*[-–—]\\s*(.{5,130})$")
+    private val creatorDashTitleRegex = Regex("(?i)^\\s*(?:\\d+\\.\\s*)?([^:|\\-–—]{2,50}?)\\s+[-–—]\\s+(.{5,130})$")
     private val trailingCatalogTagsRegex = Regex("(?i)\\s*\\[(?:english|japanese|chinese|translated|translation|digital|raw|language|repack|complete)[^]]*]\\s*$")
     private val requestLineRegex = Regex("(?i)^\\s*(?:lf(?:\\s+doujinshi)?\\b|looking\\s+for\\b|sauce\\s+pls?\\b|can\\s+anyone\\b|does\\s+anyone\\b|anyone\\s+(?:know|have|remember)\\b|need\\s+help\\b|what\\s+is\\s+the\\s+title\\b|title\\s+of\\s+this\\b)")
     private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|\\bauthor\\b|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image for|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?)")
@@ -477,7 +477,7 @@ object BatchImageTextExtractor {
         return cleaned.takeIf { it.length >= 3 && it.any(Char::isLetter) }
     }
 
-    private fun cleanArtist(value: String): String? = value.trim().trim('(', ')', '[', ']', ':', '：', '-', '—')
+    private fun cleanArtist(value: String): String? = value.trim().trim('(', ')', '[', ']', ':', '：', '-', '—', '.', '。')
         .replace(Regex("\\s+"), " ")
         .takeIf { it.length in 2..60 && it.any(Char::isLetter) && !noiseRegex.containsMatchIn(it) }
 
