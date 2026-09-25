@@ -71,6 +71,11 @@ jobs:
           assert_source "Discover select all" "Select all" app/src/main/java/eu/kanade/tachiyomi/ui/discover/DiscoverTab.kt
           assert_source "safe removal label" "Remove from library" app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           assert_source "More navigation" "onClickFeatureHub" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          assert_source "Batch Image More entry" 'title = "Batch Image"' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
+          assert_source "Batch Image navigation" "navigator.push(BatchImageScreen())" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          assert_source "Batch Image ML Kit worker" "JapaneseTextRecognizerOptions" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image WorkManager" "class BatchImageWorker" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image screenshot review" "BatchImageReviewCard" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "reader timestamp" "System.currentTimeMillis()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           assert_source "import channel" "CHANNEL_KOMIKKU_IMPORT" app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           assert_source "library safeguards" "visibleSections" app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt

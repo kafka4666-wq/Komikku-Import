@@ -245,6 +245,10 @@ dependencies {
     // Job scheduling
     implementation(androidx.workmanager)
 
+    // On-device OCR for Latin and Japanese script screenshots
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+
     // RxJava
     implementation(libs.rxjava)
 

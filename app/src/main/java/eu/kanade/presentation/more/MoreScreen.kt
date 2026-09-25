@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.ImageSearch
 import androidx.compose.material.icons.outlined.GetApp
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LibraryBooks
@@ -80,6 +81,7 @@ fun MoreScreen(
     onClickAbout: () -> Unit,
     onClickBatchAdd: () -> Unit,
     onClickNhentaiDateImport: () -> Unit,
+    onClickBatchImage: () -> Unit,
     onClickUpdates: () -> Unit,
     onClickHistory: () -> Unit,
     onClickLibrary: () -> Unit,
@@ -297,6 +299,15 @@ fun MoreScreen(
                 }
             }
             // SY <--
+
+            item {
+                TextPreferenceWidget(
+                    title = "Batch Image",
+                    subtitle = "Scan screenshots for doujin titles, artists, nhentai codes, and links",
+                    icon = Icons.Outlined.ImageSearch,
+                    onPreferenceClick = onClickBatchImage,
+                )
+            }
 
             item { HorizontalDivider() }
 

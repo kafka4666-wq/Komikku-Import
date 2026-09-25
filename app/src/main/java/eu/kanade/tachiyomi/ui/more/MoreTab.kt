@@ -35,6 +35,7 @@ import eu.kanade.tachiyomi.ui.setting.SettingsScreen
 import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
+import exh.ui.batchimage.BatchImageScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
 import exh.ui.nhentaidate.NhentaiDateImportWorker
 import exh.ui.nhentaidate.NhentaiDailyReminderWorker
@@ -97,6 +98,7 @@ data object MoreTab : Tab {
             // SY -->
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
+            onClickBatchImage = { navigator.push(BatchImageScreen()) },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },
