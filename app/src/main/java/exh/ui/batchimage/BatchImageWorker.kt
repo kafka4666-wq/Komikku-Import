@@ -395,7 +395,7 @@ object BatchImageTextExtractor {
         if (noiseRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
         if (requestLineRegex.containsMatchIn(line)) return false
         if (Regex("(?i)(?:·|•|\\s)\\d+\\s*(?:s|m|h|d|w|mo|y)\\b").containsMatchIn(line)) return false
-        if (Regex("(?i)^\\s*(?:judul|title|artist|code|chapter|tags?|genre|home|share|comment|reply)\\s*[:：]?").containsMatchIn(line)) return false
+        if (Regex("(?i)^\\s*(?:judul|title|name|artist|by|creator|author|code|chapter|tags?|genre|home|share|comment|reply)\\s*[:：]?").containsMatchIn(line)) return false
         if (line.count { it.isLetter() } < 5 || line.split(Regex("\\s+")).size < 2) return false
         if (line.endsWith('.') || line.endsWith('?')) return false
         if (pureCodeRegex.matches(line)) return false
