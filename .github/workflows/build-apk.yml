@@ -77,6 +77,9 @@ jobs:
           assert_source "Batch Image WorkManager" "class BatchImageWorker" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image installed-source auto-add" "class BatchImageSearchWorker" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image screenshot review" "BatchImageReviewCard" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image multi-title extraction" "fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image cleaned source queries" "fun searchQueries(title: String): List<String>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image OCR regression tests" "multiple title lines in comments remain separate review candidates" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
           assert_source "reader timestamp" "System.currentTimeMillis()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           assert_source "import channel" "CHANNEL_KOMIKKU_IMPORT" app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           assert_source "library safeguards" "visibleSections" app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
@@ -154,6 +157,9 @@ jobs:
       - name: Make Gradle executable
         working-directory: upstream
         run: chmod +x ./gradlew
+      - name: Run Batch Image parser regression tests
+        working-directory: upstream
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
       - name: Build stable-signed debug APK
         working-directory: upstream
         env:

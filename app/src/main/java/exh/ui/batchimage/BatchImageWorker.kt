@@ -67,9 +67,9 @@ class BatchImageWorker(
                     val latinText = latin.process(image).awaitResult()
                     val japaneseText = japanese.process(image).awaitResult()
                     BatchImageTextExtractor.extract(latinText, japaneseText, uri.toString())
-                }.getOrNull()
-                if (recognized != null) {
-                    resultFile.appendText(BatchImageRecordCodec.encode(recognized) + "\n")
+                }.getOrDefault(emptyList())
+                recognized.forEach { record ->
+                    resultFile.appendText(BatchImageRecordCodec.encode(record) + "\n")
                 }
                 completed = index + 1
                 updateProgress(completed, total, "Scanning images")
@@ -260,18 +260,31 @@ internal object BatchImageRecordCodec {
 /** Prioritizes source post titles, labeled titles/artists, and nhentai identifiers over UI text. */
 object BatchImageTextExtractor {
     private val linkRegex = Regex("(?i)(?:https?://)?(?:www\\.)?nhentai\\.net/g/(\\d{5,7})/?")
-    private val labeledCodeRegex = Regex("(?i)(?:nhentai(?:\\.net)?|n\\s*hentai|\\bcode\\b|\\bnh\\s*code\\b)\\s*[:#：=\\-]?\\s*(\\d{5,7})")
-    private val labeledTitleRegex = Regex("(?i)^\\s*(?:judul|title)\\s*[:：]\\s*(.+)$")
-    private val labeledArtistRegex = Regex("(?i)^\\s*(?:artist|artist name|pencipta)\\s*[:：]\\s*(.+)$")
-    private val pureCodeRegex = Regex("^\\s*(\\d{5,7})\\s*$")
+    private val labeledCodeRegex = Regex("(?i)(?:nhentai(?:\\.net)?|n\\s*hentai|\\bcode\\b|\\bnh\\s*code\\b)\\s*[:#：=\\-]*\\s*[\\[(#=:\\-]*\\s*(\\d{5,7})")
+    private val labeledTitleRegex = Regex("(?i)^\\s*(?:(?:english|japanese|jp)\\s+)?(?:doujin\\s+)?(?:judul|title|name)(?:\\s+name)?\\s*[:：=\\-]\\s*(.+)$")
+    private val titleCueRegex = Regex("(?i)\\b(?:the\\s+)?(?:english\\s+|japanese\\s+|jp\\s+)?title\\s+(?:is|was)\\s*[:：\\-]?\\s*(.+)$")
+    private val labeledArtistRegex = Regex("(?i)^\\s*(?:artist|artist name|pencipta|by|creator|author)\\s*[:：]\\s*(.+)$")
+    private val pureCodeRegex = Regex("^\\s*[\\[(#-]*\\s*(\\d{5,7})\\s*[)\\]#.!-]*\\s*$")
     private val trailingCreditRegex = Regex("(?i)\\s*\\[(?:tomiscans|scanlation|translation|translated|credits?|chapter|vol(?:ume)?\\s*\\d+)[^]]*]\\s*$")
     private val trailingArtistRegex = Regex("^(.{3,120}?)\\s*[\\[(]\\s*([^\\[\\]()]{2,55}?)\\s*[\\])]\\s*(?:(?:part|ch(?:apter)?)\\s*\\d+)?\\s*$", RegexOption.IGNORE_CASE)
-    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|\\bauthor\\b|upvote|downvote|comment|reply|share|like|follow|subscribe|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\breply\\b|\\bfollowing\\b)")
-    private val usernameRegex = Regex("(?i)^\\s*(?:u/|r/|@)[a-z0-9_.-]+(?:\\s|$)")
+    private val trailingOpenArtistRegex = Regex("^(.{3,120}?)\\s*[\\[(]\\s*([^\\[\\]()]{2,55})\\s*$", RegexOption.IGNORE_CASE)
+    private val saucePrefixRegex = Regex("(?i)^\\s*(?:full\\s+)?sauce\\s*[:：\\-]\\s*(.+)$")
+    private val trailingSocialCountRegex = Regex("(?i)\\s*(?:\\+\\s*\\d+|[·•]\\s*\\d+\\s*(?:comments?|replies?|likes?))\\s*$")
+    private val markdownLinkRegex = Regex("\\[([^]]+)]\\(https?://[^)]+\\)", RegexOption.IGNORE_CASE)
+    private val genericUrlRegex = Regex("(?i)https?://\\S+")
+    private val trailingByArtistRegex = Regex("(?i)^(.{3,120}?)\\s+by\\s+([\\p{L}\\p{N}][\\p{L}\\p{N}'’ _.-]{1,50})\\.?\\s*$")
+    private val leadingArtistRegex = Regex("^\\s*\\[([^]]{2,55})]\\s*(.{3,120})$")
+    private val creatorDashTitleRegex = Regex("(?i)^\\s*(?:\\d+\\.\\s*)?([^:|\\-–—]{2,50}?)\\s*[-–—]\\s*(.{5,130})$")
+    private val trailingCatalogTagsRegex = Regex("(?i)\\s*\\[(?:english|japanese|chinese|translated|translation|digital|raw|language|repack|complete)[^]]*]\\s*$")
+    private val requestLineRegex = Regex("(?i)^\\s*(?:lf(?:\\s+doujinshi)?\\b|looking\\s+for\\b|sauce\\s+pls?\\b|can\\s+anyone\\b|does\\s+anyone\\b|anyone\\s+(?:know|have|remember)\\b|need\\s+help\\b|what\\s+is\\s+the\\s+title\\b|title\\s+of\\s+this\\b)")
+    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|\\bauthor\\b|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image for|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?)")
+    // Social app OCR often prepends a close/cross glyph to subreddit names (e.g. "X r/SauceSharingCommunity").
+    private val communityRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*r\\s*/\\s*[\\p{L}\\p{N}_-]+(?:\\s.*)?$")
+    private val usernameRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*(?:u\\s*/|@)[a-z0-9_.-]+(?:\\s|$)")
     private val timeRegex = Regex("(?i)^\\s*(?:\\d{1,2}:\\d{2}|\\d+\\s*(?:s|m|h|d|w|mo|y)(?:\\s+ago)?|\\d+(?:\\.\\d+)?k?\\s*(?:views?|likes?))\\s*$")
-    private val conversationalRegex = Regex("(?i)^\\s*(?:this was|that was|nice[.!?]|great[.!?]|if you want|sorry|i am|i'm|because you|the english title|thank you|thanks for)\\b")
+    private val conversationalRegex = Regex("(?i)^\\s*(?:this was|that was|this guy|this is peak|nice[.!?]|great[.!?]|if you want|sorry|i am|i'm|because you|the english title|thank you|thanks for|thanks\\b|found a good link|i think|i read|i saw|it was|it consists|the story|the doujin|the main girl|as i understand|one day|please remember|we recommend|you should check|don't worry|dont worry|i want such|in the end|and then)\\b")
 
-    fun extract(latin: Text, japanese: Text, imageUri: String): BatchImageRecord? {
+    fun extract(latin: Text, japanese: Text, imageUri: String): List<BatchImageRecord> {
         return extractLines(
             latin.textBlocks.flatMap { block -> block.lines.map { it.text } } +
                 japanese.textBlocks.flatMap { block -> block.lines.map { it.text } },
@@ -279,12 +292,16 @@ object BatchImageTextExtractor {
         )
     }
 
-    fun extractLines(rawLines: List<String>, imageUri: String): BatchImageRecord? {
+    /** Compatibility helper for call sites that only want the top result. */
+    fun extractFirstLines(rawLines: List<String>, imageUri: String): BatchImageRecord? =
+        extractLines(rawLines, imageUri).firstOrNull()
+
+    fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord> {
         val lines = rawLines
             .map(::cleanLine)
             .filter(String::isNotBlank)
             .distinct()
-        if (lines.isEmpty()) return null
+        if (lines.isEmpty()) return emptyList()
         val joined = lines.joinToString("\n")
         val linkMatch = linkRegex.find(joined)
         val linkCode = linkMatch?.groupValues?.getOrNull(1)
@@ -299,51 +316,126 @@ object BatchImageTextExtractor {
             "https://nhentai.net/g/$id/"
         }
 
-        val explicitTitle = lines.firstNotNullOfOrNull { line -> labeledTitleRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let(::cleanTitle) }
         val structuredArtist = lines.firstNotNullOfOrNull { line -> labeledArtistRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let(::cleanArtist) }
-        val recTitle = lines.firstNotNullOfOrNull { line ->
-            if (!line.startsWith("rec:", true) && !line.startsWith("rec ", true)) null else cleanTitle(line.replaceFirst(Regex("(?i)^rec\\s*[:：]?\\s*"), ""))
+        val titleCandidates = LinkedHashMap<String, TitleCandidate>()
+        var pendingArtist: String? = null
+        var lastTitleKey: String? = null
+        fun addCandidate(raw: String?, confidence: Int, suppliedArtist: String? = null) {
+            val cleaned = raw?.let(::stripTitleCue)?.let(::cleanTitle) ?: return
+            val (parsedTitle, parsedArtist) = parseTitleAndArtist(cleaned)
+            val title = parsedTitle.trim()
+            if (title.length < 3 || !title.any(Char::isLetter)) return
+            val key = normalizeTitle(title)
+            if (key.isBlank()) return
+            val incoming = TitleCandidate(title, suppliedArtist?.let(::cleanArtist) ?: pendingArtist ?: parsedArtist, confidence)
+            val prior = titleCandidates[key]
+            if (prior == null || incoming.confidence > prior.confidence) titleCandidates[key] = incoming
+            lastTitleKey = key
+            pendingArtist = null
         }
-        val candidateLine = lines.firstOrNull { isLikelyPostTitle(it) }
-        val parsed = (explicitTitle ?: recTitle ?: candidateLine)?.let(::parseTitleAndArtist)
-        val title = parsed?.first?.takeIf(String::isNotBlank)
-        val artist = structuredArtist ?: parsed?.second
-        if (title == null && code == null && link == null) return null
-        val score = when {
-            link != null -> 100
-            explicitCode != null -> 96
-            pureCode != null -> 90
-            explicitTitle != null -> 95
-            recTitle != null -> 92
-            candidateLine != null -> 68
-            else -> 55
+
+        lines.forEachIndexed { index, line ->
+            val artistMatch = labeledArtistRegex.matchEntire(line)
+            if (artistMatch != null) {
+                val artist = artistMatch.groupValues.getOrNull(1)?.let(::cleanArtist)
+                if (artist != null) {
+                    val previousKey = lastTitleKey
+                    if (previousKey != null) {
+                        titleCandidates[previousKey]?.let { titleCandidates[previousKey] = it.copy(artist = artist) }
+                        lastTitleKey = null
+                    } else {
+                        pendingArtist = artist
+                    }
+                }
+                return@forEachIndexed
+            }
+            labeledTitleRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let { addCandidate(it, 100) }
+            titleCueRegex.find(line)?.groupValues?.getOrNull(1)?.let { addCandidate(it, 98) }
+            if (line.startsWith("rec:", true) || line.startsWith("rec ", true)) {
+                addCandidate(line.replaceFirst(Regex("(?i)^rec\\s*[:：]?\\s*"), ""), 96)
+            }
+            saucePrefixRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let { addCandidate(it, 94) }
+            trailingByArtistRegex.matchEntire(line)?.let { addCandidate(it.groupValues[1], 96, it.groupValues[2]) }
+            val leadingArtist = leadingArtistRegex.matchEntire(line)
+            leadingArtist?.let { addCandidate(it.groupValues[2], 96, it.groupValues[1]) }
+            creatorDashTitleRegex.matchEntire(line)?.let { addCandidate(it.groupValues[2], 90, it.groupValues[1]) }
+            if (leadingArtist != null) return@forEachIndexed
+            val formatted = trailingArtistRegex.matchEntire(line) != null || trailingOpenArtistRegex.matchEntire(line) != null
+            titleCandidateScore(line, index)?.let { addCandidate(line, if (formatted) maxOf(it, 88) else it) }
         }
-        return BatchImageRecord(
-            id = imageUri.hashCode().toUInt().toString(16),
-            title = title,
-            artist = artist,
-            code = code,
-            link = link,
-            imageUri = imageUri,
-            confidence = score,
-        )
+
+        if (titleCandidates.isEmpty() && code == null && link == null) return emptyList()
+        val imageKey = imageUri.hashCode().toUInt().toString(16)
+        val orderedTitles = titleCandidates.values.toList()
+        if (orderedTitles.isEmpty()) {
+            val identifierScore = when {
+                link != null -> 100
+                explicitCode != null -> 96
+                pureCode != null -> 90
+                else -> 55
+            }
+            return listOf(BatchImageRecord(imageKey, null, pendingArtist ?: structuredArtist, code, link, imageUri, identifierScore))
+        }
+        return orderedTitles.mapIndexed { index, candidate ->
+            BatchImageRecord(
+                id = "$imageKey-${index + 1}-${normalizeTitle(candidate.title).hashCode().toUInt().toString(16)}",
+                title = candidate.title,
+                artist = candidate.artist,
+                code = code,
+                link = link,
+                imageUri = imageUri,
+                confidence = candidate.confidence,
+            )
+        }
     }
 
     private fun isLikelyPostTitle(value: String): Boolean {
         val line = cleanTitle(value) ?: return false
-        if (line.length !in 8..140 || usernameRegex.containsMatchIn(line) || timeRegex.matches(line)) return false
+        if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line)) return false
         if (noiseRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
+        if (requestLineRegex.containsMatchIn(line)) return false
         if (Regex("(?i)(?:·|•|\\s)\\d+\\s*(?:s|m|h|d|w|mo|y)\\b").containsMatchIn(line)) return false
         if (Regex("(?i)^\\s*(?:judul|title|artist|code|chapter|tags?|genre|home|share|comment|reply)\\s*[:：]?").containsMatchIn(line)) return false
         if (line.count { it.isLetter() } < 5 || line.split(Regex("\\s+")).size < 2) return false
         if (line.endsWith('.') || line.endsWith('?')) return false
         if (pureCodeRegex.matches(line)) return false
+        if (line.matches(Regex("[A-Z0-9][A-Z0-9 &'’:_-]{1,20}")) && line.count { it.isLetter() } < 12) return false
         return true
+    }
+
+    private fun titleCandidateScore(value: String, index: Int): Int? {
+        if (!isLikelyPostTitle(value)) return null
+        val line = cleanTitle(value) ?: return null
+        val words = line.split(Regex("\\s+")).size
+        var score = 60 + minOf(line.length / 12, 12) + minOf(words, 8)
+        if (trailingArtistRegex.containsMatchIn(line) || trailingOpenArtistRegex.containsMatchIn(line)) score += 16
+        if (line.any(Char::isDigit)) score += 4
+        if (':' in line && words >= 4) score += 4
+        if (line.count(Char::isLetter) >= 18) score += 4
+        // Prefer specific title-like lines, but let a later title in a comment/reply beat a short UI label.
+        score -= minOf(index, 20)
+        return score
+    }
+
+    /** Search variants remove creator fragments and try the subtitle after a colon too. */
+    fun searchQueries(title: String): List<String> {
+        val parsed = parseTitleAndArtist(title).first
+        val noDanglingCredit = trailingOpenArtistRegex.replace(parsed, "$1").trim()
+        val clean = cleanTitle(noDanglingCredit) ?: noDanglingCredit.trim()
+        val candidates = buildList {
+            add(clean)
+            clean.substringAfterLast(':', "").trim().takeIf { it.length >= 6 }?.let(::add)
+            clean.substringAfterLast('—', "").trim().takeIf { it.length >= 6 }?.let(::add)
+        }
+        return candidates.map { it.trim().trim(':', '-', '—', '[', '(', ')', ']') }
+            .filter { it.length >= 3 }
+            .distinctBy { it.lowercase() }
     }
 
     private fun parseTitleAndArtist(raw: String): Pair<String, String?> {
         var title = cleanTitle(raw).orEmpty()
         title = trailingCreditRegex.replace(title, "").trim()
+        title = trailingCatalogTagsRegex.replace(title, "").trim()
         val suffix = trailingArtistRegex.matchEntire(title)
         if (suffix != null) {
             val possibleArtist = cleanArtist(suffix.groupValues[2])
@@ -352,13 +444,36 @@ object BatchImageTextExtractor {
                 return cleanTitle(suffix.groupValues[1]).orEmpty() to possibleArtist
             }
         }
+        val openSuffix = trailingOpenArtistRegex.matchEntire(title)
+        if (openSuffix != null) {
+            val possibleArtist = cleanArtist(openSuffix.groupValues[2])
+            if (possibleArtist != null && !possibleArtist.matches(Regex("[A-Z0-9 _-]{3,}"))) {
+                return cleanTitle(openSuffix.groupValues[1]).orEmpty() to possibleArtist
+            }
+        }
+        val bySuffix = trailingByArtistRegex.matchEntire(title)
+        if (bySuffix != null) {
+            val possibleArtist = cleanArtist(bySuffix.groupValues[2])
+            if (possibleArtist != null) return cleanTitle(bySuffix.groupValues[1]).orEmpty() to possibleArtist
+        }
+        val leading = leadingArtistRegex.matchEntire(title)
+        if (leading != null) return cleanTitle(leading.groupValues[2]).orEmpty() to cleanArtist(leading.groupValues[1])
+        val creatorDash = creatorDashTitleRegex.matchEntire(title)
+        if (creatorDash != null) return cleanTitle(creatorDash.groupValues[2]).orEmpty() to cleanArtist(creatorDash.groupValues[1])
         return title to null
     }
 
+    private fun stripTitleCue(raw: String): String =
+        saucePrefixRegex.matchEntire(raw)?.groupValues?.getOrNull(1)?.trim() ?: raw
+
     private fun cleanTitle(value: String): String? {
         var cleaned = value.trim().trim('"', '\'', '“', '”', '•', '-', '—')
+        cleaned = markdownLinkRegex.replace(cleaned, "$1")
+        cleaned = genericUrlRegex.replace(cleaned, "")
         cleaned = linkRegex.replace(cleaned, "").replace(Regex("\\s+"), " ").trim()
+        cleaned = trailingSocialCountRegex.replace(cleaned, "").trim()
         cleaned = trailingCreditRegex.replace(cleaned, "").trim()
+        cleaned = trailingCatalogTagsRegex.replace(cleaned, "").trim()
         return cleaned.takeIf { it.length >= 3 && it.any(Char::isLetter) }
     }
 
@@ -367,6 +482,14 @@ object BatchImageTextExtractor {
         .takeIf { it.length in 2..60 && it.any(Char::isLetter) && !noiseRegex.containsMatchIn(it) }
 
     private fun cleanLine(value: String): String = value.replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
+
+    private fun normalizeTitle(value: String): String = value
+        .lowercase()
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .trim()
+        .replace(Regex("\\s+"), " ")
+
+    private data class TitleCandidate(val title: String, val artist: String?, val confidence: Int)
 }
 
 private suspend fun <T> Task<T>.awaitResult(): T = suspendCancellableCoroutine { continuation ->

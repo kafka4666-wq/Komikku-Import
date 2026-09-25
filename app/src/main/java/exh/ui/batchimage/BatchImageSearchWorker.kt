@@ -68,23 +68,27 @@ class BatchImageSearchWorker(
                     return@forEachIndexed
                 }
                 val query = listOfNotNull(queryTitle, queryArtist).joinToString(" ")
+                val titleQueries = BatchImageTextExtractor.searchQueries(queryTitle!!)
                 setProgress(progressData(completed, records.size, added, alreadyPresent, unmatched, "Searching ${index + 1}/${records.size}: $query"))
 
                 var best: Candidate? = null
                 for (source in sources) {
                     if (isStopped) throw CancellationException("Source search cancelled")
-                    val matches = runCatching {
-                        withContext(Dispatchers.IO) {
-                            source.getSearchManga(1, query.sanitize(), source.getFilterList()).mangas
-                                .take(MAX_RESULTS_PER_SOURCE)
-                                .map { it.toDomainManga(source.id) }
+                    for (sourceQuery in titleQueries) {
+                        val matches = runCatching {
+                            withContext(Dispatchers.IO) {
+                                source.getSearchManga(1, sourceQuery.sanitize(), source.getFilterList()).mangas
+                                    .take(MAX_RESULTS_PER_SOURCE)
+                                    .map { it.toDomainManga(source.id) }
+                            }
+                        }.getOrDefault(emptyList())
+                        for (manga in matches) {
+                            val score = titleQueries.maxOfOrNull { matchScore(it, queryArtist, manga) } ?: 0
+                            if (score >= MINIMUM_MATCH_SCORE && (best == null || score > best!!.score)) {
+                                best = Candidate(manga, source.name, score)
+                            }
                         }
-                    }.getOrDefault(emptyList())
-                    for (manga in matches) {
-                        val score = matchScore(queryTitle, queryArtist, manga)
-                        if (score >= MINIMUM_MATCH_SCORE && (best == null || score > best!!.score)) {
-                            best = Candidate(manga, source.name, score)
-                        }
+                        if ((best?.score ?: 0) >= EARLY_EXIT_SCORE) break
                     }
                     // Search known doujin sources first; an exact title there is strong enough to stop.
                     if ((best?.score ?: 0) >= EARLY_EXIT_SCORE) break
