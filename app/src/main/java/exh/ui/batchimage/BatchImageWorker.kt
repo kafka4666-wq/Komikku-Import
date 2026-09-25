@@ -349,7 +349,7 @@ object BatchImageTextExtractor {
             val possibleArtist = cleanArtist(suffix.groupValues[2])
             // All-uppercase site/source tags are credits, not creator names.
             if (possibleArtist != null && !possibleArtist.matches(Regex("[A-Z0-9 _-]{3,}"))) {
-                return cleanTitle(suffix.groupValues[1]) to possibleArtist
+                return cleanTitle(suffix.groupValues[1]).orEmpty() to possibleArtist
             }
         }
         return title to null

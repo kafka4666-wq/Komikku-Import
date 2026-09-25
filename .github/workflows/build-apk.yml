@@ -159,7 +159,16 @@ jobs:
           KOMIKKU_KEYSTORE_PASSWORD: ${{ secrets.KOMIKKU_KEYSTORE_PASSWORD }}
           KOMIKKU_KEY_ALIAS: ${{ secrets.KOMIKKU_KEY_ALIAS }}
           KOMIKKU_KEY_PASSWORD: ${{ secrets.KOMIKKU_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee gradle-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E '(^e: |error:|Unresolved reference|Type mismatch|Compilation error|FAILURE:)' gradle-build.log | tail -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
       - name: Validate and locate universal APK
         working-directory: upstream
         run: |
@@ -187,3 +196,11 @@ jobs:
           path: upstream/app/build/reports/**
           if-no-files-found: ignore
           retention-days: 30
+      - name: Upload Gradle build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: komikku-gradle-build-log
+          path: upstream/gradle-build.log
+          if-no-files-found: ignore
+          retention-days: 7
