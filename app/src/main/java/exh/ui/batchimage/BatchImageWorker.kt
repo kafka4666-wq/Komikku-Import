@@ -330,7 +330,7 @@ object BatchImageTextExtractor {
     }
 
     private fun isLikelyPostTitle(value: String): Boolean {
-        val line = cleanTitle(value)
+        val line = cleanTitle(value) ?: return false
         if (line.length !in 8..140 || usernameRegex.containsMatchIn(line) || timeRegex.matches(line)) return false
         if (noiseRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
         if (Regex("(?i)(?:·|•|\\s)\\d+\\s*(?:s|m|h|d|w|mo|y)\\b").containsMatchIn(line)) return false
