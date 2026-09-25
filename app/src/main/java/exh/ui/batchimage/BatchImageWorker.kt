@@ -244,7 +244,7 @@ data class BatchImageRecord(
     val confidence: Int,
 )
 
-private object BatchImageRecordCodec {
+internal object BatchImageRecordCodec {
     fun encode(record: BatchImageRecord): String = listOf(
         record.id, record.title.orEmpty(), record.artist.orEmpty(), record.code.orEmpty(),
         record.link.orEmpty(), record.imageUri, record.confidence.toString(),

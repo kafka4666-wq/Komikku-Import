@@ -75,6 +75,7 @@ jobs:
           assert_source "Batch Image navigation" "navigator.push(BatchImageScreen())" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           assert_source "Batch Image ML Kit worker" "JapaneseTextRecognizerOptions" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image WorkManager" "class BatchImageWorker" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image installed-source auto-add" "class BatchImageSearchWorker" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image screenshot review" "BatchImageReviewCard" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "reader timestamp" "System.currentTimeMillis()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           assert_source "import channel" "CHANNEL_KOMIKKU_IMPORT" app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt

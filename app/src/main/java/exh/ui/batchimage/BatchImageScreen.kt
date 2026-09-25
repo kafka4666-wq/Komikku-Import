@@ -63,7 +63,9 @@ class BatchImageScreen : Screen() {
         val manager = remember { context.applicationContext.workManager }
         var pendingSelections by remember { mutableStateOf<List<Pair<String, Uri>>>(emptyList()) }
         var jobIdText by remember { mutableStateOf(BatchImageWorker.savedJobId(context)) }
+        var sourceSearchId by remember { mutableStateOf(BatchImageSearchWorker.savedJobId(context)) }
         var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
+        var sourceSearchInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var records by remember { mutableStateOf<List<BatchImageRecord>>(emptyList()) }
         val selectedIds = remember { mutableStateListOf<String>() }
 
@@ -97,6 +99,12 @@ class BatchImageScreen : Screen() {
             }
         }
 
+        LaunchedEffect(sourceSearchId) {
+            sourceSearchInfo = null
+            val id = sourceSearchId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
+            manager.getWorkInfoByIdFlow(id).collectLatest { sourceSearchInfo = it }
+        }
+
         fun startScan() {
             if (pendingSelections.isEmpty()) {
                 Toast.makeText(context, "Choose a folder or images first", Toast.LENGTH_SHORT).show()
@@ -116,10 +124,13 @@ class BatchImageScreen : Screen() {
         val discovered = progress?.getInt(BatchImageWorker.KEY_DISCOVERED, 0) ?: 0
         val phase = progress?.getString(BatchImageWorker.KEY_PHASE).orEmpty()
         val selectedRecords = records.filter { it.id in selectedIds }
+        val titleRecords = selectedRecords.filter { !it.title.isNullOrBlank() }
+        val isSourceSearchRunning = sourceSearchInfo?.state == WorkInfo.State.RUNNING ||
+            sourceSearchInfo?.state == WorkInfo.State.ENQUEUED || sourceSearchInfo?.state == WorkInfo.State.BLOCKED
         val importableLinks = selectedRecords.mapNotNull { record ->
             record.link ?: record.code?.let { "https://nhentai.net/g/$it/" }
         }.distinct()
-        val selectedQuery = selectedRecords.firstOrNull { !it.title.isNullOrBlank() }?.let { record ->
+        val selectedQuery = selectedRecords.firstOrNull { !it.title.isNullOrBlank() || !it.artist.isNullOrBlank() }?.let { record ->
             listOfNotNull(record.title, record.artist).joinToString(" ")
         }
 
@@ -235,8 +246,57 @@ class BatchImageScreen : Screen() {
                         }
                     }
                     item {
+                        Button(
+                            enabled = titleRecords.isNotEmpty() && !isSourceSearchRunning,
+                            onClick = {
+                                if (titleRecords.isNotEmpty()) {
+                                    sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, titleRecords).toString()
+                                    sourceSearchInfo = null
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        ) {
+                            Text("Search installed sources + auto-add ${titleRecords.size} title${if (titleRecords.size == 1) "" else "s"}")
+                        }
+                    }
+                    if (sourceSearchId != null) {
+                        item {
+                            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    val searchProgress = sourceSearchInfo?.progress
+                                    val done = searchProgress?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0)
+                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0) ?: 0
+                                    val totalSearch = searchProgress?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0)
+                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0) ?: titleRecords.size
+                                    val added = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ADDED, 0)
+                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ADDED, 0) ?: 0
+                                    val present = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0)
+                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0) ?: 0
+                                    val unmatched = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0)
+                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0) ?: 0
+                                    val phase = searchProgress?.getString(BatchImageSearchWorker.KEY_PHASE).orEmpty()
+                                    Text(
+                                        when {
+                                            isSourceSearchRunning -> "Searching installed sources $done/$totalSearch…"
+                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Source search complete · $added added · $present already in library · $unmatched need review"
+                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Source search cancelled · $added added so far"
+                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Source search failed · $added added so far"
+                                            else -> "Installed-source search queued"
+                                        },
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    if (isSourceSearchRunning && phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
+                                    if (isSourceSearchRunning && totalSearch > 0) {
+                                        LinearProgressIndicator(progress = { done.toFloat() / totalSearch.toFloat() }, modifier = Modifier.fillMaxWidth())
+                                        TextButton(onClick = { manager.cancelWorkById(UUID.fromString(sourceSearchId)) }) { Text("Cancel source search") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item {
                         Text(
-                            "Titles can be searched across installed sources. Selected numeric codes and links go through the existing Batch Add importer (nhentai URLs for numeric codes).",
+                            "Selected titles are searched across enabled installed sources; a clear best match is added to your library automatically. Artist-only results and uncertain matches stay for review. Numeric codes and links use Batch Add.",
                             Modifier.padding(horizontal = 16.dp),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -284,7 +344,7 @@ private fun BatchImageReviewCard(
                     record.link?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
                     Text("OCR confidence: ${record.confidence}%", style = MaterialTheme.typography.labelSmall)
                 }
-                if (!record.title.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
+                if (!record.title.isNullOrBlank() || !record.artist.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
             }
             AsyncImage(
                 model = Uri.parse(record.imageUri),
