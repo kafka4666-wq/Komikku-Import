@@ -275,4 +275,60 @@ class BatchImageTextExtractorTest {
         )
         assertEquals(listOf("The Perfect Fuck Buddy 3"), results.map { it.title })
     }
+
+    @Test
+    fun `facebook feed comments names labels and reactions are not import candidates`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "Facebook",
+                "Artist: Age doesn't matter madam",
+                "Age doesn't matter madam",
+                "Yo boy stood on business!! r/Animemes",
+                "That's all for now",
+                "Back to Notifications",
+                "CrotPedia Project 2dAuthor",
+                "77 shares",
+                "All comments",
+                "今Top fan",
+                "Best artist",
+                "See translation",
+                "Nah gini loh realita modern JP pacaran tinggal",
+            ),
+            "content://example/facebook-feed.jpg",
+        )
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun `google lens recommendations and reddit header clutter are filtered but real title remains`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "O Instagram",
+                "UP NEXT: The Craft Boy Anime 0:21",
+                "18 Cuidado Con Manola (Futa) Mada kimi no",
+                "De nandy estamos a nada del viernes #sempai... more",
+                "X rldoujinshi",
+                "V View 2 replies",
+                "See translation",
+                "Spend Time with Your AL Girlfriend Now",
+            ),
+            "content://example/google-lens-results.jpg",
+        )
+        assertEquals(listOf("Spend Time with Your AL Girlfriend Now"), results.map { it.title })
+    }
+
+    @Test
+    fun `reddit comment reactions do not outrank a title linked in reply`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "X r/doujinshi",
+                "Amazing work, cute couple",
+                "u/commenter 3h",
+                "Nice! That's all for now",
+                "Full sauce: Let Me Stay the Night, Otaku",
+            ),
+            "content://example/reddit-comment-extras.jpg",
+        )
+        assertEquals(listOf("Let Me Stay the Night, Otaku"), results.map { it.title })
+    }
 }
