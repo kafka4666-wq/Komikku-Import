@@ -283,7 +283,7 @@ object BatchImageTextExtractor {
     private val usernameRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*(?:u\\s*/|@)[a-z0-9_.-]+(?:\\s|$)")
     private val timeRegex = Regex("(?i)^\\s*(?:\\d{1,2}:\\d{2}|\\d+\\s*(?:s|m|h|d|w|mo|months?|y)(?:\\s+ago)?|\\d+(?:\\.\\d+)?k?\\s*(?:views?|likes?))(?:\\s+\\d{2,4}x\\d{2,4})?\\s*$")
     private val commenterNameRegex = Regex("^[A-Z][\\p{L}'’.-]+\\s+[A-Z][\\p{L}'’.-]+$")
-    private val trailingPlatformRegex = Regex("(?i)\\s*(?:[-–—|·•]\\s*)?(?:facebook|instagram|reddit|google lens|google|youtube|pinterest|tiktok|twitter|x)\\s*$")
+    private val trailingPlatformRegex = Regex("(?i)(?:\\s+[-–—|·•]?\\s*)(?:facebook|instagram|reddit|google lens|google|youtube|pinterest|tiktok|twitter|x)\\s*$")
     private val trailingCommunityRegex = Regex("(?i)\\s+[x×]?\\s*r\\s*[/l|]\\s*[\\p{L}\\p{N}_-]+\\s*$")
     private val platformBadgeRegex = Regex("(?i)^\\s*(?:o\\s+)?(?:facebook|instagram|reddit|google lens|google|youtube|pinterest|tiktok|twitter|x)\\s*$")
     private val socialReactionRegex = Regex("(?i)^\\s*(?:amazing work|nice work|great work|cute couple|that's all for now|all comments|best artist|for ad(?:u|l)t\\+? only|up next|back to notifications|yo boy stood on business|de nandy estamos|nah gini loh|neh gini loh)\\b")
