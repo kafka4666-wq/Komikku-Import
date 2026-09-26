@@ -232,4 +232,47 @@ class BatchImageTextExtractorTest {
         assertEquals(listOf("First Work", "Second Work"), results.map { it.title })
         assertEquals(listOf("Hino Himoto", "Rokkaku Yasosuke"), results.map { it.artist })
     }
+
+    @Test
+    fun `social commenter names and feed labels are not extracted as titles`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "Posts you may have missed",
+                "Ask about this image",
+                "Nguyen Nhh",
+                "Veins Akudora",
+                "8 months ago 735x820",
+                "77 shares",
+                "Contact the moderators of this subreddit if you have any questions",
+                "I am a bot and this action was performed automatically",
+            ),
+            "content://example/social-ui-clutter.jpg",
+        )
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun `reddit body sentence fragments do not become titles but standalone answer does`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "r/doujinshi",
+                "u/automoderator 1h",
+                "to use these types of reverse image search",
+                "Due to our enforced title format you can use reddit search to find it",
+                "girl was either one of the Kongo sisters, Nagato sisters, or Yamato,",
+                "Immoral Netori Style",
+            ),
+            "content://example/reddit-answer.jpg",
+        )
+        assertEquals(listOf("Immoral Netori Style"), results.map { it.title })
+    }
+
+    @Test
+    fun `two-word commenter name is rejected next to a valid longer post title`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf("X r/doujinshi", "Veins Akudora", "Full sauce: The Perfect Fuck Buddy 3"),
+            "content://example/commenter-and-title.jpg",
+        )
+        assertEquals(listOf("The Perfect Fuck Buddy 3"), results.map { it.title })
+    }
 }

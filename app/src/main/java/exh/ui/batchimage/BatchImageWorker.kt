@@ -277,11 +277,12 @@ object BatchImageTextExtractor {
     private val creatorDashTitleRegex = Regex("(?i)^\\s*(?:\\d+\\.\\s*)?([^:|\\-–—]{2,50}?)\\s+[-–—]\\s+(.{5,130})$")
     private val trailingCatalogTagsRegex = Regex("(?i)\\s*\\[(?:english|japanese|chinese|translated|translation|digital|raw|language|repack|complete)[^]]*]\\s*$")
     private val requestLineRegex = Regex("(?i)^\\s*(?:lf(?:\\s+doujinshi)?\\b|looking\\s+for\\b|sauce\\s+pls?\\b|can\\s+anyone\\b|does\\s+anyone\\b|anyone\\s+(?:know|have|remember)\\b|need\\s+help\\b|what\\s+is\\s+the\\s+title\\b|title\\s+of\\s+this\\b)")
-    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|\\bauthor\\b|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image for|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?)")
+    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|posts you may have missed|ask about this image|\\bauthor\\b|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare(?:s)?\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image for|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?|i am a bot|action was performed automatically|contact the moderators|moderators of this subreddit|please follow the community rules|enforced title format|reddit search|maybe sauce|sauce guys|anime meme)")
     // Social app OCR often prepends a close/cross glyph to subreddit names (e.g. "X r/SauceSharingCommunity").
     private val communityRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*r\\s*/\\s*[\\p{L}\\p{N}_-]+(?:\\s.*)?$")
     private val usernameRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*(?:u\\s*/|@)[a-z0-9_.-]+(?:\\s|$)")
-    private val timeRegex = Regex("(?i)^\\s*(?:\\d{1,2}:\\d{2}|\\d+\\s*(?:s|m|h|d|w|mo|y)(?:\\s+ago)?|\\d+(?:\\.\\d+)?k?\\s*(?:views?|likes?))\\s*$")
+    private val timeRegex = Regex("(?i)^\\s*(?:\\d{1,2}:\\d{2}|\\d+\\s*(?:s|m|h|d|w|mo|months?|y)(?:\\s+ago)?|\\d+(?:\\.\\d+)?k?\\s*(?:views?|likes?))(?:\\s+\\d{2,4}x\\d{2,4})?\\s*$")
+    private val commenterNameRegex = Regex("^[A-Z][\\p{L}'’.-]+\\s+[A-Z][\\p{L}'’.-]+$")
     private val conversationalRegex = Regex("(?i)^\\s*(?:this was|that was|this guy|this is peak|nice[.!?]|great[.!?]|if you want|sorry|i am|i'm|because you|the english title|thank you|thanks for|thanks\\b|found a good link|i think|i read|i saw|it was|it consists|the story|the doujin|the main girl|as i understand|one day|please remember|we recommend|you should check|don't worry|dont worry|i want such|in the end|and then)\\b")
 
     fun extract(latin: Text, japanese: Text, imageUri: String): List<BatchImageRecord> {
@@ -334,6 +335,7 @@ object BatchImageTextExtractor {
             pendingArtist = null
         }
 
+        val hasSocialChrome = lines.any { communityRegex.matches(it) || usernameRegex.containsMatchIn(it) || timeRegex.matches(it) || noiseRegex.containsMatchIn(it) }
         lines.forEachIndexed { index, line ->
             val artistMatch = labeledArtistRegex.matchEntire(line)
             if (artistMatch != null) {
@@ -361,7 +363,7 @@ object BatchImageTextExtractor {
             creatorDashTitleRegex.matchEntire(line)?.let { addCandidate(it.groupValues[2], 90, it.groupValues[1]) }
             if (leadingArtist != null) return@forEachIndexed
             val formatted = trailingArtistRegex.matchEntire(line) != null || trailingOpenArtistRegex.matchEntire(line) != null
-            titleCandidateScore(line, index)?.let { addCandidate(line, if (formatted) maxOf(it, 88) else it) }
+            titleCandidateScore(line, index, hasSocialChrome)?.let { addCandidate(line, if (formatted) maxOf(it, 88) else it) }
         }
 
         if (titleCandidates.isEmpty() && code == null && link == null) return emptyList()
@@ -389,22 +391,25 @@ object BatchImageTextExtractor {
         }
     }
 
-    private fun isLikelyPostTitle(value: String): Boolean {
+    private fun isLikelyPostTitle(value: String, hasSocialChrome: Boolean): Boolean {
         val line = cleanTitle(value) ?: return false
         if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line)) return false
         if (noiseRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
+        if (hasSocialChrome && commenterNameRegex.matches(line)) return false
+        val firstLetter = line.firstOrNull(Char::isLetter)
+        if (hasSocialChrome && firstLetter != null && firstLetter.isLowerCase() && firstLetter.code < 0x3000) return false
         if (requestLineRegex.containsMatchIn(line)) return false
         if (Regex("(?i)(?:·|•|\\s)\\d+\\s*(?:s|m|h|d|w|mo|y)\\b").containsMatchIn(line)) return false
         if (Regex("(?i)^\\s*(?:judul|title|name|artist|by|creator|author|code|chapter|tags?|genre|home|share|comment|reply)\\s*[:：]?").containsMatchIn(line)) return false
         if (line.count { it.isLetter() } < 5 || line.split(Regex("\\s+")).size < 2) return false
-        if (line.endsWith('.') || line.endsWith('?')) return false
+        if (line.endsWith('.') || line.endsWith('?') || line.endsWith(',')) return false
         if (pureCodeRegex.matches(line)) return false
         if (line.matches(Regex("[A-Z0-9][A-Z0-9 &'’:_-]{1,20}")) && line.count { it.isLetter() } < 12) return false
         return true
     }
 
-    private fun titleCandidateScore(value: String, index: Int): Int? {
-        if (!isLikelyPostTitle(value)) return null
+    private fun titleCandidateScore(value: String, index: Int, hasSocialChrome: Boolean): Int? {
+        if (!isLikelyPostTitle(value, hasSocialChrome)) return null
         val line = cleanTitle(value) ?: return null
         val words = line.split(Regex("\\s+")).size
         var score = 60 + minOf(line.length / 12, 12) + minOf(words, 8)
