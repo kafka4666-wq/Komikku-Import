@@ -58,7 +58,6 @@ class BatchImageSearchWorker(
             records.forEachIndexed { index, record ->
                 if (isStopped) throw CancellationException("Source search cancelled")
                 val queryTitle = record.title?.takeIf(String::isNotBlank)
-                val queryArtist = record.artist?.takeIf(String::isNotBlank)
                 // An artist-only query may return an entire catalog. Leave those candidates
                 // for manual review instead of auto-favoriting unrelated works.
                 if (queryTitle == null) {
@@ -67,9 +66,8 @@ class BatchImageSearchWorker(
                     setProgress(progressData(completed, records.size, added, alreadyPresent, unmatched, "No title or artist to search"))
                     return@forEachIndexed
                 }
-                val query = listOfNotNull(queryTitle, queryArtist).joinToString(" ")
                 val titleQueries = BatchImageTextExtractor.searchQueries(queryTitle!!)
-                setProgress(progressData(completed, records.size, added, alreadyPresent, unmatched, "Searching ${index + 1}/${records.size}: $query"))
+                setProgress(progressData(completed, records.size, added, alreadyPresent, unmatched, "Searching ${index + 1}/${records.size}: ${titleQueries.firstOrNull().orEmpty()}"))
 
                 var best: Candidate? = null
                 for (source in sources) {
@@ -83,7 +81,7 @@ class BatchImageSearchWorker(
                             }
                         }.getOrDefault(emptyList())
                         for (manga in matches) {
-                            val score = titleQueries.maxOfOrNull { matchScore(it, queryArtist, manga) } ?: 0
+                            val score = titleQueries.maxOfOrNull { matchScore(it, manga) } ?: 0
                             if (score >= MINIMUM_MATCH_SCORE && (best == null || score > best!!.score)) {
                                 best = Candidate(manga, source.name, score)
                             }
@@ -176,9 +174,9 @@ class BatchImageSearchWorker(
             KEY_PHASE to phase,
         )
 
-    private fun matchScore(title: String?, artist: String?, manga: Manga): Int {
-        val target = title ?: artist ?: return 0
-        val candidateText = if (title != null) manga.title else listOfNotNull(manga.artist, manga.author).joinToString(" ")
+    private fun matchScore(title: String?, manga: Manga): Int {
+        val target = title ?: return 0
+        val candidateText = manga.title
         val targetNormalized = normalize(target)
         val candidateNormalized = normalize(candidateText)
         if (targetNormalized.isBlank() || candidateNormalized.isBlank()) return 0
@@ -186,15 +184,19 @@ class BatchImageSearchWorker(
             targetNormalized == candidateNormalized -> 100
             candidateNormalized.contains(targetNormalized) || targetNormalized.contains(candidateNormalized) -> 88
             else -> {
-                val targetTokens = targetNormalized.split(' ').filter(String::isNotBlank).toSet()
-                val candidateTokens = candidateNormalized.split(' ').filter(String::isNotBlank).toSet()
-                if (targetTokens.isEmpty() || candidateTokens.isEmpty()) 0
-                else (100.0 * targetTokens.intersect(candidateTokens).size / maxOf(targetTokens.size, candidateTokens.size)).toInt()
+                val targetTokens = targetNormalized.split(' ').filter { it.length > 1 }.toSet()
+                val candidateTokens = candidateNormalized.split(' ').filter { it.length > 1 }.toSet()
+                val common = targetTokens.intersect(candidateTokens).size
+                when {
+                    targetTokens.size < 2 || candidateTokens.isEmpty() -> 0
+                    common >= targetTokens.size -> 91
+                    common >= 3 && common * 100 / targetTokens.size >= 75 -> (85 + common * 15 / targetTokens.size)
+                    else -> 0
+                }
             }
         }
         if (titleScore == 0) return 0
-        val creatorScore = if (artist != null && normalize(listOfNotNull(manga.artist, manga.author).joinToString(" ")) == normalize(artist)) 8 else 0
-        return (titleScore + creatorScore).coerceAtMost(100)
+        return titleScore.coerceAtMost(100)
     }
 
     private fun normalize(value: String): String = value

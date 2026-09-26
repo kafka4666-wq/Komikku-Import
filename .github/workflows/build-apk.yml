@@ -77,6 +77,12 @@ jobs:
           assert_source "Batch Image WorkManager" "class BatchImageWorker" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image installed-source auto-add" "class BatchImageSearchWorker" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image screenshot review" "BatchImageReviewCard" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image link export" 'CreateDocument("text/plain")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image screenshot preview" "Full screenshot preview" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image manual result removal" "onRemove =" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image selected search/import" 'Text("Search + import")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image URL record codec" "record.links.joinToString" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image artist-free source matching" "val candidateText = manga.title" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image multi-title extraction" "fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image cleaned source queries" "fun searchQueries(title: String): List<String>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image OCR regression tests" "multiple title lines in comments remain separate review candidates" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt

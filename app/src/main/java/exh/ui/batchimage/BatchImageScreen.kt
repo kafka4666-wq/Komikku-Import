@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Checklist
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.ImageSearch
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +55,7 @@ import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
 import exh.ui.batchadd.BatchImportJob
 import kotlinx.coroutines.flow.collectLatest
+import java.io.OutputStreamWriter
 import java.util.UUID
 
 class BatchImageScreen : Screen() {
@@ -67,7 +70,20 @@ class BatchImageScreen : Screen() {
         var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var sourceSearchInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var records by remember { mutableStateOf<List<BatchImageRecord>>(emptyList()) }
+        var previewRecord by remember { mutableStateOf<BatchImageRecord?>(null) }
+        var pendingLinkExport by remember { mutableStateOf("") }
         val selectedIds = remember { mutableStateListOf<String>() }
+
+        val linkFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            if (uri != null) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        OutputStreamWriter(output, Charsets.UTF_8).use { it.write(pendingLinkExport) }
+                    } ?: error("Could not open selected file")
+                    Toast.makeText(context, "Saved screenshot links", Toast.LENGTH_SHORT).show()
+                }.onFailure { Toast.makeText(context, "Could not save links: ${it.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
 
         val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty()) {
@@ -125,14 +141,11 @@ class BatchImageScreen : Screen() {
         val phase = progress?.getString(BatchImageWorker.KEY_PHASE).orEmpty()
         val selectedRecords = records.filter { it.id in selectedIds }
         val titleRecords = selectedRecords.filter { !it.title.isNullOrBlank() }
+        val explicitCodes = selectedRecords.filter { !it.code.isNullOrBlank() && it.link.isNullOrBlank() }
         val isSourceSearchRunning = sourceSearchInfo?.state == WorkInfo.State.RUNNING ||
             sourceSearchInfo?.state == WorkInfo.State.ENQUEUED || sourceSearchInfo?.state == WorkInfo.State.BLOCKED
-        val importableLinks = selectedRecords.mapNotNull { record ->
-            record.link ?: record.code?.let { "https://nhentai.net/g/$it/" }
-        }.distinct()
-        val selectedQuery = selectedRecords.firstOrNull { !it.title.isNullOrBlank() || !it.artist.isNullOrBlank() }?.let { record ->
-            listOfNotNull(record.title, record.artist).joinToString(" ")
-        }
+        val detectedLinks = records.flatMap { it.links }.distinct()
+        val selectedQuery = titleRecords.firstOrNull()?.title?.let { BatchImageTextExtractor.searchQueries(it).firstOrNull() }
 
         Scaffold(
             topBar = {
@@ -229,34 +242,24 @@ class BatchImageScreen : Screen() {
                     }
                     item {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(enabled = selectedQuery != null, onClick = {
-                                selectedQuery?.let { navigator?.push(GlobalSearchScreen(it)) }
-                            }, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Outlined.Search, contentDescription = null)
-                                Text(" Search selected")
-                            }
-                            Button(enabled = importableLinks.isNotEmpty(), onClick = {
-                                if (importableLinks.isNotEmpty()) {
-                                    BatchImportJob.start(context.applicationContext, importableLinks)
-                                    Toast.makeText(context, "Sent ${importableLinks.size} item(s) to Batch Add", Toast.LENGTH_SHORT).show()
+                            Button(enabled = detectedLinks.isNotEmpty(), onClick = {
+                                pendingLinkExport = detectedLinks.joinToString("\n", postfix = "\n")
+                                linkFilePicker.launch("Batch_Image_Links.txt")
+                            }, modifier = Modifier.weight(1f)) { Text("Save links .txt (${detectedLinks.size})") }
+                            Button(enabled = selectedQuery != null || explicitCodes.isNotEmpty(), onClick = {
+                                if (explicitCodes.isNotEmpty()) {
+                                    val codeUrls = explicitCodes.mapNotNull { record -> record.code?.let { "https://nhentai.net/g/$it/" } }.distinct()
+                                    if (codeUrls.isNotEmpty()) BatchImportJob.start(context.applicationContext, codeUrls)
                                 }
-                            }, modifier = Modifier.weight(1f)) {
-                                Text("Import ${importableLinks.size}")
-                            }
-                        }
-                    }
-                    item {
-                        Button(
-                            enabled = titleRecords.isNotEmpty() && !isSourceSearchRunning,
-                            onClick = {
                                 if (titleRecords.isNotEmpty()) {
                                     sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, titleRecords).toString()
                                     sourceSearchInfo = null
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        ) {
-                            Text("Search installed sources + auto-add ${titleRecords.size} title${if (titleRecords.size == 1) "" else "s"}")
+                                Toast.makeText(context, "Started search/import for ${titleRecords.size} title(s) and ${explicitCodes.size} code(s)", Toast.LENGTH_SHORT).show()
+                            }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Outlined.Search, contentDescription = null)
+                                Text("Search + import")
+                            }
                         }
                     }
                     if (sourceSearchId != null) {
@@ -296,7 +299,7 @@ class BatchImageScreen : Screen() {
                     }
                     item {
                         Text(
-                            "Selected titles are searched across enabled installed sources; a clear best match is added to your library automatically. Artist-only results and uncertain matches stay for review. Numeric codes and links use Batch Add.",
+                            "Search uses title keywords without artist names. Selected nhentai codes are imported through Batch Add; detected web links are saved only to the .txt file you choose.",
                             Modifier.padding(horizontal = 16.dp),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -310,8 +313,14 @@ class BatchImageScreen : Screen() {
                                 if (record.id in selectedIds) selectedIds.remove(record.id) else selectedIds.add(record.id)
                             },
                             onSearch = {
-                                val query = listOfNotNull(record.title, record.artist).joinToString(" ")
+                                val query = record.title?.let { BatchImageTextExtractor.searchQueries(it).firstOrNull() }.orEmpty()
                                 if (query.isNotBlank()) navigator?.push(GlobalSearchScreen(query))
+                            },
+                            onPreview = { previewRecord = record },
+                            onRemove = {
+                                records = records.filterNot { it.id == record.id }
+                                selectedIds.remove(record.id)
+                                BatchImageWorker.saveRecords(BatchImageWorker.recordsFile(context), records)
                             },
                         )
                     }
@@ -323,6 +332,14 @@ class BatchImageScreen : Screen() {
                 item { Text("Folders and images stay on this device during OCR. Results are kept locally for review.", Modifier.padding(16.dp), style = MaterialTheme.typography.labelSmall) }
             }
         }
+        previewRecord?.let { record ->
+            AlertDialog(
+                onDismissRequest = { previewRecord = null },
+                confirmButton = { TextButton(onClick = { previewRecord = null }) { Text("Close") } },
+                title = { Text(record.title ?: record.code?.let { "nhentai #$it" } ?: "Screenshot preview") },
+                text = { AsyncImage(model = Uri.parse(record.imageUri), contentDescription = "Full screenshot preview", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().height(480.dp)) },
+            )
+        }
     }
 }
 
@@ -332,6 +349,8 @@ private fun BatchImageReviewCard(
     selected: Boolean,
     onToggle: () -> Unit,
     onSearch: () -> Unit,
+    onPreview: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -344,13 +363,17 @@ private fun BatchImageReviewCard(
                     record.link?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
                     Text("OCR confidence: ${record.confidence}%", style = MaterialTheme.typography.labelSmall)
                 }
-                if (!record.title.isNullOrBlank() || !record.artist.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
+                if (!record.title.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
             }
             AsyncImage(
                 model = Uri.parse(record.imageUri),
                 contentDescription = "Source screenshot",
                 modifier = Modifier.fillMaxWidth().height(180.dp),
             )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onPreview) { Text("Preview") }
+                TextButton(onClick = onRemove) { Text("Remove") }
+            }
         }
     }
 }

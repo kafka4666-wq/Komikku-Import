@@ -331,4 +331,82 @@ class BatchImageTextExtractorTest {
         )
         assertEquals(listOf("Let Me Stay the Night, Otaku"), results.map { it.title })
     }
+
+    @Test
+    fun `page metadata and reddit comment snippets do not duplicate a code result`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "X r/doujinshi",
+                "Page Number: 136",
+                "Additional Links: Pixiv",
+                "Search image on Google, Yandex, SauceNao",
+                "Since it's not included in the tankōbon volumes, information",
+                "Code: 465278",
+            ),
+            "content://example/reddit-code-extra-comments.jpg",
+        )
+        assertEquals(1, results.size)
+        assertEquals("465278", results.single().code)
+        assertNull(results.single().title)
+    }
+
+    @Test
+    fun `web links are exported in normalized form and social profile URLs are omitted`() {
+        val result = BatchImageTextExtractor.extractLines(
+            listOf("Source: pixiv.net/artworks/12345", "https://reddit.com/r/doujinshi", "nhentai.net/g/465278/"),
+            "content://example/top-comment-links.jpg",
+        ).single()
+        assertEquals(listOf("https://pixiv.net/artworks/12345", "https://nhentai.net/g/465278/"), result.links)
+        assertEquals("465278", result.code)
+    }
+
+    @Test
+    fun `search query variants remove artist suffix and include useful title keywords`() {
+        val queries = BatchImageTextExtractor.searchQueries("Gyaru to Mama desu zo Artist: Okumoto Yuutta")
+        assertTrue(queries.first().contains("Gyaru to Mama desu zo"))
+        assertTrue(queries.none { it.contains("Okumoto", ignoreCase = true) })
+        assertTrue(queries.any { it.split(' ').size in 2..4 })
+    }
+
+    @Test
+    fun `record codec preserves exported URLs and remains compatible with older rows`() {
+        val record = BatchImageRecord("id", "A Title", "An Artist", "465278", null, "content://example/image.jpg", 92, listOf("https://pixiv.net/1", "https://site.example/title"))
+        assertEquals(record, BatchImageRecordCodec.decode(BatchImageRecordCodec.encode(record)))
+        val legacy = BatchImageRecordCodec.encode(record).split('\t').take(7).joinToString("\t")
+        val decodedLegacy = BatchImageRecordCodec.decode(legacy)
+        assertEquals(listOf<String>(), decodedLegacy?.links)
+    }
+
+    @Test
+    fun `trailing by artist is excluded from every generated source query`() {
+        val queries = BatchImageTextExtractor.searchQueries("Attack Next Door Girl by Ichinose Land")
+        assertTrue(queries.first().contains("Attack Next Door Girl"))
+        assertTrue(queries.none { it.contains("Ichinose", ignoreCase = true) || it.contains("Land", ignoreCase = true) })
+    }
+
+    @Test
+    fun `short title above following artist label is retained with the artist`() {
+        val result = BatchImageTextExtractor.extractLines(
+            listOf("My Title", "Artist: Kasei"),
+            "content://example/short-title-artist.jpg",
+        ).single()
+        assertEquals("My Title", result.title)
+        assertEquals("Kasei", result.artist)
+    }
+
+    @Test
+    fun `facebook and reddit screenshot extras are dropped when a formatted title exists`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "Diksi baru >>> BPJS",
+                "Sederhana tapi penikmat ntr tidak suka",
+                "Since it's not included in the tankōbon volumes, information",
+                "Title: Gyaru to Mama desu zo",
+                "Artist: Okumoto Yuutta",
+            ),
+            "content://example/facebook-and-reddit-extra.jpg",
+        )
+        assertEquals(listOf("Gyaru to Mama desu zo"), results.map { it.title })
+        assertEquals(listOf("Okumoto Yuutta"), results.map { it.artist })
+    }
 }

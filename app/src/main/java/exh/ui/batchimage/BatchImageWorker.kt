@@ -223,6 +223,14 @@ class BatchImageWorker(
             filePath?.let(::File)?.takeIf(File::exists)?.readLines()?.mapNotNull(BatchImageRecordCodec::decode).orEmpty()
         }.getOrDefault(emptyList())
 
+        fun saveRecords(filePath: String?, records: List<BatchImageRecord>) {
+            val file = filePath?.let(::File) ?: return
+            runCatching {
+                file.parentFile?.mkdirs()
+                file.writeText(records.joinToString("\n") { BatchImageRecordCodec.encode(it) }.let { if (it.isBlank()) "" else "$it\n" })
+            }
+        }
+
         fun recordsFile(context: Context): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(PREF_RESULT_FILE, null)
 
         fun clearSaved(context: Context) {
@@ -242,18 +250,21 @@ data class BatchImageRecord(
     val link: String?,
     val imageUri: String,
     val confidence: Int,
+    val links: List<String> = listOfNotNull(link),
 )
 
 internal object BatchImageRecordCodec {
     fun encode(record: BatchImageRecord): String = listOf(
         record.id, record.title.orEmpty(), record.artist.orEmpty(), record.code.orEmpty(),
-        record.link.orEmpty(), record.imageUri, record.confidence.toString(),
+        record.link.orEmpty(), record.imageUri, record.confidence.toString(), record.links.joinToString("\n"),
     ).joinToString("\t") { android.util.Base64.encodeToString(it.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP) }
 
     fun decode(line: String): BatchImageRecord? = runCatching {
         val fields = line.split('\t').map { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8) }
-        if (fields.size != 7) return null
-        BatchImageRecord(fields[0], fields[1].ifBlank { null }, fields[2].ifBlank { null }, fields[3].ifBlank { null }, fields[4].ifBlank { null }, fields[5], fields[6].toIntOrNull() ?: 0)
+        if (fields.size !in 7..8) return null
+        val link = fields[4].ifBlank { null }
+        val links = fields.getOrNull(7)?.takeIf(String::isNotBlank)?.split('\n') ?: listOfNotNull(link)
+        BatchImageRecord(fields[0], fields[1].ifBlank { null }, fields[2].ifBlank { null }, fields[3].ifBlank { null }, link, fields[5], fields[6].toIntOrNull() ?: 0, links)
     }.getOrNull()
 }
 
@@ -271,13 +282,19 @@ object BatchImageTextExtractor {
     private val saucePrefixRegex = Regex("(?i)^\\s*(?:full\\s+)?sauce\\s*[:：\\-]\\s*(.+)$")
     private val trailingSocialCountRegex = Regex("(?i)\\s*(?:\\+\\s*\\d+|[·•]\\s*\\d+\\s*(?:comments?|replies?|likes?))\\s*$")
     private val markdownLinkRegex = Regex("\\[([^]]+)]\\(https?://[^)]+\\)", RegexOption.IGNORE_CASE)
-    private val genericUrlRegex = Regex("(?i)https?://\\S+")
+    private val genericUrlRegex = Regex("(?i)(?:https?://|www\\.)[^\\s<>\\\"']+|(?<![@\\w])(?:[a-z0-9-]+\\.)+(?:com|net|org|io|co|jp|me|info|xyz|to|tv)(?:/[^\\s<>\\\"']*)?")
+    private val socialUrlRegex = Regex("(?i)^https?://(?:www\\.)?(?:facebook\\.com|instagram\\.com|reddit\\.com|redd\\.it|tiktok\\.com|youtube\\.com|youtu\\.be|twitter\\.com|x\\.com)(?:/|$)")
+    private val metadataLineRegex = Regex("(?i)^\\s*(?:page\\s+number|additional\\s+links?|search\\s+image(?:\\s+on|\\s+for)?|official\\s+website|dragon\\s+age\\s+official|tags?|genre|language|chapter|volume|views?|comments?|likes?|shares?)\\s*[:：]?\\b")
+    private val linkLabelLineRegex = Regex("(?i)^\\s*(?:source|link|url|website|additional\\s+links?)\\s*[:：]")
     private val trailingByArtistRegex = Regex("(?i)^(.{3,120}?)\\s+by\\s+([\\p{L}\\p{N}][\\p{L}\\p{N}'’ _.-]{1,50})\\.?\\s*$")
+    private val trailingLabeledArtistRegex = Regex("(?i)^(.{3,120}?)\\s+artist\\s*[:：]\\s*(.{2,55})$")
     private val leadingArtistRegex = Regex("^\\s*\\[([^]]{2,55})]\\s*(.{3,120})$")
     private val creatorDashTitleRegex = Regex("(?i)^\\s*(?:\\d+\\.\\s*)?([^:|\\-–—]{2,50}?)\\s+[-–—]\\s+(.{5,130})$")
     private val trailingCatalogTagsRegex = Regex("(?i)\\s*\\[(?:english|japanese|chinese|translated|translation|digital|raw|language|repack|complete)[^]]*]\\s*$")
     private val requestLineRegex = Regex("(?i)^\\s*(?:lf(?:\\s+doujinshi)?\\b|looking\\s+for\\b|sauce\\s+pls?\\b|can\\s+anyone\\b|does\\s+anyone\\b|anyone\\s+(?:know|have|remember)\\b|need\\s+help\\b|what\\s+is\\s+the\\s+title\\b|title\\s+of\\s+this\\b)")
-    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|posts you may have missed|ask about this image|\\bauthor\\b|\\bartist\\s*[:：]|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare(?:s)?\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image for|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?|i am a bot|action was performed automatically|contact the moderators|moderators of this subreddit|please follow the community rules|enforced title format|reddit search|maybe sauce|sauce guys|anime meme|back to notifications|all comments|up next|for adult only|best artist|that's all for now|amazing work|cute couple|yo boy stood on business|see translation|view all|\\b2d\\s*author\\b|crotpedia project|nah gini loh|ngh gini loh|realita modern|de nandy estamos|nada del viernes|pacaran tinggal|doesn['’]?t\\s+matter|does not matter|for ad(?:u|l)t\\s*\\+\\s*only|\\.\\.\\.\\s*more\\s*$)")
+    private val screenshotNoiseRegex = Regex("(?i)(?:step aside bro|that['’]?s my reward|dragon age official website|additional links?|page number|search image on google|search image on yandex|saucenao|diksi baru|butuh pelukan|sederhana tapi penikmat|since it['’]?s? not included|tank[oō]bon volumes|de nandy estamos|nada del viernes|yo boy stood on business|meme50)")
+    private val usernameLikeArtistRegex = Regex("(?i)^[a-z][a-z0-9_.-]{1,20}\\d{1,5}$")
+    private val noiseRegex = Regex("(?i)(?:join the conversation|view more|see more|load more|show more|most relevant|posts you may have missed|ask about this image|\\bauthor\\b|upvote|downvote|\\bcomment\\b|\\breply\\b|\\bshare(?:s)?\\b|\\blike\\b|\\bfollow\\b|\\bsubscribe\\b|\\bnsfw\\b|\\bjoin\\b|\\bviews?\\b|\\brank\\b|\\brating\\b|\\btop fan\\b|\\bmod\\b|\\bop\\b|\\bfollowing\\b|\\brules?\\s*\\d*\\b|search image(?:\\s+on|\\s+for)|automoderator|subreddit wiki|full details|source please|source finder|result table|view \\d+ replies?|i am a bot|action was performed automatically|contact the moderators|moderators of this subreddit|please follow the community rules|enforced title format|reddit search|maybe sauce|sauce guys|anime meme|back to notifications|all comments|up next|for adult only|best artist|that's all for now|amazing work|cute couple|yo boy stood on business|see translation|view all|\\b2d\\s*author\\b|crotpedia project|nah gini loh|ngh gini loh|realita modern|de nandy estamos|nada del viernes|pacaran tinggal|doesn['’]?t\\s+matter|does not matter|for ad(?:u|l)t\\s*\\+\\s*only|dragon age official website|additional links?|page number|since it['’]?s? not included|volume information|step aside bro|diksi baru|butuh pelukan|sederhana tapi penikmat|\\.\\.\\.\\s*more\\s*$)")
     // Social app OCR often prepends a close/cross glyph to subreddit names (e.g. "X r/SauceSharingCommunity").
     private val communityRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*r\\s*[/l|]\\s*[\\p{L}\\p{N}_-]+(?:\\s.*)?$")
     private val usernameRegex = Regex("(?i)^\\s*[x×✕✖✓✗•·\\-–—]*\\s*(?:u\\s*/|@)[a-z0-9_.-]+(?:\\s|$)")
@@ -322,6 +339,16 @@ object BatchImageTextExtractor {
             val id = linkRegex.find(found)?.groupValues?.getOrNull(1) ?: return@let null
             "https://nhentai.net/g/$id/"
         }
+        val detectedLinks = (genericUrlRegex.findAll(joined).map { match ->
+            match.value.trimEnd('.', ',', ';', ':', ')', ']', '}', '>', '"', '\'').let { raw ->
+                when {
+                    raw.startsWith("http://", true) || raw.startsWith("https://", true) -> raw
+                    else -> "https://$raw"
+                }
+            }
+        }
+            .filter { !socialUrlRegex.containsMatchIn(it) }
+            .toList() + listOfNotNull(link)).distinct()
 
         val structuredArtist = lines.firstNotNullOfOrNull { line -> labeledArtistRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let(::cleanArtist) }
         val titleCandidates = LinkedHashMap<String, TitleCandidate>()
@@ -331,7 +358,7 @@ object BatchImageTextExtractor {
             val cleaned = raw?.let(::stripTitleCue)?.let(::cleanTitle) ?: return
             val (parsedTitle, parsedArtist) = parseTitleAndArtist(cleaned)
             val title = parsedTitle.trim()
-            if (platformBadgeRegex.matches(title) || noiseRegex.containsMatchIn(title) || socialReactionRegex.containsMatchIn(title)) return
+            if (platformBadgeRegex.matches(title) || noiseRegex.containsMatchIn(title) || screenshotNoiseRegex.containsMatchIn(title) || socialReactionRegex.containsMatchIn(title) || metadataLineRegex.containsMatchIn(title)) return
             if (title.length < 3 || !title.any(Char::isLetter)) return
             val key = normalizeTitle(title)
             if (key.isBlank()) return
@@ -364,19 +391,36 @@ object BatchImageTextExtractor {
             if (line.startsWith("rec:", true) || line.startsWith("rec ", true)) {
                 addCandidate(line.replaceFirst(Regex("(?i)^rec\\s*[:：]?\\s*"), ""), 96)
             }
-            saucePrefixRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let { addCandidate(it, 94) }
-            trailingByArtistRegex.matchEntire(line)?.let { addCandidate(it.groupValues[1], 96, it.groupValues[2]) }
+            saucePrefixRegex.matchEntire(line)?.groupValues?.getOrNull(1)?.let { sauce ->
+                val byCredit = trailingByArtistRegex.matchEntire(sauce)
+                if (byCredit != null) addCandidate(byCredit.groupValues[1], 96, byCredit.groupValues[2])
+                else addCandidate(sauce, 94)
+            }
+            trailingLabeledArtistRegex.matchEntire(line)?.let {
+                addCandidate(it.groupValues[1], 96, it.groupValues[2])
+                return@forEachIndexed
+            }
             val leadingArtist = leadingArtistRegex.matchEntire(line)
             leadingArtist?.let { addCandidate(it.groupValues[2], 96, it.groupValues[1]) }
             creatorDashTitleRegex.matchEntire(line)?.let { addCandidate(it.groupValues[2], 90, it.groupValues[1]) }
             if (leadingArtist != null) return@forEachIndexed
-            val formatted = trailingArtistRegex.matchEntire(line) != null || trailingOpenArtistRegex.matchEntire(line) != null
-            titleCandidateScore(line, index, hasSocialChrome)?.let { addCandidate(line, if (formatted) maxOf(it, 88) else it) }
+            val followingArtistLabel = labeledArtistRegex.matches(lines.getOrNull(index + 1).orEmpty())
+            val formatted = trailingArtistRegex.matchEntire(line) != null || trailingOpenArtistRegex.matchEntire(line) != null || followingArtistLabel
+            titleCandidateScore(line, index, hasSocialChrome, followingArtistLabel)?.let { addCandidate(line, if (formatted) maxOf(it, 90) else it) }
         }
 
-        if (titleCandidates.isEmpty() && code == null && link == null) return emptyList()
+        // Unlabelled comment fragments are frequent OCR false positives. Preserve all
+        // clearly formatted candidates, otherwise keep just the strongest plain title.
+        val strongTitles = titleCandidates.values.filter { it.confidence >= 88 }
+        val reviewTitles = when {
+            (link != null || code != null) && strongTitles.isNotEmpty() -> strongTitles.maxByOrNull { it.confidence }?.let(::listOf).orEmpty()
+            strongTitles.isNotEmpty() -> strongTitles
+            hasSocialChrome -> emptyList()
+            else -> titleCandidates.values.maxByOrNull { it.confidence }?.let(::listOf).orEmpty()
+        }
+        if (reviewTitles.isEmpty() && code == null && detectedLinks.isEmpty()) return emptyList()
         val imageKey = imageUri.hashCode().toUInt().toString(16)
-        val orderedTitles = titleCandidates.values.toList()
+        val orderedTitles = reviewTitles
         if (orderedTitles.isEmpty()) {
             val identifierScore = when {
                 link != null -> 100
@@ -384,7 +428,7 @@ object BatchImageTextExtractor {
                 pureCode != null -> 90
                 else -> 55
             }
-            return listOf(BatchImageRecord(imageKey, null, pendingArtist ?: structuredArtist, code, link, imageUri, identifierScore))
+            return listOf(BatchImageRecord(imageKey, null, pendingArtist ?: structuredArtist, code, link, imageUri, identifierScore, detectedLinks))
         }
         return orderedTitles.mapIndexed { index, candidate ->
             BatchImageRecord(
@@ -395,14 +439,16 @@ object BatchImageTextExtractor {
                 link = link,
                 imageUri = imageUri,
                 confidence = candidate.confidence,
+                links = detectedLinks,
             )
         }
     }
 
-    private fun isLikelyPostTitle(value: String, hasSocialChrome: Boolean): Boolean {
+    private fun isLikelyPostTitle(value: String, hasSocialChrome: Boolean, followsArtistLabel: Boolean = false): Boolean {
         val line = cleanTitle(value) ?: return false
-        if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line) || platformBadgeRegex.matches(line)) return false
-        if (noiseRegex.containsMatchIn(line) || socialReactionRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
+        if (genericUrlRegex.containsMatchIn(line) || linkLabelLineRegex.containsMatchIn(line)) return false
+        if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line) || platformBadgeRegex.matches(line) || metadataLineRegex.containsMatchIn(line)) return false
+        if (noiseRegex.containsMatchIn(line) || screenshotNoiseRegex.containsMatchIn(line) || socialReactionRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
         if (incompleteTailRegex.containsMatchIn(line)) return false
         if (hasSocialChrome && commenterNameRegex.matches(line)) return false
         val firstLetter = line.firstOrNull(Char::isLetter)
@@ -412,17 +458,19 @@ object BatchImageTextExtractor {
         if (Regex("(?i)^\\s*(?:judul|title|name|artist|by|creator|author|code|chapter|tags?|genre|home|share|comment|reply)\\s*[:：]?").containsMatchIn(line)) return false
         if (Regex("(?i)\\b(?:artist|author|creator)\\s*[:：]").containsMatchIn(line)) return false
         val words = line.split(Regex("\\s+"))
+        if (words.size == 1 && line.any(Char::isDigit) && line.any(Char::isLetter)) return false
         if (line.count { it.isLetter() } < 5 || words.size < 2) return false
-        if (words.size == 2 && line.length < 12) return false
-        if (words.size >= 3 && line.length < 15 && !line.any(Char::isDigit)) return false
+        if (line.contains('%') && line.split(Regex("\\s+")).size <= 4) return false
+        if (words.size == 2 && line.length < 12 && !followsArtistLabel) return false
+        if (words.size >= 3 && line.length < 15 && !line.any(Char::isDigit) && !followsArtistLabel) return false
         if (line.endsWith('.') || line.endsWith('?') || line.endsWith(',')) return false
         if (pureCodeRegex.matches(line)) return false
         if (line.matches(Regex("[A-Z0-9][A-Z0-9 &'’:_-]{1,20}")) && line.count { it.isLetter() } < 12) return false
         return true
     }
 
-    private fun titleCandidateScore(value: String, index: Int, hasSocialChrome: Boolean): Int? {
-        if (!isLikelyPostTitle(value, hasSocialChrome)) return null
+    private fun titleCandidateScore(value: String, index: Int, hasSocialChrome: Boolean, followsArtistLabel: Boolean = false): Int? {
+        if (!isLikelyPostTitle(value, hasSocialChrome, followsArtistLabel)) return null
         val line = cleanTitle(value) ?: return null
         val words = line.split(Regex("\\s+")).size
         var score = 60 + minOf(line.length / 12, 12) + minOf(words, 8)
@@ -437,23 +485,37 @@ object BatchImageTextExtractor {
 
     /** Search variants remove creator fragments and try the subtitle after a colon too. */
     fun searchQueries(title: String): List<String> {
-        val parsed = parseTitleAndArtist(title).first
+        val byArtist = trailingByArtistRegex.matchEntire(title.trim())
+        val noByArtist = byArtist?.groupValues?.getOrNull(1)?.trim() ?: title
+        val parsed = parseTitleAndArtist(noByArtist).first
         val noDanglingCredit = trailingOpenArtistRegex.replace(parsed, "$1").trim()
         val clean = cleanTitle(noDanglingCredit) ?: noDanglingCredit.trim()
         val candidates = buildList {
             add(clean)
             clean.substringAfterLast(':', "").trim().takeIf { it.length >= 6 }?.let(::add)
             clean.substringAfterLast('—', "").trim().takeIf { it.length >= 6 }?.let(::add)
+            val keywordTokens = clean.lowercase().split(Regex("[^\\p{L}\\p{N}]+"))
+                .filter { it.length > 1 && it !in SEARCH_STOP_WORDS }
+            if (keywordTokens.size >= 2) add(keywordTokens.joinToString(" "))
+            if (keywordTokens.size >= 3) add(keywordTokens.takeLast(minOf(4, keywordTokens.size)).joinToString(" "))
+            if (keywordTokens.size >= 5) add(keywordTokens.take(4).joinToString(" "))
         }
         return candidates.map { it.trim().trim(':', '-', '—', '[', '(', ')', ']') }
             .filter { it.length >= 3 }
             .distinctBy { it.lowercase() }
     }
 
+    private val SEARCH_STOP_WORDS = setOf("the", "a", "an", "and", "or", "of", "to", "in", "on", "with", "for", "by", "my", "your", "is", "no", "wa", "ni", "de")
+
     private fun parseTitleAndArtist(raw: String): Pair<String, String?> {
         var title = cleanTitle(raw).orEmpty()
         title = trailingCreditRegex.replace(title, "").trim()
         title = trailingCatalogTagsRegex.replace(title, "").trim()
+        val labeledArtist = trailingLabeledArtistRegex.matchEntire(title)
+        if (labeledArtist != null) {
+            val artist = cleanArtist(labeledArtist.groupValues[2])
+            if (artist != null) return cleanTitle(labeledArtist.groupValues[1]).orEmpty() to artist
+        }
         val suffix = trailingArtistRegex.matchEntire(title)
         if (suffix != null) {
             val possibleArtist = cleanArtist(suffix.groupValues[2])
@@ -468,11 +530,6 @@ object BatchImageTextExtractor {
             if (possibleArtist != null && !possibleArtist.matches(Regex("[A-Z0-9 _-]{3,}"))) {
                 return cleanTitle(openSuffix.groupValues[1]).orEmpty() to possibleArtist
             }
-        }
-        val bySuffix = trailingByArtistRegex.matchEntire(title)
-        if (bySuffix != null) {
-            val possibleArtist = cleanArtist(bySuffix.groupValues[2])
-            if (possibleArtist != null) return cleanTitle(bySuffix.groupValues[1]).orEmpty() to possibleArtist
         }
         val leading = leadingArtistRegex.matchEntire(title)
         if (leading != null) return cleanTitle(leading.groupValues[2]).orEmpty() to cleanArtist(leading.groupValues[1])
@@ -499,7 +556,7 @@ object BatchImageTextExtractor {
 
     private fun cleanArtist(value: String): String? = value.trim().trim('(', ')', '[', ']', ':', '：', '-', '—', '.', '。')
         .replace(Regex("\\s+"), " ")
-        .takeIf { it.length in 2..60 && it.any(Char::isLetter) && !noiseRegex.containsMatchIn(it) && !artistSentenceCueRegex.containsMatchIn(it) }
+        .takeIf { it.length in 2..60 && it.any(Char::isLetter) && !noiseRegex.containsMatchIn(it) && !screenshotNoiseRegex.containsMatchIn(it) && !socialReactionRegex.containsMatchIn(it) && !artistSentenceCueRegex.containsMatchIn(it) && !usernameLikeArtistRegex.matches(it) }
 
     private fun cleanLine(value: String): String = value.replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
 
