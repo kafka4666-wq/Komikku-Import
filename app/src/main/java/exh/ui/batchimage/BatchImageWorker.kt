@@ -415,7 +415,6 @@ object BatchImageTextExtractor {
         val reviewTitles = when {
             (link != null || code != null) && strongTitles.isNotEmpty() -> strongTitles.maxByOrNull { it.confidence }?.let(::listOf).orEmpty()
             strongTitles.isNotEmpty() -> strongTitles
-            hasSocialChrome -> emptyList()
             else -> titleCandidates.values.maxByOrNull { it.confidence }?.let(::listOf).orEmpty()
         }
         if (reviewTitles.isEmpty() && code == null && detectedLinks.isEmpty()) return emptyList()

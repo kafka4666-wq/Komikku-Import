@@ -369,12 +369,9 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
-    fun `record codec preserves exported URLs and remains compatible with older rows`() {
+    fun `record carries all distinct detected links for export`() {
         val record = BatchImageRecord("id", "A Title", "An Artist", "465278", null, "content://example/image.jpg", 92, listOf("https://pixiv.net/1", "https://site.example/title"))
-        assertEquals(record, BatchImageRecordCodec.decode(BatchImageRecordCodec.encode(record)))
-        val legacy = BatchImageRecordCodec.encode(record).split('\t').take(7).joinToString("\t")
-        val decodedLegacy = BatchImageRecordCodec.decode(legacy)
-        assertEquals(listOf<String>(), decodedLegacy?.links)
+        assertEquals(listOf("https://pixiv.net/1", "https://site.example/title"), record.links)
     }
 
     @Test

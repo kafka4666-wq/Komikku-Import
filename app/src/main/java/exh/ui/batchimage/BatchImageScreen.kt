@@ -246,7 +246,7 @@ class BatchImageScreen : Screen() {
                                 pendingLinkExport = detectedLinks.joinToString("\n", postfix = "\n")
                                 linkFilePicker.launch("Batch_Image_Links.txt")
                             }, modifier = Modifier.weight(1f)) { Text("Save links .txt (${detectedLinks.size})") }
-                            Button(enabled = selectedQuery != null || explicitCodes.isNotEmpty(), onClick = {
+                            Button(enabled = (selectedQuery != null || explicitCodes.isNotEmpty()) && !isSourceSearchRunning, onClick = {
                                 if (explicitCodes.isNotEmpty()) {
                                     val codeUrls = explicitCodes.mapNotNull { record -> record.code?.let { "https://nhentai.net/g/$it/" } }.distinct()
                                     if (codeUrls.isNotEmpty()) BatchImportJob.start(context.applicationContext, codeUrls)
