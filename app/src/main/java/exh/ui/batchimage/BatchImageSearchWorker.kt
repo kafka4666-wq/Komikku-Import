@@ -194,7 +194,7 @@ class BatchImageSearchWorker(
         NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT)
             .setSmallIcon(R.drawable.ic_komikku)
             .setContentTitle("Batch Image title search")
-            .setContentText(phase ?: "$completed/$total unique titles processed · $added added")
+            .setContentText(phase ?: "$completed/$total unique titles processed")
             .setProgress(total.coerceAtLeast(1), completed.coerceAtMost(total), false)
             .setOngoing(completed < total)
             .setOnlyAlertOnce(true)
