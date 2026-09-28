@@ -53,9 +53,12 @@ import eu.kanade.tachiyomi.util.system.workManager
 import coil3.compose.AsyncImage
 import cafe.adriel.voyager.navigator.LocalNavigator
 import eu.kanade.presentation.util.Screen
+import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
 import exh.ui.batchadd.BatchImportJob
 import kotlinx.coroutines.flow.collectLatest
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import java.io.OutputStreamWriter
 import java.util.UUID
 
@@ -65,6 +68,11 @@ class BatchImageScreen : Screen() {
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
+        val codeImportStatus = remember { Injekt.get<BatchImportStatus>() }
+        val codeImportSnapshot by codeImportStatus.state.collectAsState()
+        var codeImportWorkId by remember { mutableStateOf(BatchImportJob.savedJobId(context)) }
+        var codeImportWorkInfo by remember { mutableStateOf<WorkInfo?>(null) }
+        var codeImportStartPending by remember { mutableStateOf(false) }
         var pendingSelections by remember { mutableStateOf<List<Pair<String, Uri>>>(emptyList()) }
         var jobIdText by remember { mutableStateOf(BatchImageWorker.savedJobId(context)) }
         var sourceSearchId by remember { mutableStateOf(BatchImageSearchWorker.savedJobId(context)) }
@@ -128,6 +136,16 @@ class BatchImageScreen : Screen() {
             }
         }
 
+        LaunchedEffect(codeImportWorkId) {
+            codeImportWorkInfo = null
+            val id = codeImportWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
+            manager.getWorkInfoByIdFlow(id).collectLatest { codeImportWorkInfo = it }
+        }
+
+        LaunchedEffect(codeImportWorkInfo?.state, codeImportSnapshot.running) {
+            if (codeImportWorkInfo?.state != null || codeImportSnapshot.running) codeImportStartPending = false
+        }
+
         fun startScan() {
             if (pendingSelections.isEmpty()) {
                 Toast.makeText(context, "Choose a folder or images first", Toast.LENGTH_SHORT).show()
@@ -147,12 +165,28 @@ class BatchImageScreen : Screen() {
         val discovered = progress?.getInt(BatchImageWorker.KEY_DISCOVERED, 0) ?: 0
         val phase = progress?.getString(BatchImageWorker.KEY_PHASE).orEmpty()
         val selectedRecords = records.filter { it.id in selectedIds }
-        val titleRecords = selectedRecords.filter { !it.title.isNullOrBlank() && it.code.isNullOrBlank() }
-        val explicitCodes = selectedRecords.filter { !it.code.isNullOrBlank() && it.link.isNullOrBlank() }
+        val selectionPlan = BatchImageSelectionPlan.from(selectedRecords)
+        val titleRecords = selectionPlan.titleRows
+        val explicitCodes = selectionPlan.codeRows
+        val selectedCodeUrls = selectionPlan.codeUrls
+        val titleGroups = selectionPlan.titleGroups
         val isSourceSearchRunning = sourceSearchInfo?.state == WorkInfo.State.RUNNING ||
             sourceSearchInfo?.state == WorkInfo.State.ENQUEUED || sourceSearchInfo?.state == WorkInfo.State.BLOCKED
+        val isCodeImportRunning = codeImportWorkInfo?.state == WorkInfo.State.RUNNING ||
+            codeImportWorkInfo?.state == WorkInfo.State.ENQUEUED || codeImportWorkInfo?.state == WorkInfo.State.BLOCKED || codeImportSnapshot.running || codeImportStartPending
+        val canStartSelection = (titleGroups.isNotEmpty() || selectedCodeUrls.isNotEmpty()) && !isSourceSearchRunning &&
+            (selectedCodeUrls.isEmpty() || !isCodeImportRunning)
         val detectedLinks = records.flatMap { it.links }.distinct()
-        val selectedQuery = titleRecords.firstOrNull()?.title?.let { BatchImageTextExtractor.searchQueries(it).firstOrNull() }
+        val codeImportOutput = codeImportWorkInfo?.outputData
+        val codeImportProgress = codeImportWorkInfo?.progress
+        val codeCompleted = codeImportProgress?.getInt(BatchImportJob.KEY_COMPLETED, codeImportOutput?.getInt(BatchImportJob.KEY_COMPLETED, codeImportSnapshot.completed) ?: codeImportSnapshot.completed)
+            ?: codeImportOutput?.getInt(BatchImportJob.KEY_COMPLETED, codeImportSnapshot.completed) ?: codeImportSnapshot.completed
+        val codeTotal = codeImportProgress?.getInt(BatchImportJob.KEY_TOTAL, codeImportOutput?.getInt(BatchImportJob.KEY_TOTAL, codeImportSnapshot.total) ?: codeImportSnapshot.total)
+            ?: codeImportOutput?.getInt(BatchImportJob.KEY_TOTAL, codeImportSnapshot.total) ?: codeImportSnapshot.total
+        val codeAdded = codeImportProgress?.getInt(BatchImportJob.KEY_ADDED, codeImportOutput?.getInt(BatchImportJob.KEY_ADDED, codeImportSnapshot.added) ?: codeImportSnapshot.added)
+            ?: codeImportOutput?.getInt(BatchImportJob.KEY_ADDED, codeImportSnapshot.added) ?: codeImportSnapshot.added
+        val codeFailed = codeImportProgress?.getInt(BatchImportJob.KEY_FAILED, codeImportOutput?.getInt(BatchImportJob.KEY_FAILED, codeImportSnapshot.failed) ?: codeImportSnapshot.failed)
+            ?: codeImportOutput?.getInt(BatchImportJob.KEY_FAILED, codeImportSnapshot.failed) ?: codeImportSnapshot.failed
 
         Scaffold(
             topBar = {
@@ -253,19 +287,47 @@ class BatchImageScreen : Screen() {
                                 pendingLinkExport = detectedLinks.joinToString("\n", postfix = "\n")
                                 linkFilePicker.launch("Batch_Image_Links.txt")
                             }, modifier = Modifier.weight(1f)) { Text("Save links .txt (${detectedLinks.size})") }
-                            Button(enabled = (selectedQuery != null || explicitCodes.isNotEmpty()) && !isSourceSearchRunning, onClick = {
-                                if (explicitCodes.isNotEmpty()) {
-                                    val codeUrls = explicitCodes.mapNotNull { record -> record.code?.let { "https://nhentai.net/g/$it/" } }.distinct()
-                                    if (codeUrls.isNotEmpty()) BatchImportJob.start(context.applicationContext, codeUrls)
+                            Button(enabled = canStartSelection, onClick = {
+                                if (selectedCodeUrls.isNotEmpty()) {
+                                    codeImportStartPending = true
+                                    codeImportWorkId = BatchImportJob.start(context.applicationContext, selectedCodeUrls).toString()
+                                    codeImportWorkInfo = null
                                 }
-                                if (titleRecords.isNotEmpty()) {
+                                if (titleGroups.isNotEmpty()) {
                                     sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, titleRecords).toString()
                                     sourceSearchInfo = null
                                 }
-                                Toast.makeText(context, "Started search/import for ${titleRecords.size} title(s) and ${explicitCodes.size} code(s)", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Started ${titleGroups.size} unique title search(es) and ${selectedCodeUrls.size} direct code import(s)", Toast.LENGTH_SHORT).show()
                             }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Outlined.Search, contentDescription = null)
-                                Text("Search + import")
+                                Text("Search ${titleGroups.size} + import ${selectedCodeUrls.size}")
+                            }
+                        }
+                    }
+                    item {
+                        Text(
+                            "Selected: ${selectedRecords.size} review rows · ${titleRecords.size} title rows (${titleGroups.size} unique title searches) · ${explicitCodes.size} nhentai code rows (${selectedCodeUrls.size} unique direct imports) · ${selectionPlan.otherRows.size} other rows stay in review. The .txt action exports all ${detectedLinks.size} links in this scan.",
+                            Modifier.padding(horizontal = 16.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (codeTotal > 0) {
+                        item {
+                            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        if (isCodeImportRunning) {
+                                            "Direct code imports $codeCompleted/$codeTotal processed · $codeAdded added · $codeFailed failed"
+                                        } else {
+                                            "Direct code import results · $codeCompleted/$codeTotal processed · $codeAdded added · $codeFailed failed"
+                                        },
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    if (isCodeImportRunning) LinearProgressIndicator(progress = { codeCompleted.toFloat() / codeTotal.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
+                                    if (codeImportSnapshot.currentUrl.isNotBlank()) Text(codeImportSnapshot.currentUrl, style = MaterialTheme.typography.bodySmall)
+                                    codeImportSnapshot.events.lastOrNull()?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                    if (isCodeImportRunning) TextButton(onClick = { BatchImportJob.cancel(context.applicationContext) }) { Text("Cancel direct code imports") }
+                                }
                             }
                         }
                     }
@@ -277,27 +339,36 @@ class BatchImageScreen : Screen() {
                                     val done = searchProgress?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0)
                                         ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0) ?: 0
                                     val totalSearch = searchProgress?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0)
-                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0) ?: titleRecords.size
+                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0) ?: titleGroups.size
                                     val added = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ADDED, 0)
                                         ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ADDED, 0) ?: 0
                                     val present = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0)
                                         ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0) ?: 0
                                     val unmatched = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0)
                                         ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0) ?: 0
-                                    val phase = searchProgress?.getString(BatchImageSearchWorker.KEY_PHASE).orEmpty()
+                                    val sourceTimeouts = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0)
+                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0) ?: 0
+                                    val sourceFailures = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0)
+                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: 0
+                                    val phase = searchProgress?.getString(BatchImageSearchWorker.KEY_PHASE)
+                                        ?: sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_PHASE).orEmpty()
+                                    val liveTimeouts = searchProgress?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0) ?: sourceTimeouts
+                                    val liveSourceFailures = searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: sourceFailures
                                     Text(
                                         when {
-                                            isSourceSearchRunning -> "Searching installed sources $done/$totalSearch…"
-                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Source search complete · $added added · $present already in library · $unmatched need review"
-                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Source search cancelled · $added added so far"
-                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Source search failed · $added added so far"
-                                            else -> "Installed-source search queued"
+                                            isSourceSearchRunning -> "Unique title searches $done/$totalSearch processed · $added added · $present already in library · $unmatched need review"
+                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Title search complete · $added added · $present already in library · $unmatched need review · $sourceTimeouts timed out · $sourceFailures failed source requests"
+                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Title search cancelled · $added added so far"
+                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Title search failed · $added added so far"
+                                            else -> "Title search queued"
                                         },
                                         style = MaterialTheme.typography.titleSmall,
                                     )
-                                    if (isSourceSearchRunning && phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
+                                    if ((isSourceSearchRunning || sourceSearchInfo?.state?.isFinished == true) && phase.isNotBlank()) {
+                                        Text("$phase · $liveTimeouts source requests timed out · $liveSourceFailures failed", style = MaterialTheme.typography.bodySmall)
+                                    }
                                     if (isSourceSearchRunning && totalSearch > 0) {
-                                        LinearProgressIndicator(progress = { done.toFloat() / totalSearch.toFloat() }, modifier = Modifier.fillMaxWidth())
+                                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                         TextButton(onClick = { manager.cancelWorkById(UUID.fromString(sourceSearchId)) }) { Text("Cancel source search") }
                                     }
                                 }
@@ -305,7 +376,7 @@ class BatchImageScreen : Screen() {
                         }
                     }
                     val unresolvedRecords = records.filter { record ->
-                        !record.title.isNullOrBlank() && searchOutcomes[record.id]?.status in setOf("not_found", "ambiguous", "add_failed")
+                        !record.title.isNullOrBlank() && searchOutcomes[record.id]?.status in setOf("not_found", "ambiguous", "add_failed", "timed_out", "source_error", "no_sources")
                     }
                     if (unresolvedRecords.isNotEmpty() && !isSourceSearchRunning) {
                         item {

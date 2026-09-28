@@ -40,6 +40,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A single process-wide gate shared by discovery and library insertion. */
@@ -91,6 +92,7 @@ class BatchImportJob(
 
         status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
         setForegroundSafely()
+        setProgress(progressData(nextIndex, urls.size, added, failed))
         showProgress(nextIndex, urls.size, added, failed)
 
         return try {
@@ -102,6 +104,7 @@ class BatchImportJob(
                 if (urls.size != announcedTotal) {
                     status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
                     announcedTotal = urls.size
+                    setProgress(progressData(nextIndex, urls.size, added, failed))
                     showProgress(nextIndex, urls.size, added, failed)
                 }
 
@@ -123,6 +126,7 @@ class BatchImportJob(
                     nextIndex++
                     checkpointFile.writeText(nextIndex.toString())
                     status.record(url, wasAdded, detail)
+                    setProgress(progressData(nextIndex, urls.size, added, failed))
                     showProgress(nextIndex, urls.size, added, failed)
                     continue
                 }
@@ -133,7 +137,7 @@ class BatchImportJob(
 
             writeLinksFile("batch_import_failed_links", failedLinks)
             showComplete(nextIndex, urls.size, added, failed)
-            Result.success()
+            Result.success(progressData(nextIndex, urls.size, added, failed))
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
                 val currentUrls = inputFile.readCompleteLinesSafely()
@@ -256,6 +260,13 @@ class BatchImportJob(
         context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed))
     }
 
+    private fun progressData(completed: Int, total: Int, added: Int, failed: Int) = workDataOf(
+        KEY_COMPLETED to completed,
+        KEY_TOTAL to total,
+        KEY_ADDED to added,
+        KEY_FAILED to failed,
+    )
+
     private fun showComplete(completed: Int, total: Int, added: Int, failed: Int) {
         // Stop the app-wide banner as soon as the queue is fully drained. A later
         // import calls begin() again, so the banner reappears for the new job.
@@ -313,17 +324,18 @@ class BatchImportJob(
         private const val PAUSE_POLL_MS = 500L
         private const val PREFS_NAME = "batch_import_controls"
         private const val PREFS_PAUSED = "paused"
+        private const val PREF_JOB_ID = "batch_import_job_id"
 
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         fun isPaused(context: Context): Boolean = prefs(context).getBoolean(PREFS_PAUSED, false)
         fun pause(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, true).apply() }
         fun resume(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, false).apply() }
 
-        fun start(context: Context, urls: List<String>) {
+        fun start(context: Context, urls: List<String>): UUID {
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
             input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
-            enqueue(context, input, androidx.work.ExistingWorkPolicy.REPLACE)
+            return enqueue(context, input, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
         }
 
         fun startFromFile(context: Context, input: File) {
@@ -331,20 +343,27 @@ class BatchImportJob(
             if (!input.exists()) input.createNewFile()
             // Discovery retries must not replace a worker that is already draining
             // this same growing file. KEEP also starts it again if the process died.
-            enqueue(context, input, androidx.work.ExistingWorkPolicy.KEEP)
+            enqueue(context, input, androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false)
         }
+
+        fun savedJobId(context: Context): String? = prefs(context).getString(PREF_JOB_ID, null)
 
         private fun enqueue(
             context: Context,
             input: File,
             policy: androidx.work.ExistingWorkPolicy,
-        ) {
+            saveJobId: Boolean,
+        ): UUID {
+            val requestId = UUID.randomUUID()
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
+                .setId(requestId)
                 .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
             context.workManager.enqueueUniqueWork(TAG, policy, request)
+            if (saveJobId) prefs(context).edit().putString(PREF_JOB_ID, requestId.toString()).apply()
+            return requestId
         }
 
         fun stop(context: Context) {
@@ -355,5 +374,10 @@ class BatchImportJob(
             resume(context)
             stop(context)
         }
+
+        const val KEY_COMPLETED = "completed"
+        const val KEY_TOTAL = "total"
+        const val KEY_ADDED = "added"
+        const val KEY_FAILED = "failed"
     }
 }

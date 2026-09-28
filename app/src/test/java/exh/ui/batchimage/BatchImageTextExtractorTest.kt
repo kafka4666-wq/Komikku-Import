@@ -112,6 +112,36 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
+    fun `duplicate OCR titles share one search group while retaining both screenshot records`() {
+        val first = BatchImageRecord("one", "Female Boss Hints", null, null, null, "content://one", 92)
+        val duplicate = BatchImageRecord("two", "Female Boss Hints by Tabal", "Tabal", null, null, "content://two", 87)
+        val noTitle = BatchImageRecord("three", null, null, "682640", null, "content://three", 96)
+
+        val groups = BatchImageTitleMatcher.groupRecords(listOf(first, duplicate, noTitle))
+
+        assertEquals(1, groups.size)
+        assertEquals("Female Boss Hints", groups.single().title)
+        assertEquals(listOf("one", "two"), groups.single().records.map { it.id })
+    }
+
+    @Test
+    fun `selection plan separates unique title searches codes and other review rows`() {
+        val firstTitle = BatchImageRecord("title1", "Female Boss Hints", null, null, null, "content://one", 92)
+        val sameTitleDifferentArtist = BatchImageRecord("title2", "Female Boss Hints by Tabal", "Tabal", null, null, "content://two", 87)
+        val firstCode = BatchImageRecord("code1", null, null, "682640", null, "content://three", 96)
+        val duplicateCode = BatchImageRecord("code2", null, null, "682640", null, "content://four", 92)
+        val linkOnly = BatchImageRecord("link", null, null, null, "https://example.org/item", "content://five", 82)
+
+        val plan = BatchImageSelectionPlan.from(listOf(firstTitle, sameTitleDifferentArtist, firstCode, duplicateCode, linkOnly))
+
+        assertEquals(2, plan.titleRows.size)
+        assertEquals(1, plan.titleGroups.size)
+        assertEquals(2, plan.codeRows.size)
+        assertEquals(listOf("https://nhentai.net/g/682640/"), plan.codeUrls)
+        assertEquals(listOf("link"), plan.otherRows.map { it.id })
+    }
+
+    @Test
     fun `subreddit and short reply fragments alone are not accepted as titles`() {
         val result = BatchImageTextExtractor.extractFirstLines(
             listOf("X r/SauceSharingCommunity", "Nice!", "1 upvote", "Search image for Anime, YouTube, Something"),

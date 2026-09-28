@@ -80,7 +80,10 @@ jobs:
           assert_source "Batch Image link export" 'CreateDocument("text/plain")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image screenshot preview" "Full screenshot preview" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image manual result removal" "onRemove =" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
-          assert_source "Batch Image selected search/import" 'Text("Search + import")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image selected search/import" 'Text("Search ' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image distinct title queue" "BatchImageTitleMatcher.groupRecords(records)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
+          assert_source "Batch Image bounded source fan-out" "MAX_CONCURRENT_SOURCE_SEARCHES = 8" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
+          assert_source "Batch Image direct-code progress" "KEY_FAILED to failed" app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           assert_source "Batch Image URL record codec" "record.links.joinToString" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image artist-free source matching" "BatchImageTitleMatcher.score(it, candidate.manga.title)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image multi-title extraction" "fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
@@ -92,8 +95,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 87/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.3"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -101,8 +104,8 @@ jobs:
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*versionNameSuffix[[:space:]]*=.*$/            versionNameSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
-          grep -q 'versionCode = 86' app/build.gradle.kts
-          grep -q 'versionName = "1.14.2' app/build.gradle.kts
+          grep -q 'versionCode = 87' app/build.gradle.kts
+          grep -q 'versionName = "1.14.3' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -195,7 +198,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='86' versionName='1.14.2'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='87' versionName='1.14.3'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
