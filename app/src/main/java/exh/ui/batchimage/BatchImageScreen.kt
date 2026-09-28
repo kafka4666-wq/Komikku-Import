@@ -31,6 +31,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,6 +72,9 @@ class BatchImageScreen : Screen() {
         var sourceSearchInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var records by remember { mutableStateOf<List<BatchImageRecord>>(emptyList()) }
         var previewRecord by remember { mutableStateOf<BatchImageRecord?>(null) }
+        var editingRecord by remember { mutableStateOf<BatchImageRecord?>(null) }
+        var editedTitle by remember { mutableStateOf("") }
+        var searchOutcomes by remember { mutableStateOf(BatchImageSearchWorker.readOutcomes(context)) }
         var pendingLinkExport by remember { mutableStateOf("") }
         val selectedIds = remember { mutableStateListOf<String>() }
 
@@ -118,7 +122,10 @@ class BatchImageScreen : Screen() {
         LaunchedEffect(sourceSearchId) {
             sourceSearchInfo = null
             val id = sourceSearchId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
-            manager.getWorkInfoByIdFlow(id).collectLatest { sourceSearchInfo = it }
+            manager.getWorkInfoByIdFlow(id).collectLatest {
+                sourceSearchInfo = it
+                searchOutcomes = BatchImageSearchWorker.readOutcomes(context)
+            }
         }
 
         fun startScan() {
@@ -140,7 +147,7 @@ class BatchImageScreen : Screen() {
         val discovered = progress?.getInt(BatchImageWorker.KEY_DISCOVERED, 0) ?: 0
         val phase = progress?.getString(BatchImageWorker.KEY_PHASE).orEmpty()
         val selectedRecords = records.filter { it.id in selectedIds }
-        val titleRecords = selectedRecords.filter { !it.title.isNullOrBlank() }
+        val titleRecords = selectedRecords.filter { !it.title.isNullOrBlank() && it.code.isNullOrBlank() }
         val explicitCodes = selectedRecords.filter { !it.code.isNullOrBlank() && it.link.isNullOrBlank() }
         val isSourceSearchRunning = sourceSearchInfo?.state == WorkInfo.State.RUNNING ||
             sourceSearchInfo?.state == WorkInfo.State.ENQUEUED || sourceSearchInfo?.state == WorkInfo.State.BLOCKED
@@ -297,6 +304,21 @@ class BatchImageScreen : Screen() {
                             }
                         }
                     }
+                    val unresolvedRecords = records.filter { record ->
+                        !record.title.isNullOrBlank() && searchOutcomes[record.id]?.status in setOf("not_found", "ambiguous", "add_failed")
+                    }
+                    if (unresolvedRecords.isNotEmpty() && !isSourceSearchRunning) {
+                        item {
+                            TextButton(
+                                onClick = {
+                                    sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, unresolvedRecords).toString()
+                                    searchOutcomes = emptyMap()
+                                    sourceSearchInfo = null
+                                },
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            ) { Text("Retry ${unresolvedRecords.size} unmatched titles") }
+                        }
+                    }
                     item {
                         Text(
                             "Search uses title keywords without artist names. Selected nhentai codes are imported through Batch Add; detected web links are saved only to the .txt file you choose.",
@@ -317,6 +339,8 @@ class BatchImageScreen : Screen() {
                                 if (query.isNotBlank()) navigator?.push(GlobalSearchScreen(query))
                             },
                             onPreview = { previewRecord = record },
+                            onEdit = { editingRecord = record; editedTitle = record.title.orEmpty() },
+                            outcome = searchOutcomes[record.id]?.message,
                             onRemove = {
                                 records = records.filterNot { it.id == record.id }
                                 selectedIds.remove(record.id)
@@ -340,6 +364,30 @@ class BatchImageScreen : Screen() {
                 text = { AsyncImage(model = Uri.parse(record.imageUri), contentDescription = "Full screenshot preview", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().height(480.dp)) },
             )
         }
+        editingRecord?.let { record ->
+            AlertDialog(
+                onDismissRequest = { editingRecord = null },
+                title = { Text("Correct recognized title") },
+                text = {
+                    OutlinedTextField(
+                        value = editedTitle,
+                        onValueChange = { editedTitle = it },
+                        label = { Text("Title used for source search") },
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val corrected = editedTitle.trim()
+                        records = records.map { if (it.id == record.id) it.copy(title = corrected.takeIf(String::isNotBlank)) else it }
+                        BatchImageWorker.saveRecords(BatchImageWorker.recordsFile(context), records)
+                        BatchImageSearchWorker.clearOutcome(context, record.id)
+                        searchOutcomes = searchOutcomes - record.id
+                        editingRecord = null
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { editingRecord = null }) { Text("Cancel") } },
+            )
+        }
     }
 }
 
@@ -350,6 +398,8 @@ private fun BatchImageReviewCard(
     onToggle: () -> Unit,
     onSearch: () -> Unit,
     onPreview: () -> Unit,
+    onEdit: () -> Unit,
+    outcome: String?,
     onRemove: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -361,7 +411,7 @@ private fun BatchImageReviewCard(
                     record.artist?.let { Text("Artist: $it", style = MaterialTheme.typography.bodySmall) }
                     record.code?.let { Text("Code: $it", style = MaterialTheme.typography.bodySmall) }
                     record.link?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
-                    Text("OCR confidence: ${record.confidence}%", style = MaterialTheme.typography.labelSmall)
+                    Text("Candidate score: ${record.confidence}/100", style = MaterialTheme.typography.labelSmall)
                 }
                 if (!record.title.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
             }
@@ -371,9 +421,11 @@ private fun BatchImageReviewCard(
                 modifier = Modifier.fillMaxWidth().height(180.dp),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                if (!record.title.isNullOrBlank()) TextButton(onClick = onEdit) { Text("Edit title") }
                 TextButton(onClick = onPreview) { Text("Preview") }
                 TextButton(onClick = onRemove) { Text("Remove") }
             }
+            outcome?.let { Text("Search result: $it", style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

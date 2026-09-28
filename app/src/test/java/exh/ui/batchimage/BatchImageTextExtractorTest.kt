@@ -98,6 +98,20 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
+    fun `search variants remove a trailing artist and OCR badge and keep title keywords`() {
+        val queries = BatchImageTextExtractor.searchQueries("Nuru Never Drain 3 by Navier Haruka 2T")
+        assertEquals("Nuru Never Drain 3", queries.first())
+        assertTrue(queries.contains("nuru never drain"))
+        assertTrue(queries.none { it.contains("Navier") || it.endsWith("2T") })
+    }
+
+    @Test
+    fun `short title prefix matches an edition suffix but unrelated same-word matches do not`() {
+        assertTrue(BatchImageTitleMatcher.score("Female Boss Hints", "Female Boss Hints (Tabal)") >= 92)
+        assertTrue(BatchImageTitleMatcher.score("Female Boss Hints", "Female Boss Anime Hints Collection") < 92)
+    }
+
+    @Test
     fun `subreddit and short reply fragments alone are not accepted as titles`() {
         val result = BatchImageTextExtractor.extractFirstLines(
             listOf("X r/SauceSharingCommunity", "Nice!", "1 upvote", "Search image for Anime, YouTube, Something"),
@@ -315,6 +329,36 @@ class BatchImageTextExtractorTest {
             "content://example/google-lens-results.jpg",
         )
         assertEquals(listOf("Spend Time with Your AL Girlfriend Now"), results.map { it.title })
+    }
+
+    @Test
+    fun `reddit timestamp and sauce-hero comment are not treated as titles`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf(
+                "X r/doujinshi",
+                "February 19, 2020 -17:10:",
+                "u/example 2h",
+                "It seems that the sauce hero has not arrived yet",
+                "Join the conversation",
+            ),
+            "content://example/reddit-timestamp-and-comment.jpg",
+        )
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun `three-word Facebook commenter name is not promoted as a title`() {
+        val results = BatchImageTextExtractor.extractLines(
+            listOf("Michael Encienzo Omega", "All comments", "77 shares", "Reply"),
+            "content://example/facebook-commenter-name.jpg",
+        )
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun `female boss OCR suffix has a title-only keyword fallback`() {
+        val queries = BatchImageTextExtractor.searchQueries("Female Boss Hints Taba")
+        assertTrue(queries.contains("female boss hints"))
     }
 
     @Test

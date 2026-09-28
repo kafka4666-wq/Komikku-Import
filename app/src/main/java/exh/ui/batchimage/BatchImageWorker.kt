@@ -68,8 +68,8 @@ class BatchImageWorker(
                     val japaneseText = japanese.process(image).awaitResult()
                     BatchImageTextExtractor.extract(latinText, japaneseText, uri.toString())
                 }.getOrDefault(emptyList())
-                recognized.forEach { record ->
-                    resultFile.appendText(BatchImageRecordCodec.encode(record) + "\n")
+                if (recognized.isNotEmpty()) {
+                    resultFile.appendText(recognized.joinToString("\n", postfix = "\n", transform = BatchImageRecordCodec::encode))
                 }
                 completed = index + 1
                 updateProgress(completed, total, "Scanning images")
@@ -285,6 +285,7 @@ object BatchImageTextExtractor {
     private val genericUrlRegex = Regex("(?i)(?:https?://|www\\.)[^\\s<>\\\"']+|(?<![@\\w])(?:[a-z0-9-]+\\.)+(?:com|net|org|io|co|jp|me|info|xyz|to|tv)(?:/[^\\s<>\\\"']*)?")
     private val socialUrlRegex = Regex("(?i)^https?://(?:www\\.)?(?:facebook\\.com|instagram\\.com|reddit\\.com|redd\\.it|tiktok\\.com|youtube\\.com|youtu\\.be|twitter\\.com|x\\.com)(?:/|$)")
     private val metadataLineRegex = Regex("(?i)^\\s*(?:page\\s+number|additional\\s+links?|search\\s+image(?:\\s+on|\\s+for)?|official\\s+website|dragon\\s+age\\s+official|tags?|genre|language|chapter|volume|views?|comments?|likes?|shares?)\\s*[:：]?\\b")
+    private val dateOrTimestampRegex = Regex("(?i)^\\s*(?:(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?[,]?\\s+)?(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})(?:\\s*[-–,]?\\s*\\d{1,2}:\\d{2})?\\s*:?\\s*$")
     private val linkLabelLineRegex = Regex("(?i)^\\s*(?:source|link|url|website|additional\\s+links?)\\s*[:：]")
     private val trailingByArtistRegex = Regex("(?i)^(.{3,120}?)\\s+by\\s+([\\p{L}\\p{N}][\\p{L}\\p{N}'’ _.-]{1,50})\\.?\\s*$")
     private val trailingLabeledArtistRegex = Regex("(?i)^(.{3,120}?)\\s+artist\\s*[:：]\\s*(.{2,55})$")
@@ -303,10 +304,12 @@ object BatchImageTextExtractor {
     private val trailingPlatformRegex = Regex("(?i)(?:\\s+[-–—|·•]?\\s*)(?:facebook|instagram|reddit|google lens|google|youtube|pinterest|tiktok|twitter|x)\\s*$")
     private val trailingCommunityRegex = Regex("(?i)\\s+[x×]?\\s*r\\s*[/l|]\\s*[\\p{L}\\p{N}_-]+\\s*$")
     private val platformBadgeRegex = Regex("(?i)^\\s*(?:o\\s+)?(?:facebook|instagram|reddit|google lens|google|youtube|pinterest|tiktok|twitter|x)\\s*$")
+    private val facebookChromeRegex = Regex("(?i)^\\s*(?:facebook|all comments|\\d+ shares|\\d+ likes|write a comment|comment as|see translation|top fan)\\s*$")
     private val socialReactionRegex = Regex("(?i)^\\s*(?:amazing work|nice work|great work|cute couple|that's all for now|all comments|best artist|for ad(?:u|l)t\\+? only|up next|back to notifications|yo boy stood on business|de nandy estamos|nah gini loh|neh gini loh)\\b")
     private val artistSentenceCueRegex = Regex("(?i)\\b(?:doesn['’]?t|don['’]?t|is|are|was|were|with|your|my|the|girl|boy|couple|matter)\\b")
     private val incompleteTailRegex = Regex("(?i)\\b(?:kimi\\s+no|to\\s+be|with\\s+the|and\\s+the|and\\s+then|of\\s+the|in\\s+the|on\\s+the|or\\s+the)$")
-    private val conversationalRegex = Regex("(?i)^\\s*(?:this was|that was|this guy|this is peak|nice[.!?]|great[.!?]|if you want|sorry|i am|i'm|because you|the english title|thank you|thanks for|thanks\\b|found a good link|i think|i read|i saw|it was|it consists|the story|the doujin|the main girl|as i understand|one day|please remember|we recommend|you should check|don't worry|dont worry|i want such|in the end|and then)\\b")
+    private val conversationalRegex = Regex("(?i)^\\s*(?:this was|that was|this guy|this is peak|it seems(?: that)?|the sauce hero|has not arrived|nice[.!?]|great[.!?]|if you want|sorry|i am|i'm|because you|the english title|thank you|thanks for|thanks\\b|found a good link|i think|i read|i saw|it was|it consists|the story|the doujin|the main girl|as i understand|one day|please remember|we recommend|you should check|don't worry|dont worry|i want such|in the end|and then)\\b")
+    private val socialPersonNameRegex = Regex("^[A-Z][\\p{L}'’.-]+(?:\\s+[A-Z][\\p{L}'’.-]+){1,2}$")
 
     fun extract(latin: Text, japanese: Text, imageUri: String): List<BatchImageRecord> {
         return extractLines(
@@ -358,7 +361,7 @@ object BatchImageTextExtractor {
             val cleaned = raw?.let(::stripTitleCue)?.let(::cleanTitle) ?: return
             val (parsedTitle, parsedArtist) = parseTitleAndArtist(cleaned)
             val title = parsedTitle.trim()
-            if (platformBadgeRegex.matches(title) || noiseRegex.containsMatchIn(title) || screenshotNoiseRegex.containsMatchIn(title) || socialReactionRegex.containsMatchIn(title) || metadataLineRegex.containsMatchIn(title)) return
+            if (platformBadgeRegex.matches(title) || noiseRegex.containsMatchIn(title) || screenshotNoiseRegex.containsMatchIn(title) || socialReactionRegex.containsMatchIn(title) || metadataLineRegex.containsMatchIn(title) || dateOrTimestampRegex.matches(title)) return
             if (title.length < 3 || !title.any(Char::isLetter)) return
             val key = normalizeTitle(title)
             if (key.isBlank()) return
@@ -370,6 +373,7 @@ object BatchImageTextExtractor {
         }
 
         val hasSocialChrome = lines.any { communityRegex.matches(it) || usernameRegex.containsMatchIn(it) || timeRegex.matches(it) || noiseRegex.containsMatchIn(it) }
+        val hasFacebookChrome = lines.any(facebookChromeRegex::matches)
         lines.forEachIndexed { index, line ->
             val artistMatch = labeledArtistRegex.matchEntire(line)
             if (artistMatch != null) {
@@ -406,7 +410,7 @@ object BatchImageTextExtractor {
             if (leadingArtist != null) return@forEachIndexed
             val followingArtistLabel = labeledArtistRegex.matches(lines.getOrNull(index + 1).orEmpty())
             val formatted = trailingArtistRegex.matchEntire(line) != null || trailingOpenArtistRegex.matchEntire(line) != null || followingArtistLabel
-            titleCandidateScore(line, index, hasSocialChrome, followingArtistLabel)?.let { addCandidate(line, if (formatted) maxOf(it, 90) else it) }
+            titleCandidateScore(line, index, hasSocialChrome, hasFacebookChrome, followingArtistLabel)?.let { addCandidate(line, if (formatted) maxOf(it, 90) else it) }
         }
 
         // Unlabelled comment fragments are frequent OCR false positives. Preserve all
@@ -443,13 +447,14 @@ object BatchImageTextExtractor {
         }
     }
 
-    private fun isLikelyPostTitle(value: String, hasSocialChrome: Boolean, followsArtistLabel: Boolean = false): Boolean {
+    private fun isLikelyPostTitle(value: String, hasSocialChrome: Boolean, hasFacebookChrome: Boolean, followsArtistLabel: Boolean = false): Boolean {
         val line = cleanTitle(value) ?: return false
         if (genericUrlRegex.containsMatchIn(line) || linkLabelLineRegex.containsMatchIn(line)) return false
-        if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line) || platformBadgeRegex.matches(line) || metadataLineRegex.containsMatchIn(line)) return false
+        if (line.length !in 8..160 || communityRegex.matches(line) || usernameRegex.containsMatchIn(line) || timeRegex.matches(line) || platformBadgeRegex.matches(line) || metadataLineRegex.containsMatchIn(line) || dateOrTimestampRegex.matches(line)) return false
         if (noiseRegex.containsMatchIn(line) || screenshotNoiseRegex.containsMatchIn(line) || socialReactionRegex.containsMatchIn(line) || conversationalRegex.containsMatchIn(line)) return false
         if (incompleteTailRegex.containsMatchIn(line)) return false
         if (hasSocialChrome && commenterNameRegex.matches(line)) return false
+        if (hasFacebookChrome && socialPersonNameRegex.matches(line)) return false
         val firstLetter = line.firstOrNull(Char::isLetter)
         if (hasSocialChrome && firstLetter != null && firstLetter.isLowerCase() && firstLetter.code < 0x3000) return false
         if (requestLineRegex.containsMatchIn(line)) return false
@@ -468,8 +473,8 @@ object BatchImageTextExtractor {
         return true
     }
 
-    private fun titleCandidateScore(value: String, index: Int, hasSocialChrome: Boolean, followsArtistLabel: Boolean = false): Int? {
-        if (!isLikelyPostTitle(value, hasSocialChrome, followsArtistLabel)) return null
+    private fun titleCandidateScore(value: String, index: Int, hasSocialChrome: Boolean, hasFacebookChrome: Boolean, followsArtistLabel: Boolean = false): Int? {
+        if (!isLikelyPostTitle(value, hasSocialChrome, hasFacebookChrome, followsArtistLabel)) return null
         val line = cleanTitle(value) ?: return null
         val words = line.split(Regex("\\s+")).size
         var score = 60 + minOf(line.length / 12, 12) + minOf(words, 8)
@@ -484,8 +489,9 @@ object BatchImageTextExtractor {
 
     /** Search variants remove creator fragments and try the subtitle after a colon too. */
     fun searchQueries(title: String): List<String> {
-        val byArtist = trailingByArtistRegex.matchEntire(title.trim())
-        val noByArtist = byArtist?.groupValues?.getOrNull(1)?.trim() ?: title
+        val noTrailingBadge = title.trim().replace(Regex("(?i)\\s+\\d{1,2}\\s*T\\b$"), "").trim()
+        val byArtist = trailingByArtistRegex.matchEntire(noTrailingBadge)
+        val noByArtist = byArtist?.groupValues?.getOrNull(1)?.trim() ?: noTrailingBadge
         val parsed = parseTitleAndArtist(noByArtist).first
         val noDanglingCredit = trailingOpenArtistRegex.replace(parsed, "$1").trim()
         val clean = cleanTitle(noDanglingCredit) ?: noDanglingCredit.trim()
@@ -497,7 +503,7 @@ object BatchImageTextExtractor {
                 .filter { it.length > 1 && it !in SEARCH_STOP_WORDS }
             if (keywordTokens.size >= 2) add(keywordTokens.joinToString(" "))
             if (keywordTokens.size >= 3) add(keywordTokens.takeLast(minOf(4, keywordTokens.size)).joinToString(" "))
-            if (keywordTokens.size >= 5) add(keywordTokens.take(4).joinToString(" "))
+            if (keywordTokens.size >= 4) add(keywordTokens.take(3).joinToString(" "))
         }
         return candidates.map { it.trim().trim(':', '-', '—', '[', '(', ')', ']') }
             .filter { it.length >= 3 }

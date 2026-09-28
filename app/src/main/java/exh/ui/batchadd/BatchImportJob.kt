@@ -44,7 +44,9 @@ import java.util.concurrent.TimeUnit
 
 /** A single process-wide gate shared by discovery and library insertion. */
 object BatchImportRequestLimiter {
-    private const val REQUEST_INTERVAL_MS = 4_000L
+    // Keep the batch polite to sources while avoiding the old 4-second idle gap
+    // for every gallery. A server 429 still switches this worker to its cooldown.
+    private const val REQUEST_INTERVAL_MS = 1_500L
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 
