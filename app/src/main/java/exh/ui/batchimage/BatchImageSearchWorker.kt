@@ -37,6 +37,19 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
+internal object BatchImageSourceDiagnostics {
+    fun sourceIssueNote(samples: List<String>): String = samples.asSequence()
+        .map { it.replace(Regex("https?://\\S+"), "[URL]").replace(Regex("\\s+"), " ").trim().take(96) }
+        .filter(String::isNotBlank)
+        .distinct()
+        .take(3)
+        .toList()
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(prefix = " Sources: ", separator = "; ")
+        ?.take(200)
+        .orEmpty()
+}
+
 /** Mirrors Browse Global Search across all visible, enabled installed sources and adds only a clear title match. */
 class BatchImageSearchWorker(
     appContext: Context,
@@ -95,6 +108,7 @@ class BatchImageSearchWorker(
                             val candidatePool = LinkedHashMap<String, Candidate>()
                             val itemTimeouts = AtomicInteger()
                             val itemFailures = AtomicInteger()
+                            val sourceIssueSamples = mutableListOf<String>()
                             for ((queryIndex, sourceQuery) in titleQueries.withIndex()) {
                                 if (isStopped) throw CancellationException("Global title search cancelled")
                                 searchedQueries += sourceQuery
@@ -108,6 +122,9 @@ class BatchImageSearchWorker(
                                         failedSources.incrementAndGet()
                                     }
                                     candidateMutex.withLock {
+                                        if ((result.timedOut || result.failed) && sourceIssueSamples.size < MAX_SOURCE_ISSUE_SAMPLES) {
+                                            result.issueSummary?.let(sourceIssueSamples::add)
+                                        }
                                         result.candidates.forEach { candidate ->
                                             val score = searchedQueries.maxOfOrNull { BatchImageTitleMatcher.score(it, candidate.manga.title) } ?: 0
                                             if (score >= BatchImageTitleMatcher.MINIMUM_MATCH_SCORE) {
@@ -145,8 +162,8 @@ class BatchImageSearchWorker(
                                 }
                                 val message = when (status) {
                                     "ambiguous" -> "Global search found competing similar titles; kept for review${timeoutNote(itemTimeouts.get())}"
-                                    "timed_out" -> "No confident match after global search; ${itemTimeouts.get()} source request(s) timed out and ${itemFailures.get()} failed. Kept for review."
-                                    "source_error" -> "No confident match after global search; ${itemFailures.get()} source request(s) failed. Kept for review."
+                                    "timed_out" -> "No confident match after global search; ${itemTimeouts.get()} request(s) timed out and ${itemFailures.get()} failed.${BatchImageSourceDiagnostics.sourceIssueNote(sourceIssueSamples)} Kept for review."
+                                    "source_error" -> "No confident match after global search; ${itemFailures.get()} request(s) failed.${BatchImageSourceDiagnostics.sourceIssueNote(sourceIssueSamples)} Kept for review."
                                     else -> "No confident match across enabled sources; kept for review"
                                 }
                                 appendOutcomes(outcomeFile, group.records.map { BatchImageSearchOutcome(it.id, status, message) }, outcomeMutex)
@@ -281,11 +298,21 @@ class BatchImageSearchWorker(
                                 .map { Candidate(it.toDomainManga(source.id), source.name, 0) }
                         }
                     }
-                    SourceSearchResult(source.name, mangas.orEmpty(), timedOut = mangas == null, failed = false)
+                    if (mangas == null) {
+                        SourceSearchResult(source.name, emptyList(), timedOut = true, failed = false, issueSummary = "${source.name}: exceeded ${SOURCE_TIMEOUT_MS / 1_000}s")
+                    } else {
+                        SourceSearchResult(source.name, mangas, timedOut = false, failed = false)
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (_: Throwable) {
-                    SourceSearchResult(source.name, emptyList(), timedOut = false, failed = true)
+                } catch (error: Exception) {
+                    val detail = error.message.orEmpty()
+                        .replace(Regex("https?://\\S+"), "[URL]")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                        .take(72)
+                        .ifBlank { error.javaClass.simpleName }
+                    SourceSearchResult(source.name, emptyList(), timedOut = false, failed = true, issueSummary = "${source.name}: $detail")
                 }
                 val checked = answered.incrementAndGet()
                 onSourceResult(checked, result)
@@ -332,11 +359,12 @@ class BatchImageSearchWorker(
         const val NOTIFICATION_ID = -1806
         const val TAG = "batch_image_source_search"
         const val UNIQUE_WORK = "komikku_batch_image_source_search"
-        private const val MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 64
+        private const val MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 5
         private const val MAX_CONCURRENT_TITLE_SEARCHES = 2
         private const val MAX_SEARCH_QUERY_VARIANTS = 3
+        private const val MAX_SOURCE_ISSUE_SAMPLES = 3
         private const val PROGRESS_SOURCE_INTERVAL = 8
-        private const val SOURCE_TIMEOUT_MS = 12_000L
+        private const val SOURCE_TIMEOUT_MS = 45_000L
         private const val PREFS = "batch_image_source_search"
         private const val PREF_JOB_ID = "job_id"
         private const val PREF_OUTCOME_FILE = "outcome_file"
@@ -381,7 +409,7 @@ class BatchImageSearchWorker(
 
     private data class Candidate(val manga: Manga, val sourceName: String, val score: Int)
     private data class Resolution(val candidate: Candidate?, val ambiguous: Boolean)
-    private data class SourceSearchResult(val sourceName: String, val candidates: List<Candidate>, val timedOut: Boolean, val failed: Boolean)
+    private data class SourceSearchResult(val sourceName: String, val candidates: List<Candidate>, val timedOut: Boolean, val failed: Boolean, val issueSummary: String? = null)
 }
 
 data class BatchImageSearchOutcome(val recordId: String, val status: String, val message: String)

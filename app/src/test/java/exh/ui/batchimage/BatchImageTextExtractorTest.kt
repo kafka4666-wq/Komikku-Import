@@ -121,6 +121,23 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
+    fun `source failure details are bounded and do not expose request URLs`() {
+        val note = BatchImageSourceDiagnostics.sourceIssueNote(
+            listOf(
+                "Slow Source: exceeded 45s",
+                "Broken Source: java.net.SocketTimeoutException https://private.example/path?token=secret",
+                "Broken Source: java.net.SocketTimeoutException https://private.example/path?token=secret",
+                "Extra Source: ${"x".repeat(300)}",
+            ),
+        )
+
+        assertTrue(note.startsWith(" Sources: Slow Source: exceeded 45s"))
+        assertTrue(!note.contains("private.example"))
+        assertTrue(!note.contains("secret"))
+        assertTrue(note.length <= 200)
+    }
+
+    @Test
     fun `duplicate OCR titles share one search group while retaining both screenshot records`() {
         val first = BatchImageRecord("one", "Female Boss Hints", null, null, null, "content://one", 92)
         val duplicate = BatchImageRecord("two", "Female Boss Hints by Tabal", "Tabal", null, null, "content://two", 87)

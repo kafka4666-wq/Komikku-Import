@@ -637,9 +637,15 @@ class LibraryScreenModel(
         }
         // SY <--
 
+        // TimSort calls the comparator O(n log n) times. Do not allocate two new
+        // lowercase strings per comparison when a large library refreshes.
+        val lowercaseTitleCache = HashMap<Long, String>(favoritesById.size.coerceAtLeast(16))
+        fun lowercaseTitle(item: LibraryItem): String = lowercaseTitleCache.getOrPut(item.id) {
+            item.libraryManga.manga.title.lowercase()
+        }
         val sortAlphabetically: (LibraryItem, LibraryItem) -> Int = { manga1, manga2 ->
-            val title1 = manga1.libraryManga.manga.title.lowercase()
-            val title2 = manga2.libraryManga.manga.title.lowercase()
+            val title1 = lowercaseTitle(manga1)
+            val title2 = lowercaseTitle(manga2)
             title1.compareToWithCollator(title2)
         }
 
