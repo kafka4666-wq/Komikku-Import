@@ -387,12 +387,12 @@ class BatchImageSearchWorker(
         const val NOTIFICATION_ID = -1806
         const val TAG = "batch_image_source_search"
         const val UNIQUE_WORK = "komikku_batch_image_source_search"
-        private const val MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 5
-        private const val MAX_CONCURRENT_TITLE_SEARCHES = 2
+        private const val MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 12
+        private const val MAX_CONCURRENT_TITLE_SEARCHES = 3
         private const val MAX_SEARCH_QUERY_VARIANTS = 3
         private const val MAX_SOURCE_ISSUE_SAMPLES = 3
         private const val PROGRESS_SOURCE_INTERVAL = 8
-        private const val SOURCE_TIMEOUT_MS = 45_000L
+        private const val SOURCE_TIMEOUT_MS = 15_000L
         private const val PREFS = "batch_image_source_search"
         private const val PREF_JOB_ID = "job_id"
         private const val PREF_OUTCOME_FILE = "outcome_file"
