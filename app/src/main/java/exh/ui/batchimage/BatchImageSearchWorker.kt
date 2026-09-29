@@ -496,7 +496,6 @@ internal data class BatchImageTitleGroup(val title: String, val records: List<Ba
 
 internal data class BatchImageSelectionPlan(
     val titleRows: List<BatchImageRecord>,
-    val titleGroups: List<BatchImageTitleGroup>,
     val codeRows: List<BatchImageRecord>,
     val codeUrls: List<String>,
     val otherRows: List<BatchImageRecord>,
@@ -504,11 +503,10 @@ internal data class BatchImageSelectionPlan(
     companion object {
         fun from(records: List<BatchImageRecord>): BatchImageSelectionPlan {
             val codeRows = records.filter { !it.code.isNullOrBlank() }
-            val titleRows = records.filter { !it.title.isNullOrBlank() && it.code.isNullOrBlank() }
+            val titleRows = records.filter { !it.title.isNullOrBlank() }
             val otherRows = records.filter { it.code.isNullOrBlank() && it.title.isNullOrBlank() }
             return BatchImageSelectionPlan(
                 titleRows = titleRows,
-                titleGroups = BatchImageTitleMatcher.groupRecords(titleRows),
                 codeRows = codeRows,
                 codeUrls = codeRows.mapNotNull { record -> record.code?.let { "https://nhentai.net/g/$it/" } }.distinct(),
                 otherRows = otherRows,

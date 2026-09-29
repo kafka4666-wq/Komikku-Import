@@ -176,10 +176,26 @@ class BatchImageTextExtractorTest {
         val plan = BatchImageSelectionPlan.from(listOf(firstTitle, sameTitleDifferentArtist, firstCode, duplicateCode, linkOnly))
 
         assertEquals(2, plan.titleRows.size)
-        assertEquals(1, plan.titleGroups.size)
         assertEquals(2, plan.codeRows.size)
         assertEquals(listOf("https://nhentai.net/g/682640/"), plan.codeUrls)
         assertEquals(listOf("link"), plan.otherRows.map { it.id })
+    }
+
+    @Test
+    fun `title text export includes every title row and excludes artists codes and links`() {
+        val records = listOf(
+            BatchImageRecord("one", "My Doujin Title", "Artist A", null, null, "content://one", 92),
+            BatchImageRecord("two", "My Doujin Title", "Artist A", null, null, "content://two", 90),
+            BatchImageRecord("three", "Title with nhentai code", null, "682640", "https://nhentai.net/g/682640/", "content://three", 96),
+            BatchImageRecord("four", null, "Artist Only", "682641", null, "content://four", 85),
+        )
+
+        assertEquals(
+            "My Doujin Title\nMy Doujin Title\nTitle with nhentai code\n",
+            BatchImageTitleExport.fileContents(records),
+        )
+        assertEquals(emptyList<String>(), BatchImageTitleExport.titles(emptyList()))
+        assertEquals("", BatchImageTitleExport.fileContents(emptyList()))
     }
 
     @Test

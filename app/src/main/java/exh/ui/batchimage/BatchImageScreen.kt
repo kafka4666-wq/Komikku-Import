@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.ImageSearch
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -54,7 +53,6 @@ import coil3.compose.AsyncImage
 import cafe.adriel.voyager.navigator.LocalNavigator
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.data.BatchImportStatus
-import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
 import exh.ui.batchadd.BatchImportJob
 import kotlinx.coroutines.flow.collectLatest
 import uy.kohesive.injekt.Injekt
@@ -75,15 +73,13 @@ class BatchImageScreen : Screen() {
         var codeImportStartPending by remember { mutableStateOf(false) }
         var pendingSelections by remember { mutableStateOf<List<Pair<String, Uri>>>(emptyList()) }
         var jobIdText by remember { mutableStateOf(BatchImageWorker.savedJobId(context)) }
-        var sourceSearchId by remember { mutableStateOf(BatchImageSearchWorker.savedJobId(context)) }
         var workInfo by remember { mutableStateOf<WorkInfo?>(null) }
-        var sourceSearchInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var records by remember { mutableStateOf<List<BatchImageRecord>>(emptyList()) }
         var previewRecord by remember { mutableStateOf<BatchImageRecord?>(null) }
         var editingRecord by remember { mutableStateOf<BatchImageRecord?>(null) }
         var editedTitle by remember { mutableStateOf("") }
-        var searchOutcomes by remember { mutableStateOf(BatchImageSearchWorker.readOutcomes(context)) }
         var pendingLinkExport by remember { mutableStateOf("") }
+        var pendingTitleExport by remember { mutableStateOf("") }
         val selectedIds = remember { mutableStateListOf<String>() }
 
         val linkFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -94,6 +90,17 @@ class BatchImageScreen : Screen() {
                     } ?: error("Could not open selected file")
                     Toast.makeText(context, "Saved screenshot links", Toast.LENGTH_SHORT).show()
                 }.onFailure { Toast.makeText(context, "Could not save links: ${it.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
+
+        val titleFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            if (uri != null) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        OutputStreamWriter(output, Charsets.UTF_8).use { it.write(pendingTitleExport) }
+                    } ?: error("Could not open selected file")
+                    Toast.makeText(context, "Saved recognized titles", Toast.LENGTH_SHORT).show()
+                }.onFailure { Toast.makeText(context, "Could not save titles: ${it.message}", Toast.LENGTH_LONG).show() }
             }
         }
 
@@ -127,13 +134,10 @@ class BatchImageScreen : Screen() {
             }
         }
 
-        LaunchedEffect(sourceSearchId) {
-            sourceSearchInfo = null
-            val id = sourceSearchId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
-            manager.getWorkInfoByIdFlow(id).collectLatest {
-                sourceSearchInfo = it
-                searchOutcomes = BatchImageSearchWorker.readOutcomes(context)
-            }
+        LaunchedEffect(Unit) {
+            // Cancel work queued by an older app version; recognized titles are now
+            // exported to text, while selected nhentai codes remain importable.
+            manager.cancelAllWorkByTag(BatchImageSearchWorker.TAG)
         }
 
         LaunchedEffect(codeImportWorkId) {
@@ -169,14 +173,11 @@ class BatchImageScreen : Screen() {
         val titleRecords = selectionPlan.titleRows
         val explicitCodes = selectionPlan.codeRows
         val selectedCodeUrls = selectionPlan.codeUrls
-        val titleGroups = selectionPlan.titleGroups
-        val isSourceSearchRunning = sourceSearchInfo?.state == WorkInfo.State.RUNNING ||
-            sourceSearchInfo?.state == WorkInfo.State.ENQUEUED || sourceSearchInfo?.state == WorkInfo.State.BLOCKED
         val isCodeImportRunning = codeImportWorkInfo?.state == WorkInfo.State.RUNNING ||
             codeImportWorkInfo?.state == WorkInfo.State.ENQUEUED || codeImportWorkInfo?.state == WorkInfo.State.BLOCKED || codeImportSnapshot.running || codeImportStartPending
-        val canStartSelection = (titleGroups.isNotEmpty() || selectedCodeUrls.isNotEmpty()) && !isSourceSearchRunning &&
-            (selectedCodeUrls.isEmpty() || !isCodeImportRunning)
+        val canImportCodes = selectedCodeUrls.isNotEmpty() && !isCodeImportRunning
         val detectedLinks = records.flatMap { it.links }.distinct()
+        val recognizedTitles = BatchImageTitleExport.titles(records)
         val codeImportOutput = codeImportWorkInfo?.outputData
         val codeImportProgress = codeImportWorkInfo?.progress
         val codeCompleted = codeImportProgress?.getInt(BatchImportJob.KEY_COMPLETED, codeImportOutput?.getInt(BatchImportJob.KEY_COMPLETED, codeImportSnapshot.completed) ?: codeImportSnapshot.completed)
@@ -206,7 +207,7 @@ class BatchImageScreen : Screen() {
             ) {
                 item {
                     Text(
-                        "Scan screenshots on-device with ML Kit (English and Japanese), review the extracted title, artist, code, or link, then search or import only what you select.",
+                        "Scan screenshots on-device with ML Kit (English and Japanese), review the extracted results, save recognized titles and links as .txt files, or import selected nhentai codes.",
                         Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -287,26 +288,27 @@ class BatchImageScreen : Screen() {
                                 pendingLinkExport = detectedLinks.joinToString("\n", postfix = "\n")
                                 linkFilePicker.launch("Batch_Image_Links.txt")
                             }, modifier = Modifier.weight(1f)) { Text("Save links .txt (${detectedLinks.size})") }
-                            Button(enabled = canStartSelection, onClick = {
-                                if (selectedCodeUrls.isNotEmpty()) {
-                                    codeImportStartPending = true
-                                    codeImportWorkId = BatchImportJob.start(context.applicationContext, selectedCodeUrls).toString()
-                                    codeImportWorkInfo = null
-                                }
-                                if (titleGroups.isNotEmpty()) {
-                                    sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, titleRecords).toString()
-                                    sourceSearchInfo = null
-                                }
-                                Toast.makeText(context, "Started ${titleGroups.size} global title search(es) and ${selectedCodeUrls.size} direct code import(s)", Toast.LENGTH_SHORT).show()
-                            }, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Outlined.Search, contentDescription = null)
-                                Text("Global search ${titleGroups.size} + import ${selectedCodeUrls.size}")
-                            }
+                            Button(enabled = recognizedTitles.isNotEmpty(), onClick = {
+                                pendingTitleExport = BatchImageTitleExport.fileContents(records)
+                                titleFilePicker.launch("Batch_Image_Titles.txt")
+                            }, modifier = Modifier.weight(1f)) { Text("Save titles .txt (${recognizedTitles.size})") }
                         }
                     }
                     item {
+                        Button(
+                            enabled = canImportCodes,
+                            onClick = {
+                                codeImportStartPending = true
+                                codeImportWorkId = BatchImportJob.start(context.applicationContext, selectedCodeUrls).toString()
+                                codeImportWorkInfo = null
+                                Toast.makeText(context, "Started ${selectedCodeUrls.size} direct nhentai code import(s)", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        ) { Text("Import selected nhentai codes (${selectedCodeUrls.size})") }
+                    }
+                    item {
                         Text(
-                            "Selected: ${selectedRecords.size} review rows · ${titleRecords.size} title rows (${titleGroups.size} unique title searches) · ${explicitCodes.size} nhentai code rows (${selectedCodeUrls.size} unique direct imports) · ${selectionPlan.otherRows.size} other rows stay in review. The .txt action exports all ${detectedLinks.size} links in this scan.",
+                            "Selected: ${selectedRecords.size} review rows · ${titleRecords.size} title rows (all ${recognizedTitles.size} recognized titles are saved to the .txt file) · ${explicitCodes.size} nhentai code rows (${selectedCodeUrls.size} unique direct imports) · ${selectionPlan.otherRows.size} other rows stay in review. The links .txt action exports all ${detectedLinks.size} links in this scan.",
                             Modifier.padding(horizontal = 16.dp),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -331,70 +333,9 @@ class BatchImageScreen : Screen() {
                             }
                         }
                     }
-                    if (sourceSearchId != null) {
-                        item {
-                            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    val searchProgress = sourceSearchInfo?.progress
-                                    val done = searchProgress?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0)
-                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_COMPLETED, 0) ?: 0
-                                    val totalSearch = searchProgress?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0)
-                                        ?: sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TOTAL, 0) ?: titleGroups.size
-                                    val added = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ADDED, 0)
-                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ADDED, 0) ?: 0
-                                    val present = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0)
-                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_ALREADY_PRESENT, 0) ?: 0
-                                    val unmatched = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0)
-                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_UNMATCHED, 0) ?: 0
-                                    val sourceTimeouts = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0)
-                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0) ?: 0
-                                    val sourceFailures = sourceSearchInfo?.outputData?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0)
-                                        ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: 0
-                                    val phase = searchProgress?.getString(BatchImageSearchWorker.KEY_PHASE)
-                                        ?: sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_PHASE).orEmpty()
-                                    val workerError = sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_ERROR).orEmpty()
-                                    val liveTimeouts = searchProgress?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0) ?: sourceTimeouts
-                                    val liveSourceFailures = searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: sourceFailures
-                                    Text(
-                                        when {
-                                            isSourceSearchRunning -> "Global title searches $done/$totalSearch complete · $added added · $present already in library · $unmatched need review"
-                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Global title search complete · $added added · $present already in library · $unmatched need review · $sourceTimeouts timed out · $sourceFailures failed source requests"
-                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Global title search cancelled · $added added so far"
-                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Global title search failed · ${workerError.ifBlank { "see per-title results below" }.take(180)}"
-                                            else -> "Global title search queued"
-                                        },
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
-                                    if ((isSourceSearchRunning || sourceSearchInfo?.state?.isFinished == true) && phase.isNotBlank()) {
-                                        Text("$phase · $liveTimeouts source requests timed out · $liveSourceFailures failed", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    if (isSourceSearchRunning && totalSearch > 0) {
-                                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                        TextButton(onClick = { manager.cancelWorkById(UUID.fromString(sourceSearchId)) }) { Text("Cancel global search") }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    val unresolvedRecords = records.filter { record ->
-                        !record.title.isNullOrBlank() && searchOutcomes[record.id]?.status in setOf("not_found", "ambiguous", "add_failed", "timed_out", "source_error", "no_sources")
-                    }
-                    val unresolvedGroups = BatchImageTitleMatcher.groupRecords(unresolvedRecords).size
-                    if (unresolvedRecords.isNotEmpty() && !isSourceSearchRunning) {
-                        item {
-                            TextButton(
-                                onClick = {
-                                    sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, unresolvedRecords).toString()
-                                    searchOutcomes = emptyMap()
-                                    sourceSearchInfo = null
-                                },
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                            ) { Text("Retry $unresolvedGroups unique searches (${unresolvedRecords.size} rows)") }
-                        }
-                    }
                     item {
                         Text(
-                            "Title keywords are searched across all enabled installed sources together, like Browse Global Search. Only a high-confidence, unambiguous match is added automatically; competing or uncertain results stay in review. Nhentai codes use the direct importer, and web links are saved only to the .txt file you choose.",
+                            "Recognized titles are saved to the .txt file you choose; they are not searched or imported. Selected nhentai codes can still be imported directly, and detected web links can be saved separately.",
                             Modifier.padding(horizontal = 16.dp),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -407,13 +348,8 @@ class BatchImageScreen : Screen() {
                             onToggle = {
                                 if (record.id in selectedIds) selectedIds.remove(record.id) else selectedIds.add(record.id)
                             },
-                            onSearch = {
-                                val query = record.title?.let { BatchImageTextExtractor.searchQueries(it).firstOrNull() }.orEmpty()
-                                if (query.isNotBlank()) navigator?.push(GlobalSearchScreen(query))
-                            },
                             onPreview = { previewRecord = record },
                             onEdit = { editingRecord = record; editedTitle = record.title.orEmpty() },
-                            outcome = searchOutcomes[record.id]?.message,
                             onRemove = {
                                 records = records.filterNot { it.id == record.id }
                                 selectedIds.remove(record.id)
@@ -440,12 +376,12 @@ class BatchImageScreen : Screen() {
         editingRecord?.let { record ->
             AlertDialog(
                 onDismissRequest = { editingRecord = null },
-                title = { Text("Correct recognized title") },
+                title = { Text("Edit title for .txt export") },
                 text = {
                     OutlinedTextField(
                         value = editedTitle,
                         onValueChange = { editedTitle = it },
-                        label = { Text("Title used for source search") },
+                        label = { Text("Title to include in Batch_Image_Titles.txt") },
                     )
                 },
                 confirmButton = {
@@ -453,8 +389,6 @@ class BatchImageScreen : Screen() {
                         val corrected = editedTitle.trim()
                         records = records.map { if (it.id == record.id) it.copy(title = corrected.takeIf(String::isNotBlank)) else it }
                         BatchImageWorker.saveRecords(BatchImageWorker.recordsFile(context), records)
-                        BatchImageSearchWorker.clearOutcome(context, record.id)
-                        searchOutcomes = searchOutcomes - record.id
                         editingRecord = null
                     }) { Text("Save") }
                 },
@@ -469,10 +403,8 @@ private fun BatchImageReviewCard(
     record: BatchImageRecord,
     selected: Boolean,
     onToggle: () -> Unit,
-    onSearch: () -> Unit,
     onPreview: () -> Unit,
     onEdit: () -> Unit,
-    outcome: String?,
     onRemove: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -486,7 +418,6 @@ private fun BatchImageReviewCard(
                     record.link?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
                     Text("Candidate score: ${record.confidence}/100", style = MaterialTheme.typography.labelSmall)
                 }
-                if (!record.title.isNullOrBlank()) TextButton(onClick = onSearch) { Text("Search") }
             }
             AsyncImage(
                 model = Uri.parse(record.imageUri),
@@ -498,7 +429,6 @@ private fun BatchImageReviewCard(
                 TextButton(onClick = onPreview) { Text("Preview") }
                 TextButton(onClick = onRemove) { Text("Remove") }
             }
-            outcome?.let { Text("Search result: $it", style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

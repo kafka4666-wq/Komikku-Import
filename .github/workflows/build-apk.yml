@@ -75,32 +75,21 @@ jobs:
           assert_source "Batch Image navigation" "navigator.push(BatchImageScreen())" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           assert_source "Batch Image ML Kit worker" "JapaneseTextRecognizerOptions" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image WorkManager" "class BatchImageWorker" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
-          assert_source "Batch Image installed-source auto-add" "class BatchImageSearchWorker" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
+          assert_source "Batch Image cancels legacy title-search work" "manager.cancelAllWorkByTag(BatchImageSearchWorker.TAG)" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image screenshot review" "BatchImageReviewCard" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image link export" 'CreateDocument("text/plain")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image screenshot preview" "Full screenshot preview" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image manual result removal" "onRemove =" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
-          assert_source "Batch Image selected search/import" 'Text("Global search ' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
-          assert_source "Batch Image distinct title queue" "BatchImageTitleMatcher.groupRecords(records)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image Global Search source set" "sourceManager.getVisibleSources()" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image all-source search" "searchAllEnabledSources(sources, sourceQuery, requestSemaphore)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image bounded global concurrency" "MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 12" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image bounded title concurrency" "MAX_CONCURRENT_TITLE_SEARCHES = 3" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image source deadline" "SOURCE_TIMEOUT_MS = 15_000L" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image source failure details" "BatchImageSourceDiagnostics.sourceIssueNote" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image source cancellation isolation" "shouldPropagateCancellation(isStopped, currentCoroutineContext().isActive)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image title failure display" "val workerError = sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_ERROR)" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
-          assert_source "Batch Image conservative match margin" "MINIMUM_MATCH_MARGIN = 8" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image confident-match gate" "BatchImageTitleMatcher.isConfidentMatch(best.score, second?.score)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
-          assert_source "Batch Image confident-add regression" "automatic add requires a high score" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
-          assert_source "Batch Image bounded source diagnostics regression" "source failure details are bounded and do not expose request URLs" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
-          assert_source "Batch Image cancellation regression" "source-local cancellation is recorded but worker cancellation still propagates" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
+          assert_source "Batch Image title .txt export" 'titleFilePicker.launch("Batch_Image_Titles.txt")' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image code-only import action" 'Text("Import selected nhentai codes' app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
+          assert_source "Batch Image title export formatter" "internal object BatchImageTitleExport" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
+          assert_source "Batch Image title export regression" "title text export includes every title row" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
+          ! grep -Fq "BatchImageSearchWorker.enqueue" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt || { echo "title import still callable from Batch Image UI"; exit 1; }
+          ! grep -Fq "GlobalSearchScreen" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt || { echo "title Global Search still present in Batch Image UI"; exit 1; }
           assert_source "OOM-safe cached library sorting" "lowercaseTitleCache.getOrPut(item.id)" app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           assert_source "Batch Image direct-code progress" "KEY_FAILED to failed" app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           assert_source "Batch Image URL record codec" "record.links.joinToString" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
-          assert_source "Batch Image artist-free source matching" "BatchImageTitleMatcher.score(it, candidate.manga.title)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image multi-title extraction" "fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
-          assert_source "Batch Image cleaned source queries" "fun searchQueries(title: String): List<String>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image OCR regression tests" "multiple title lines in comments remain separate review candidates" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
           assert_source "reader timestamp" "System.currentTimeMillis()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
           assert_source "import channel" "CHANNEL_KOMIKKU_IMPORT" app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
@@ -108,8 +97,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 91/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.7"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 92/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.8"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -117,8 +106,8 @@ jobs:
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*versionNameSuffix[[:space:]]*=.*$/            versionNameSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
-          grep -q 'versionCode = 91' app/build.gradle.kts
-          grep -q 'versionName = "1.14.7' app/build.gradle.kts
+          grep -q 'versionCode = 92' app/build.gradle.kts
+          grep -q 'versionName = "1.14.8' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -211,7 +200,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='91' versionName='1.14.7'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='92' versionName='1.14.8'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK

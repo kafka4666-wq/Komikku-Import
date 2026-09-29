@@ -253,6 +253,15 @@ data class BatchImageRecord(
     val links: List<String> = listOfNotNull(link),
 )
 
+internal object BatchImageTitleExport {
+    fun titles(records: List<BatchImageRecord>): List<String> =
+        records.mapNotNull { it.title?.trim()?.takeIf(String::isNotBlank) }
+
+    fun fileContents(records: List<BatchImageRecord>): String = titles(records).let { titles ->
+        titles.joinToString(separator = "\n", postfix = if (titles.isEmpty()) "" else "\n")
+    }
+}
+
 internal object BatchImageRecordCodec {
     fun encode(record: BatchImageRecord): String = listOf(
         record.id, record.title.orEmpty(), record.artist.orEmpty(), record.code.orEmpty(),
