@@ -14,13 +14,17 @@ import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.notification.Notifications
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.util.system.workManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import mihon.domain.manga.model.toDomainManga
 import tachiyomi.core.common.util.QuerySanitizer.sanitize
@@ -31,8 +35,9 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
-/** Searches only visible, enabled online sources and favorites one unambiguous best match per OCR item. */
+/** Mirrors Browse Global Search across all visible, enabled installed sources and adds only a clear title match. */
 class BatchImageSearchWorker(
     appContext: Context,
     params: WorkerParameters,
@@ -52,133 +57,152 @@ class BatchImageSearchWorker(
 
         val enabledLanguages = sourcePreferences.enabledLanguages().get()
         val disabledSources = sourcePreferences.disabledSources().get()
-        val sources = sourceManager.getVisibleOnlineSources()
+        val sources = sourceManager.getVisibleSources()
             .filter { it.lang in enabledLanguages && it.id.toString() !in disabledSources }
-            .sortedWith(compareByDescending<HttpSource> { sourcePriority(it.name) }.thenBy { it.name.lowercase() })
-        val prioritizedSources = sources.filter { sourcePriority(it.name) > 0 }
-        val remainingSources = sources.filter { sourcePriority(it.name) == 0 }
-        var completed = 0
-        var added = 0
-        var alreadyPresent = 0
-        var unmatched = 0
-        var timedOutSources = 0
-        var failedSources = 0
+            .sortedWith(compareByDescending<Source> { sourcePriority(it.name) }.thenBy { it.name.lowercase() })
+        val requestSemaphore = Semaphore(MAX_TOTAL_PARALLEL_SOURCE_REQUESTS)
+        val titleSemaphore = Semaphore(MAX_CONCURRENT_TITLE_SEARCHES)
+        val progressMutex = Mutex()
+        val libraryMutex = Mutex()
+        val candidateMutex = Mutex()
+        val outcomeMutex = Mutex()
+        val completed = AtomicInteger()
+        val added = AtomicInteger()
+        val alreadyPresent = AtomicInteger()
+        val unmatched = AtomicInteger()
+        val timedOutSources = AtomicInteger()
+        val failedSources = AtomicInteger()
 
         return try {
             setForeground(getForegroundInfo())
-            setProgress(progressData(0, groups.size, added, alreadyPresent, unmatched, "Checking ${sources.size} enabled online sources"))
+            setProgress(progressData(0, groups.size, 0, 0, 0, "Global search · ${sources.size} enabled installed sources"))
             if (sources.isEmpty()) {
-                groups.flatMap { it.records }.forEach { record ->
-                    appendOutcome(outcomeFile, BatchImageSearchOutcome(record.id, "no_sources", "No enabled online sources are available. Enable an online source and retry."))
-                }
-                val output = workDataOf(KEY_COMPLETED to 0, KEY_TOTAL to groups.size, KEY_ADDED to 0, KEY_ALREADY_PRESENT to 0, KEY_UNMATCHED to groups.size, KEY_PHASE to "No enabled online sources")
+                appendOutcomes(outcomeFile, groups.flatMap { group ->
+                    group.records.map { BatchImageSearchOutcome(it.id, "no_sources", "No enabled installed sources are available. Enable an installed source and retry.") }
+                }, outcomeMutex)
+                val output = workDataOf(KEY_COMPLETED to 0, KEY_TOTAL to groups.size, KEY_ADDED to 0, KEY_ALREADY_PRESENT to 0, KEY_UNMATCHED to groups.size, KEY_PHASE to "No enabled installed sources")
                 setProgress(output)
                 return Result.success(output)
             }
 
-            groups.forEachIndexed { index, group ->
-                if (isStopped) throw CancellationException("Source search cancelled")
-                val titleQueries = BatchImageTextExtractor.searchQueries(group.title)
-                val candidatePool = LinkedHashMap<String, Candidate>()
-                var itemTimeouts = 0
-                var itemFailures = 0
-                fun addMatches(matches: List<Candidate>) {
-                    for (candidate in matches) {
-                        val score = titleQueries.maxOfOrNull { BatchImageTitleMatcher.score(it, candidate.manga.title) } ?: 0
-                        if (score < MINIMUM_MATCH_SCORE) continue
-                        val key = normalize(candidate.manga.title)
-                        val current = candidatePool[key]
-                        if (current == null || score > current.score || score == current.score && sourcePriority(candidate.sourceName) > sourcePriority(current.sourceName)) {
-                            candidatePool[key] = candidate.copy(score = score)
+            coroutineScope {
+                groups.mapIndexed { index, group ->
+                    async(Dispatchers.IO) {
+                        titleSemaphore.withPermit {
+                            if (isStopped) throw CancellationException("Global title search cancelled")
+                            val titleQueries = BatchImageTextExtractor.searchQueries(group.title).take(MAX_SEARCH_QUERY_VARIANTS)
+                            val searchedQueries = mutableListOf<String>()
+                            val candidatePool = LinkedHashMap<String, Candidate>()
+                            val itemTimeouts = AtomicInteger()
+                            val itemFailures = AtomicInteger()
+                            for ((queryIndex, sourceQuery) in titleQueries.withIndex()) {
+                                if (isStopped) throw CancellationException("Global title search cancelled")
+                                searchedQueries += sourceQuery
+                                searchAllEnabledSources(sources, sourceQuery, requestSemaphore) { checked, result ->
+                                    if (result.timedOut) {
+                                        itemTimeouts.incrementAndGet()
+                                        timedOutSources.incrementAndGet()
+                                    }
+                                    if (result.failed) {
+                                        itemFailures.incrementAndGet()
+                                        failedSources.incrementAndGet()
+                                    }
+                                    candidateMutex.withLock {
+                                        result.candidates.forEach { candidate ->
+                                            val score = searchedQueries.maxOfOrNull { BatchImageTitleMatcher.score(it, candidate.manga.title) } ?: 0
+                                            if (score >= BatchImageTitleMatcher.MINIMUM_MATCH_SCORE) {
+                                                val key = normalize(candidate.manga.title)
+                                                val current = candidatePool[key]
+                                                if (current == null || score > current.score || score == current.score && sourcePriority(candidate.sourceName) > sourcePriority(current.sourceName)) {
+                                                    candidatePool[key] = candidate.copy(score = score)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (checked == sources.size || checked % PROGRESS_SOURCE_INTERVAL == 0) {
+                                        val detail = "Global search · title ${index + 1}/${groups.size} · keyword ${queryIndex + 1}/${titleQueries.size} · $checked/${sources.size} sources answered · ${group.title.take(44)}"
+                                        progressMutex.withLock {
+                                            setProgress(progressData(completed.get(), groups.size, added.get(), alreadyPresent.get(), unmatched.get(), detail, timedOutSources.get(), failedSources.get()))
+                                            NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification(completed.get(), groups.size, detail))
+                                        }
+                                    }
+                                }
+                                val resolution = resolveCandidate(candidatePool.values.toList())
+                                // This keyword was searched across all sources. A high-confidence,
+                                // unambiguous match avoids spending time on broader fallback queries.
+                                if (resolution.candidate != null) break
+                            }
+
+                            val resolution = resolveCandidate(candidatePool.values.toList())
+                            val candidate = resolution.candidate
+                            if (candidate == null) {
+                                unmatched.incrementAndGet()
+                                val status = when {
+                                    resolution.ambiguous -> "ambiguous"
+                                    itemTimeouts.get() > 0 -> "timed_out"
+                                    itemFailures.get() > 0 -> "source_error"
+                                    else -> "not_found"
+                                }
+                                val message = when (status) {
+                                    "ambiguous" -> "Global search found competing similar titles; kept for review${timeoutNote(itemTimeouts.get())}"
+                                    "timed_out" -> "No confident match after global search; ${itemTimeouts.get()} source request(s) timed out and ${itemFailures.get()} failed. Kept for review."
+                                    "source_error" -> "No confident match after global search; ${itemFailures.get()} source request(s) failed. Kept for review."
+                                    else -> "No confident match across enabled sources; kept for review"
+                                }
+                                appendOutcomes(outcomeFile, group.records.map { BatchImageSearchOutcome(it.id, status, message) }, outcomeMutex)
+                            } else {
+                                try {
+                                    val result = libraryMutex.withLock {
+                                        val local = networkToLocalManga(candidate.manga, updateInfo = false)
+                                        val isAlreadyPresent = local.favorite
+                                        val didAdd = !isAlreadyPresent && updateManga.awaitUpdateFavorite(local.id, true)
+                                        isAlreadyPresent to didAdd
+                                    }
+                                    val (isAlreadyPresent, didAdd) = result
+                                    when {
+                                        isAlreadyPresent -> alreadyPresent.incrementAndGet()
+                                        didAdd -> added.incrementAndGet()
+                                        else -> unmatched.incrementAndGet()
+                                    }
+                                    val status = if (isAlreadyPresent) "already" else if (didAdd) "added" else "add_failed"
+                                    val label = if (isAlreadyPresent) "Already in library" else if (didAdd) "Added" else "Library add failed"
+                                    val issueNote = if (itemTimeouts.get() + itemFailures.get() > 0) " (${itemTimeouts.get()} timed out, ${itemFailures.get()} failed source requests)" else ""
+                                    appendOutcomes(outcomeFile, group.records.map { BatchImageSearchOutcome(it.id, status, "$label · ${candidate.manga.title} · ${candidate.sourceName}$issueNote") }, outcomeMutex)
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Throwable) {
+                                    unmatched.incrementAndGet()
+                                    appendOutcomes(outcomeFile, group.records.map { BatchImageSearchOutcome(it.id, "add_failed", "Library add failed · ${error.message ?: error.javaClass.simpleName}") }, outcomeMutex)
+                                }
+                            }
+
+                            val finished = completed.incrementAndGet()
+                            progressMutex.withLock {
+                                val detail = "Finished global title search $finished/${groups.size} · ${added.get()} added · ${alreadyPresent.get()} already present"
+                                setProgress(progressData(finished, groups.size, added.get(), alreadyPresent.get(), unmatched.get(), detail, timedOutSources.get(), failedSources.get()))
+                                NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification(finished, groups.size, detail))
+                            }
                         }
                     }
-                }
-
-                for ((queryIndex, sourceQuery) in titleQueries.withIndex()) {
-                    if (isStopped) throw CancellationException("Source search cancelled")
-                    val confidentDoujinMatchFound = resolveCandidate(candidatePool.values.toList()).candidate?.let { sourcePriority(it.sourceName) > 0 } == true
-                    val stages = if (confidentDoujinMatchFound) listOf(prioritizedSources) else listOf(prioritizedSources, remainingSources)
-                    for ((stageIndex, stageSources) in stages.withIndex()) {
-                        if (stageSources.isEmpty()) continue
-                        searchAcrossSources(stageSources, sourceQuery) { checked, totalSources, batch ->
-                            itemTimeouts += batch.count { it.timedOut }
-                            timedOutSources += batch.count { it.timedOut }
-                            itemFailures += batch.count { it.failed }
-                            failedSources += batch.count { it.failed }
-                            addMatches(batch.flatMap { it.candidates })
-                            val phase = if (stageIndex == 0 && prioritizedSources.isNotEmpty()) "doujin sources" else "other enabled sources"
-                            val detail = "Title ${index + 1}/${groups.size} · keyword ${queryIndex + 1}/${titleQueries.size} · $phase $checked/$totalSources · ${group.title.take(44)}"
-                            setProgress(progressData(completed, groups.size, added, alreadyPresent, unmatched, detail, timedOutSources, failedSources))
-                            NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification(completed, groups.size, detail))
-                            resolveCandidate(candidatePool.values.toList()).candidate?.score == EXACT_TITLE_SCORE
-                        }
-                        if (resolveCandidate(candidatePool.values.toList()).candidate?.score == EXACT_TITLE_SCORE) break
-                    }
-                    if (resolveCandidate(candidatePool.values.toList()).candidate?.score == EXACT_TITLE_SCORE) break
-                }
-
-                val resolution = resolveCandidate(candidatePool.values.toList())
-                val candidate = resolution.candidate
-                if (candidate == null) {
-                    unmatched++
-                    val status = when {
-                        resolution.ambiguous -> "ambiguous"
-                        itemTimeouts > 0 -> "timed_out"
-                        itemFailures > 0 -> "source_error"
-                        else -> "not_found"
-                    }
-                    val message = when (status) {
-                        "ambiguous" -> "Several similar source results; kept for review${timeoutNote(itemTimeouts)}"
-                        "timed_out" -> "No confident match; $itemTimeouts source request(s) timed out and $itemFailures failed. Kept for review."
-                        "source_error" -> "No confident match; $itemFailures source request(s) failed. Kept for review."
-                        else -> "No confident match in enabled sources; kept for review"
-                    }
-                    group.records.forEach { appendOutcome(outcomeFile, BatchImageSearchOutcome(it.id, status, message)) }
-                } else {
-                    try {
-                        val local = networkToLocalManga(candidate.manga, updateInfo = false)
-                        val isAlreadyPresent = local.favorite
-                        val didAdd = !isAlreadyPresent && updateManga.awaitUpdateFavorite(local.id, true)
-                        when {
-                            isAlreadyPresent -> alreadyPresent++
-                            didAdd -> added++
-                            else -> unmatched++
-                        }
-                        val status = if (isAlreadyPresent) "already" else if (didAdd) "added" else "add_failed"
-                        val label = if (isAlreadyPresent) "Already in library" else if (didAdd) "Added" else "Library add failed"
-                        val issueNote = if (itemTimeouts + itemFailures > 0) " (${itemTimeouts} timed out, $itemFailures failed source requests)" else ""
-                        group.records.forEach { appendOutcome(outcomeFile, BatchImageSearchOutcome(it.id, status, "$label · ${candidate.manga.title} · ${candidate.sourceName}$issueNote")) }
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        unmatched++
-                        group.records.forEach { appendOutcome(outcomeFile, BatchImageSearchOutcome(it.id, "add_failed", "Library add failed · ${error.message ?: error.javaClass.simpleName}")) }
-                    }
-                }
-
-                completed = index + 1
-                setProgress(progressData(completed, groups.size, added, alreadyPresent, unmatched, "Finished unique title ${index + 1}/${groups.size}"))
-                if (completed % 5 == 0 || completed == groups.size) {
-                    NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, notification(completed, groups.size))
-                }
+                }.awaitAll()
             }
 
             val output = workDataOf(
-                KEY_COMPLETED to completed,
+                KEY_COMPLETED to completed.get(),
                 KEY_TOTAL to groups.size,
-                KEY_ADDED to added,
-                KEY_ALREADY_PRESENT to alreadyPresent,
-                KEY_UNMATCHED to unmatched,
-                KEY_TIMED_OUT_SOURCES to timedOutSources,
-                KEY_FAILED_SOURCES to failedSources,
-                KEY_PHASE to if (timedOutSources + failedSources > 0) "Search complete · $timedOutSources timed out · $failedSources failed; unmatched titles remain reviewable" else "Search and library add complete",
+                KEY_ADDED to added.get(),
+                KEY_ALREADY_PRESENT to alreadyPresent.get(),
+                KEY_UNMATCHED to unmatched.get(),
+                KEY_TIMED_OUT_SOURCES to timedOutSources.get(),
+                KEY_FAILED_SOURCES to failedSources.get(),
+                KEY_PHASE to if (timedOutSources.get() + failedSources.get() > 0) "Global search complete · ${timedOutSources.get()} timed out · ${failedSources.get()} failed; unmatched titles remain reviewable" else "Global search and library add complete",
             )
             setProgress(output)
             Result.success(output)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
-            Result.failure(workDataOf(KEY_COMPLETED to completed, KEY_TOTAL to groups.size, KEY_ADDED to added, KEY_ALREADY_PRESENT to alreadyPresent, KEY_UNMATCHED to unmatched, KEY_ERROR to (error.message ?: "Source search failed")))
+            Result.failure(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to groups.size, KEY_ADDED to added.get(), KEY_ALREADY_PRESENT to alreadyPresent.get(), KEY_UNMATCHED to unmatched.get(), KEY_TIMED_OUT_SOURCES to timedOutSources.get(), KEY_FAILED_SOURCES to failedSources.get(), KEY_ERROR to (error.message ?: "Global source search failed")))
         } finally {
             NotificationManagerCompat.from(applicationContext).cancel(NOTIFICATION_ID)
         }
@@ -193,7 +217,7 @@ class BatchImageSearchWorker(
     private fun notification(completed: Int, total: Int, phase: String? = null) =
         NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT)
             .setSmallIcon(R.drawable.ic_komikku)
-            .setContentTitle("Batch Image title search")
+            .setContentTitle("Batch Image Global Search")
             .setContentText(phase ?: "$completed/$total unique titles processed")
             .setProgress(total.coerceAtLeast(1), completed.coerceAtMost(total), false)
             .setOngoing(completed < total)
@@ -239,36 +263,34 @@ class BatchImageSearchWorker(
             name.contains("pururin", ignoreCase = true)
         ) 1 else 0
 
-    private suspend fun searchAcrossSources(
-        sources: List<HttpSource>,
+    private suspend fun searchAllEnabledSources(
+        sources: List<Source>,
         query: String,
-        onBatch: suspend (checked: Int, totalSources: Int, batch: List<SourceSearchResult>) -> Boolean,
-    ): List<SourceSearchResult> = coroutineScope {
-        val collected = mutableListOf<SourceSearchResult>()
-        for ((groupIndex, sourceGroup) in sources.chunked(MAX_CONCURRENT_SOURCE_SEARCHES).withIndex()) {
-            if (isStopped) throw CancellationException("Source search cancelled")
-            val batch = sourceGroup.map { source ->
-                async(Dispatchers.IO) {
-                    if (isStopped) throw CancellationException("Source search cancelled")
-                    try {
-                        val result = withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
+        requestSemaphore: Semaphore,
+        onSourceResult: suspend (checked: Int, result: SourceSearchResult) -> Unit,
+    ) = coroutineScope {
+        val answered = AtomicInteger()
+        sources.map { source ->
+            async(Dispatchers.IO) {
+                if (isStopped) throw CancellationException("Global source search cancelled")
+                val result = try {
+                    val mangas = requestSemaphore.withPermit {
+                        withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
                             source.getSearchManga(1, query.sanitize(), source.getFilterList()).mangas
-                                .take(MAX_RESULTS_PER_SOURCE)
+                                .distinctBy { it.url }
                                 .map { Candidate(it.toDomainManga(source.id), source.name, 0) }
                         }
-                        SourceSearchResult(source.name, result.orEmpty(), timedOut = result == null, failed = false)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Throwable) {
-                        SourceSearchResult(source.name, emptyList(), timedOut = false, failed = true)
                     }
+                    SourceSearchResult(source.name, mangas.orEmpty(), timedOut = mangas == null, failed = false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    SourceSearchResult(source.name, emptyList(), timedOut = false, failed = true)
                 }
-            }.awaitAll()
-            collected += batch
-            val checked = minOf((groupIndex + 1) * MAX_CONCURRENT_SOURCE_SEARCHES, sources.size)
-            if (onBatch(checked, sources.size, batch)) break
-        }
-        collected
+                val checked = answered.incrementAndGet()
+                onSourceResult(checked, result)
+            }
+        }.awaitAll()
     }
 
         private fun timeoutNote(count: Int): String = if (count > 0) " ($count source request(s) timed out)" else ""
@@ -279,14 +301,19 @@ class BatchImageSearchWorker(
             .values
             .mapNotNull { sameTitle -> sameTitle.maxWithOrNull(compareBy<Candidate> { it.score }.thenBy { sourcePriority(it.sourceName) }) }
             .sortedWith(compareByDescending<Candidate> { it.score }.thenByDescending { sourcePriority(it.sourceName) })
-        val best = distinctWorks.firstOrNull()?.takeIf { it.score >= MINIMUM_MATCH_SCORE } ?: return Resolution(null, false)
+        val best = distinctWorks.firstOrNull() ?: return Resolution(null, false)
         val second = distinctWorks.getOrNull(1)
-        if (second != null && best.score - second.score < MINIMUM_MATCH_MARGIN) return Resolution(null, true)
+        if (!BatchImageTitleMatcher.isConfidentMatch(best.score, second?.score)) {
+            return Resolution(null, best.score >= BatchImageTitleMatcher.MINIMUM_MATCH_SCORE)
+        }
         return Resolution(best, false)
     }
 
-    private fun appendOutcome(file: File, outcome: BatchImageSearchOutcome) {
-        file.appendText(BatchImageSearchOutcomeCodec.encode(outcome) + "\n")
+    private suspend fun appendOutcomes(file: File, outcomes: List<BatchImageSearchOutcome>, mutex: Mutex) {
+        if (outcomes.isEmpty()) return
+        mutex.withLock {
+            file.appendText(outcomes.joinToString("\n", postfix = "\n", transform = BatchImageSearchOutcomeCodec::encode))
+        }
     }
 
     companion object {
@@ -305,12 +332,11 @@ class BatchImageSearchWorker(
         const val NOTIFICATION_ID = -1806
         const val TAG = "batch_image_source_search"
         const val UNIQUE_WORK = "komikku_batch_image_source_search"
-        private const val MAX_RESULTS_PER_SOURCE = 30
-        private const val MAX_CONCURRENT_SOURCE_SEARCHES = 8
-        private const val SOURCE_TIMEOUT_MS = 10_000L
-        private const val EXACT_TITLE_SCORE = 100
-        private const val MINIMUM_MATCH_SCORE = 92
-        private const val MINIMUM_MATCH_MARGIN = 6
+        private const val MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 64
+        private const val MAX_CONCURRENT_TITLE_SEARCHES = 2
+        private const val MAX_SEARCH_QUERY_VARIANTS = 3
+        private const val PROGRESS_SOURCE_INTERVAL = 8
+        private const val SOURCE_TIMEOUT_MS = 12_000L
         private const val PREFS = "batch_image_source_search"
         private const val PREF_JOB_ID = "job_id"
         private const val PREF_OUTCOME_FILE = "outcome_file"
@@ -361,6 +387,13 @@ class BatchImageSearchWorker(
 data class BatchImageSearchOutcome(val recordId: String, val status: String, val message: String)
 
 internal object BatchImageTitleMatcher {
+    const val MINIMUM_MATCH_SCORE = 95
+    const val MINIMUM_MATCH_MARGIN = 8
+
+    fun isConfidentMatch(bestScore: Int, secondScore: Int?): Boolean =
+        bestScore >= MINIMUM_MATCH_SCORE &&
+            (secondScore == null || bestScore - secondScore >= MINIMUM_MATCH_MARGIN)
+
     fun groupRecords(records: List<BatchImageRecord>): List<BatchImageTitleGroup> = records
         .filter { !it.title.isNullOrBlank() }
         .groupBy { record ->

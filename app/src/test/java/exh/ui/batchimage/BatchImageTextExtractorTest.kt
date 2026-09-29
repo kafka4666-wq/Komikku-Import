@@ -112,6 +112,15 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
+    fun `automatic add requires a high score and a clear lead over a competing title`() {
+        assertTrue(BatchImageTitleMatcher.isConfidentMatch(100, null))
+        assertTrue(BatchImageTitleMatcher.isConfidentMatch(95, null))
+        assertTrue(BatchImageTitleMatcher.isConfidentMatch(100, 92))
+        assertTrue(!BatchImageTitleMatcher.isConfidentMatch(100, 93))
+        assertTrue(!BatchImageTitleMatcher.isConfidentMatch(94, null))
+    }
+
+    @Test
     fun `duplicate OCR titles share one search group while retaining both screenshot records`() {
         val first = BatchImageRecord("one", "Female Boss Hints", null, null, null, "content://one", 92)
         val duplicate = BatchImageRecord("two", "Female Boss Hints by Tabal", "Tabal", null, null, "content://two", 87)

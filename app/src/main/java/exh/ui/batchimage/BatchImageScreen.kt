@@ -297,10 +297,10 @@ class BatchImageScreen : Screen() {
                                     sourceSearchId = BatchImageSearchWorker.enqueue(context.applicationContext, titleRecords).toString()
                                     sourceSearchInfo = null
                                 }
-                                Toast.makeText(context, "Started ${titleGroups.size} unique title search(es) and ${selectedCodeUrls.size} direct code import(s)", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Started ${titleGroups.size} global title search(es) and ${selectedCodeUrls.size} direct code import(s)", Toast.LENGTH_SHORT).show()
                             }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Outlined.Search, contentDescription = null)
-                                Text("Search ${titleGroups.size} + import ${selectedCodeUrls.size}")
+                                Text("Global search ${titleGroups.size} + import ${selectedCodeUrls.size}")
                             }
                         }
                     }
@@ -356,11 +356,11 @@ class BatchImageScreen : Screen() {
                                     val liveSourceFailures = searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: sourceFailures
                                     Text(
                                         when {
-                                            isSourceSearchRunning -> "Unique title searches $done/$totalSearch processed · $added added · $present already in library · $unmatched need review"
-                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Title search complete · $added added · $present already in library · $unmatched need review · $sourceTimeouts timed out · $sourceFailures failed source requests"
-                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Title search cancelled · $added added so far"
-                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Title search failed · $added added so far"
-                                            else -> "Title search queued"
+                                            isSourceSearchRunning -> "Global title searches $done/$totalSearch complete · $added added · $present already in library · $unmatched need review"
+                                            sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Global title search complete · $added added · $present already in library · $unmatched need review · $sourceTimeouts timed out · $sourceFailures failed source requests"
+                                            sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Global title search cancelled · $added added so far"
+                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Global title search failed · $added added so far"
+                                            else -> "Global title search queued"
                                         },
                                         style = MaterialTheme.typography.titleSmall,
                                     )
@@ -369,7 +369,7 @@ class BatchImageScreen : Screen() {
                                     }
                                     if (isSourceSearchRunning && totalSearch > 0) {
                                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                        TextButton(onClick = { manager.cancelWorkById(UUID.fromString(sourceSearchId)) }) { Text("Cancel source search") }
+                                        TextButton(onClick = { manager.cancelWorkById(UUID.fromString(sourceSearchId)) }) { Text("Cancel global search") }
                                     }
                                 }
                             }
@@ -378,6 +378,7 @@ class BatchImageScreen : Screen() {
                     val unresolvedRecords = records.filter { record ->
                         !record.title.isNullOrBlank() && searchOutcomes[record.id]?.status in setOf("not_found", "ambiguous", "add_failed", "timed_out", "source_error", "no_sources")
                     }
+                    val unresolvedGroups = BatchImageTitleMatcher.groupRecords(unresolvedRecords).size
                     if (unresolvedRecords.isNotEmpty() && !isSourceSearchRunning) {
                         item {
                             TextButton(
@@ -387,12 +388,12 @@ class BatchImageScreen : Screen() {
                                     sourceSearchInfo = null
                                 },
                                 modifier = Modifier.padding(horizontal = 16.dp),
-                            ) { Text("Retry ${unresolvedRecords.size} unmatched titles") }
+                            ) { Text("Retry $unresolvedGroups unique searches (${unresolvedRecords.size} rows)") }
                         }
                     }
                     item {
                         Text(
-                            "Search uses title keywords without artist names. Selected nhentai codes are imported through Batch Add; detected web links are saved only to the .txt file you choose.",
+                            "Title keywords are searched across all enabled installed sources together, like Browse Global Search. Only a high-confidence, unambiguous match is added automatically; competing or uncertain results stay in review. Nhentai codes use the direct importer, and web links are saved only to the .txt file you choose.",
                             Modifier.padding(horizontal = 16.dp),
                             style = MaterialTheme.typography.bodySmall,
                         )
