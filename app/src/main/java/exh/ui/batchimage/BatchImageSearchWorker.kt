@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -38,6 +40,19 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 internal object BatchImageSourceDiagnostics {
+    fun shouldPropagateCancellation(workerStopped: Boolean, coroutineActive: Boolean): Boolean =
+        workerStopped || !coroutineActive
+
+    fun issueSummary(sourceName: String, detail: String?, fallback: String): String {
+        val safeDetail = detail.orEmpty()
+            .replace(Regex("https?://\\S+"), "[URL]")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(72)
+            .ifBlank { fallback }
+        return "$sourceName: $safeDetail"
+    }
+
     fun sourceIssueNote(samples: List<String>): String = samples.asSequence()
         .map { it.replace(Regex("https?://\\S+"), "[URL]").replace(Regex("\\s+"), " ").trim().take(96) }
         .filter(String::isNotBlank)
@@ -219,7 +234,8 @@ class BatchImageSearchWorker(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
-            Result.failure(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to groups.size, KEY_ADDED to added.get(), KEY_ALREADY_PRESENT to alreadyPresent.get(), KEY_UNMATCHED to unmatched.get(), KEY_TIMED_OUT_SOURCES to timedOutSources.get(), KEY_FAILED_SOURCES to failedSources.get(), KEY_ERROR to (error.message ?: "Global source search failed")))
+            val safeError = BatchImageSourceDiagnostics.issueSummary("Global search", error.message, error.javaClass.simpleName)
+            Result.failure(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to groups.size, KEY_ADDED to added.get(), KEY_ALREADY_PRESENT to alreadyPresent.get(), KEY_UNMATCHED to unmatched.get(), KEY_TIMED_OUT_SOURCES to timedOutSources.get(), KEY_FAILED_SOURCES to failedSources.get(), KEY_ERROR to safeError))
         } finally {
             NotificationManagerCompat.from(applicationContext).cancel(NOTIFICATION_ID)
         }
@@ -304,15 +320,27 @@ class BatchImageSearchWorker(
                         SourceSearchResult(source.name, mangas, timedOut = false, failed = false)
                     }
                 } catch (cancelled: CancellationException) {
-                    throw cancelled
+                    // Some source adapters cancel their own request (for example, on a
+                    // source-local timeout). Browse records that as a source error; only
+                    // a stopped/cancelled worker should abort every title search.
+                    if (BatchImageSourceDiagnostics.shouldPropagateCancellation(isStopped, currentCoroutineContext().isActive)) {
+                        throw cancelled
+                    }
+                    SourceSearchResult(
+                        source.name,
+                        emptyList(),
+                        timedOut = false,
+                        failed = true,
+                        issueSummary = BatchImageSourceDiagnostics.issueSummary(source.name, cancelled.message, "source cancelled its request"),
+                    )
                 } catch (error: Exception) {
-                    val detail = error.message.orEmpty()
-                        .replace(Regex("https?://\\S+"), "[URL]")
-                        .replace(Regex("\\s+"), " ")
-                        .trim()
-                        .take(72)
-                        .ifBlank { error.javaClass.simpleName }
-                    SourceSearchResult(source.name, emptyList(), timedOut = false, failed = true, issueSummary = "${source.name}: $detail")
+                    SourceSearchResult(
+                        source.name,
+                        emptyList(),
+                        timedOut = false,
+                        failed = true,
+                        issueSummary = BatchImageSourceDiagnostics.issueSummary(source.name, error.message, error.javaClass.simpleName),
+                    )
                 }
                 val checked = answered.incrementAndGet()
                 onSourceResult(checked, result)

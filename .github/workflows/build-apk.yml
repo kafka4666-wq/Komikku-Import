@@ -87,10 +87,13 @@ jobs:
           assert_source "Batch Image Browse-sized global concurrency" "MAX_TOTAL_PARALLEL_SOURCE_REQUESTS = 5" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image slow-source deadline" "SOURCE_TIMEOUT_MS = 45_000L" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image source failure details" "BatchImageSourceDiagnostics.sourceIssueNote" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
+          assert_source "Batch Image source cancellation isolation" "shouldPropagateCancellation(isStopped, currentCoroutineContext().isActive)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
+          assert_source "Batch Image title failure display" "val workerError = sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_ERROR)" app/src/main/java/exh/ui/batchimage/BatchImageScreen.kt
           assert_source "Batch Image conservative match margin" "MINIMUM_MATCH_MARGIN = 8" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image confident-match gate" "BatchImageTitleMatcher.isConfidentMatch(best.score, second?.score)" app/src/main/java/exh/ui/batchimage/BatchImageSearchWorker.kt
           assert_source "Batch Image confident-add regression" "automatic add requires a high score" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
           assert_source "Batch Image bounded source diagnostics regression" "source failure details are bounded and do not expose request URLs" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
+          assert_source "Batch Image cancellation regression" "source-local cancellation is recorded but worker cancellation still propagates" app/src/test/java/exh/ui/batchimage/BatchImageTextExtractorTest.kt
           assert_source "OOM-safe cached library sorting" "lowercaseTitleCache.getOrPut(item.id)" app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           assert_source "Batch Image direct-code progress" "KEY_FAILED to failed" app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           assert_source "Batch Image URL record codec" "record.links.joinToString" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
@@ -104,8 +107,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 89/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.5"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 90/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.6"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -113,8 +116,8 @@ jobs:
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*versionNameSuffix[[:space:]]*=.*$/            versionNameSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
-          grep -q 'versionCode = 89' app/build.gradle.kts
-          grep -q 'versionName = "1.14.5' app/build.gradle.kts
+          grep -q 'versionCode = 90' app/build.gradle.kts
+          grep -q 'versionName = "1.14.6' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -207,7 +210,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='89' versionName='1.14.5'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='90' versionName='1.14.6'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK

@@ -352,6 +352,7 @@ class BatchImageScreen : Screen() {
                                         ?: searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: 0
                                     val phase = searchProgress?.getString(BatchImageSearchWorker.KEY_PHASE)
                                         ?: sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_PHASE).orEmpty()
+                                    val workerError = sourceSearchInfo?.outputData?.getString(BatchImageSearchWorker.KEY_ERROR).orEmpty()
                                     val liveTimeouts = searchProgress?.getInt(BatchImageSearchWorker.KEY_TIMED_OUT_SOURCES, 0) ?: sourceTimeouts
                                     val liveSourceFailures = searchProgress?.getInt(BatchImageSearchWorker.KEY_FAILED_SOURCES, 0) ?: sourceFailures
                                     Text(
@@ -359,7 +360,7 @@ class BatchImageScreen : Screen() {
                                             isSourceSearchRunning -> "Global title searches $done/$totalSearch complete · $added added · $present already in library · $unmatched need review"
                                             sourceSearchInfo?.state == WorkInfo.State.SUCCEEDED -> "Global title search complete · $added added · $present already in library · $unmatched need review · $sourceTimeouts timed out · $sourceFailures failed source requests"
                                             sourceSearchInfo?.state == WorkInfo.State.CANCELLED -> "Global title search cancelled · $added added so far"
-                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Global title search failed · $added added so far"
+                                            sourceSearchInfo?.state == WorkInfo.State.FAILED -> "Global title search failed · ${workerError.ifBlank { "see per-title results below" }.take(180)}"
                                             else -> "Global title search queued"
                                         },
                                         style = MaterialTheme.typography.titleSmall,

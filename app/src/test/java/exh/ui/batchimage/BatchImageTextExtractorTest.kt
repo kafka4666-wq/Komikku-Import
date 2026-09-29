@@ -138,6 +138,21 @@ class BatchImageTextExtractorTest {
     }
 
     @Test
+    fun `source-local cancellation is recorded but worker cancellation still propagates`() {
+        assertTrue(!BatchImageSourceDiagnostics.shouldPropagateCancellation(workerStopped = false, coroutineActive = true))
+        assertTrue(BatchImageSourceDiagnostics.shouldPropagateCancellation(workerStopped = true, coroutineActive = true))
+        assertTrue(BatchImageSourceDiagnostics.shouldPropagateCancellation(workerStopped = false, coroutineActive = false))
+
+        val detail = BatchImageSourceDiagnostics.issueSummary(
+            "Example Source",
+            "request cancelled https://example.invalid/private?token=secret",
+            "CancellationException",
+        )
+        assertEquals("Example Source: request cancelled [URL]", detail)
+        assertEquals("Example Source: CancellationException", BatchImageSourceDiagnostics.issueSummary("Example Source", null, "CancellationException"))
+    }
+
+    @Test
     fun `duplicate OCR titles share one search group while retaining both screenshot records`() {
         val first = BatchImageRecord("one", "Female Boss Hints", null, null, null, "content://one", 92)
         val duplicate = BatchImageRecord("two", "Female Boss Hints by Tabal", "Tabal", null, null, "content://two", 87)
