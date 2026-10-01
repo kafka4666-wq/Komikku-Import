@@ -94,6 +94,8 @@ import com.mikepenz.markdown.model.markdownAnnotatorConfig
 import com.mikepenz.markdown.utils.getUnescapedTextInNode
 import eu.kanade.domain.ui.DoujinCustomisationsPreferences
 import eu.kanade.domain.ui.UiPreferences
+import eu.kanade.presentation.components.MangaTreasuryVisuals.mangaTreasuryTitleSurface
+import eu.kanade.presentation.components.MangaAuroraDesignSystem.mangaAuroraCard
 import eu.kanade.presentation.components.DropdownMenu
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.source.model.SManga
@@ -153,8 +155,28 @@ fun MangaInfoBox(
     val heroGradient by doujinPreferences.heroGradient().collectAsState()
     val heroGradientIntensity by doujinPreferences.heroGradientIntensity().collectAsState()
     val dynamicBackground by doujinPreferences.dynamicBackground().collectAsState()
+    val treasuryTheme by doujinPreferences.mangaTreasuryTheme().collectAsState()
+    val treasuryAura by doujinPreferences.mangaTreasuryAura().collectAsState()
+    val treasuryBackground by doujinPreferences.mangaTreasuryBackground().collectAsState()
+    val treasuryFrame by doujinPreferences.mangaTreasuryFrame().collectAsState()
+    val treasuryIntensity by doujinPreferences.mangaTreasuryIntensity().collectAsState()
+    val treasuryAnimations by doujinPreferences.mangaTreasuryAnimations().collectAsState()
     // KMK <--
-    Box(modifier = modifier) {
+    Box(
+        modifier = modifier.mangaTreasuryTitleSurface(
+            effect = when {
+                treasuryAura != "none" -> treasuryAura
+                treasuryBackground != "none" -> treasuryBackground
+                treasuryFrame != "none" -> treasuryFrame
+                else -> treasuryTheme
+            },
+            intensity = treasuryIntensity,
+            animated = treasuryAnimations,
+        ).mangaAuroraCard(
+            radius = 24.dp,
+            accent = MaterialTheme.colorScheme.primary,
+        ),
+    ) {
         // Backdrop
         val backdropGradientColors = if (heroGradient) listOf(
             Color.Transparent,

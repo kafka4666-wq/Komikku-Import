@@ -39,6 +39,22 @@ jobs:
           # complete compatible source family and therefore cannot be partially
           # overwritten by older runtime/feature archives.
           unzip -oq ../komikku-final-overlay.zip -d .
+          # Manga-only Treasury visuals are copied last so the final overlay cannot
+          # overwrite them. They are presentation-only and never achievement-gated.
+          mkdir -p app/src/main/java/eu/kanade/presentation/components
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/MangaPortCoverage.kt app/src/main/java/eu/kanade/domain/ui/MangaPortCoverage.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
+          cp ../app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
+          test -s app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt
+          test -s app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt
+          grep -q 'object MangaPortCoverage' app/src/main/java/eu/kanade/domain/ui/MangaPortCoverage.kt
+          grep -q 'allMangaTreasuryEffectsUnlocked' app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          grep -q 'Manga Treasury — all effects available' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           # JitPack no longer serves the upstream FlexibleAdapter commit as a
           # resolvable AAR/JAR. Use the compatible Maven Central release so
           # dependency resolution is deterministic and the build reaches Kotlin compilation.

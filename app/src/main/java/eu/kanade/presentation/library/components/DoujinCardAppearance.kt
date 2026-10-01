@@ -26,6 +26,12 @@ data class DoujinCardAppearance(
     val coverSize: String,
     val customCoverSize: Int,
     val metadataDensity: String,
+    val treasuryTheme: String,
+    val treasuryAura: String,
+    val treasuryBackground: String,
+    val treasuryFrame: String,
+    val treasuryIntensity: Int,
+    val treasuryAnimations: Boolean,
 )
 
 @Composable
@@ -46,6 +52,12 @@ internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
     val coverSize by preferences.coverSize().collectAsState()
     val customCoverSize by preferences.customCoverSize().collectAsState()
     val metadataDensity by preferences.metadataDensity().collectAsState()
+    val treasuryTheme by preferences.mangaTreasuryTheme().collectAsState()
+    val treasuryAura by preferences.mangaTreasuryAura().collectAsState()
+    val treasuryBackground by preferences.mangaTreasuryBackground().collectAsState()
+    val treasuryFrame by preferences.mangaTreasuryFrame().collectAsState()
+    val treasuryIntensity by preferences.mangaTreasuryIntensity().collectAsState()
+    val treasuryAnimations by preferences.mangaTreasuryAnimations().collectAsState()
     val reducedEffects = performanceMode == "performance" || performanceMode == "battery"
     return remember(
         performanceMode,
@@ -62,6 +74,12 @@ internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
         coverSize,
         customCoverSize,
         metadataDensity,
+        treasuryTheme,
+        treasuryAura,
+        treasuryBackground,
+        treasuryFrame,
+        treasuryIntensity,
+        treasuryAnimations,
     ) {
         DoujinCardAppearance(
             cornerRadius = cornerRadius,
@@ -77,6 +95,12 @@ internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
             coverSize = coverSize,
             customCoverSize = customCoverSize,
             metadataDensity = metadataDensity,
+            treasuryTheme = treasuryTheme,
+            treasuryAura = treasuryAura,
+            treasuryBackground = treasuryBackground,
+            treasuryFrame = treasuryFrame,
+            treasuryIntensity = treasuryIntensity,
+            treasuryAnimations = treasuryAnimations,
         )
     }
 }

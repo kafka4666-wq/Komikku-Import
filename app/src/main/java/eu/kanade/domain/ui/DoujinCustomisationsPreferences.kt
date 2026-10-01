@@ -1,5 +1,6 @@
 package eu.kanade.domain.ui
 
+import eu.kanade.presentation.components.MangaTreasuryVisuals
 import tachiyomi.core.common.preference.PreferenceStore
 
 /**
@@ -111,6 +112,15 @@ class DoujinCustomisationsPreferences(
     fun hideSensitiveCovers() = preferenceStore.getBoolean("doujin_cosmetic_hide_sensitive_covers", false)
     fun hideTitlesInNotifications() = preferenceStore.getBoolean("doujin_cosmetic_hide_titles_notifications", false)
 
+    // Manga Treasury visuals are presentation-only and intentionally never achievement-gated.
+    fun mangaTreasuryTheme() = preferenceStore.getString("doujin_manga_treasury_theme", MangaTreasuryVisuals.AURORA_PRIME)
+    fun mangaTreasuryAura() = preferenceStore.getString("doujin_manga_treasury_aura", MangaTreasuryVisuals.CORE_MELT)
+    fun mangaTreasuryBackground() = preferenceStore.getString("doujin_manga_treasury_background", MangaTreasuryVisuals.WEEPING_VOID)
+    fun mangaTreasuryFrame() = preferenceStore.getString("doujin_manga_treasury_frame", MangaTreasuryVisuals.CRIMSON_AVATAR_FRAME)
+    fun mangaTreasuryIntensity() = preferenceStore.getInt("doujin_manga_treasury_intensity", 68)
+    fun mangaTreasuryAnimations() = preferenceStore.getBoolean("doujin_manga_treasury_animations", true)
+    fun allMangaTreasuryEffectsUnlocked() = true
+
     fun resetAppearance() = resetKeys(appearanceKeys)
     fun resetLibraryAppearance() = resetKeys(libraryKeys)
     fun resetDetailAppearance() = resetKeys(detailKeys)
@@ -137,6 +147,12 @@ class DoujinCustomisationsPreferences(
         accentColor().set("dynamic")
         customAccentColor().set("#9B7CFF")
         amoledStyle().set(false)
+        mangaTreasuryTheme().set(MangaTreasuryVisuals.AURORA_PRIME)
+        mangaTreasuryAura().set(MangaTreasuryVisuals.CORE_MELT)
+        mangaTreasuryBackground().set(MangaTreasuryVisuals.WEEPING_VOID)
+        mangaTreasuryFrame().set(MangaTreasuryVisuals.CRIMSON_AVATAR_FRAME)
+        mangaTreasuryIntensity().set(68)
+        mangaTreasuryAnimations().set(true)
 
         // Medium covers, regular rows, and 8dp spacing are the safer visual defaults for 80k+ titles.
         gridStyle().set("regular")
@@ -195,6 +211,14 @@ class DoujinCustomisationsPreferences(
                 dynamicCoverColors().set(true); dynamicBackground().set(true); accentColor().set("dynamic")
                 heroCover().set(true); heroGradient().set(true); coverHighlight().set(true)
             }
+            "treasury" -> {
+                mangaTreasuryTheme().set(MangaTreasuryVisuals.AURORA_PRIME)
+                mangaTreasuryAura().set(MangaTreasuryVisuals.CORE_MELT)
+                mangaTreasuryBackground().set(MangaTreasuryVisuals.WEEPING_VOID)
+                mangaTreasuryFrame().set(MangaTreasuryVisuals.CRIMSON_AVATAR_FRAME)
+                mangaTreasuryIntensity().set(68)
+                mangaTreasuryAnimations().set(true)
+            }
         }
     }
 
@@ -230,6 +254,12 @@ class DoujinCustomisationsPreferences(
                 tagStyle().set("normal"); showPageCount().set(true); showReadingProgress().set(true)
                 showSourceBadge().set(true); coverShadow().set(true); coverFade().set(false); coverHighlight().set(true)
                 accentColor().set("dynamic"); customAccentColor().set("#4F64A5"); amoledStyle().set(false)
+                mangaTreasuryTheme().set(MangaTreasuryVisuals.AURORA_PRIME)
+                mangaTreasuryAura().set(MangaTreasuryVisuals.NONE)
+                mangaTreasuryBackground().set(MangaTreasuryVisuals.NONE)
+                mangaTreasuryFrame().set(MangaTreasuryVisuals.NONE)
+                mangaTreasuryIntensity().set(0)
+                mangaTreasuryAnimations().set(false)
             }
             libraryKeys -> {
                 gridStyle().set("regular"); coverSize().set("medium"); customCoverSize().set(94); cardSpacing().set(4)

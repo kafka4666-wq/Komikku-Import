@@ -21,6 +21,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.navigator.LocalNavigator
 import eu.kanade.domain.ui.DoujinCustomisationsPreferences
+import eu.kanade.presentation.components.MangaTreasuryVisuals
+import eu.kanade.presentation.components.MangaTreasuryVisuals.mangaTreasuryCard
+import eu.kanade.presentation.components.MangaTreasuryVisuals.mangaTreasuryTitleSurface
 import eu.kanade.presentation.more.settings.Preference
 import eu.kanade.presentation.more.settings.PreferenceScaffold
 import eu.kanade.presentation.util.Screen
@@ -152,6 +155,15 @@ object SettingsDoujinCustomisationsScreen : SearchableSettings {
     private fun cosmeticPreferences(preferences: DoujinCustomisationsPreferences): List<Preference> {
         val previewStyle by preferences.cardStyle().collectAsState()
         val previewRadius by preferences.coverCornerRadius().collectAsState()
+        val treasuryTheme by preferences.mangaTreasuryTheme().collectAsState()
+        val treasuryAura by preferences.mangaTreasuryAura().collectAsState()
+        val treasuryBackground by preferences.mangaTreasuryBackground().collectAsState()
+        val treasuryFrame by preferences.mangaTreasuryFrame().collectAsState()
+        val treasuryIntensity by preferences.mangaTreasuryIntensity().collectAsState()
+        val treasuryAnimations by preferences.mangaTreasuryAnimations().collectAsState()
+        val treasuryPreviewEffect = listOf(treasuryAura, treasuryFrame, treasuryBackground, treasuryTheme)
+            .firstOrNull { it != MangaTreasuryVisuals.NONE }
+            ?: MangaTreasuryVisuals.AURORA_PRIME
         return listOf(
             Preference.PreferenceGroup(
                 title = "Appearance and cards",
@@ -269,6 +281,51 @@ object SettingsDoujinCustomisationsScreen : SearchableSettings {
                     Preference.PreferenceItem.TextPreference("Apply Glass preset", "Translucent surfaces with restrained transparency.", onClick = { preferences.applyPreset("glass") }),
                     Preference.PreferenceItem.TextPreference("Apply Dynamic preset", "Cover-derived accents and dynamic detail surfaces.", onClick = { preferences.applyPreset("dynamic") }),
                     Preference.PreferenceItem.TextPreference("Reset Appearance", "Reset appearance only; utility and library data remain unchanged.", onClick = preferences::resetAppearance),
+                ),
+            ),
+            Preference.PreferenceGroup(
+                title = "Manga Treasury — all effects available",
+                preferenceItems = persistentListOf(
+                    info("Every manga-facing Treasury visual is available immediately. No achievement, progression, or profile unlock is required. Coverage includes ${MangaTreasuryVisuals.mangaBackgroundEffects.size} Tadami background atmospheres and ${MangaTreasuryVisuals.allEffects.size - 1} total selectable effects. These choices affect manga cards and manga title/details surfaces only; Komikku Home and the reader remain unchanged."),
+                    Preference.PreferenceItem.CustomPreference(
+                        title = "Live Treasury preview",
+                        content = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .height(112.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(22.dp))
+                                    .mangaTreasuryTitleSurface(treasuryPreviewEffect, treasuryIntensity, treasuryAnimations)
+                                    .mangaTreasuryCard(treasuryPreviewEffect, treasuryIntensity, 22.dp, treasuryAnimations)
+                                    .padding(16.dp),
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("Treasury preview", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = MangaTreasuryVisuals.effectLabels[treasuryPreviewEffect].orEmpty() +
+                                            if (treasuryAnimations) " • animated" else " • motion disabled",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        },
+                    ),
+                    list(preferences.mangaTreasuryTheme(), "Manga Treasury Theme", MangaTreasuryVisuals.effectLabels),
+                    list(preferences.mangaTreasuryAura(), "Manga Card Aura", MangaTreasuryVisuals.effectLabels),
+                    list(preferences.mangaTreasuryBackground(), "Manga Title Atmosphere", MangaTreasuryVisuals.effectLabels),
+                    list(preferences.mangaTreasuryFrame(), "Manga Card Frame", MangaTreasuryVisuals.effectLabels),
+                    slider(preferences.mangaTreasuryIntensity(), "Treasury Intensity", "0–100%", 0..100),
+                    switch(preferences.mangaTreasuryAnimations(), "Treasury Motion", "Allow lightweight animated shimmer/glitch accents; disable for reduced motion or lower GPU use."),
+                    Preference.PreferenceItem.TextPreference("Apply Treasury showcase preset", "Enable the Aurora Prime, Core Melt, Weeping Void, and Crimson frame showcase combination.", onClick = { preferences.applyPreset("treasury") }),
+                    Preference.PreferenceItem.TextPreference("Disable all manga Treasury visuals", "Return manga cards and title surfaces to the normal Komikku presentation.", onClick = {
+                        preferences.mangaTreasuryTheme().set(MangaTreasuryVisuals.NONE)
+                        preferences.mangaTreasuryAura().set(MangaTreasuryVisuals.NONE)
+                        preferences.mangaTreasuryBackground().set(MangaTreasuryVisuals.NONE)
+                        preferences.mangaTreasuryFrame().set(MangaTreasuryVisuals.NONE)
+                        preferences.mangaTreasuryIntensity().set(0)
+                        preferences.mangaTreasuryAnimations().set(false)
+                    }),
                 ),
             ),
         )
