@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.net.toUri
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.tachiyomi.source.online.UrlImportableSource
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.source.online.all.EHentai
 import eu.kanade.tachiyomi.source.online.all.NHentai
 import exh.log.ResettableLogger
@@ -32,21 +33,24 @@ class GalleryAdder(
     private val logger = ResettableLogger { safeXLogStackTag() }
     // KMK <---
 
-    private fun matchingSources(uri: android.net.Uri): List<UrlImportableSource> {
+    private fun matchingSources(uri: android.net.Uri): List<HttpSource> {
         // Direct URL imports must not depend on the source catalogue filters.
         // A source can be hidden, unpinned, or have its language disabled while
         // its installed extension still provides the exact URL importer needed
         // for a pasted link. Catalogue visibility remains a UI concern; URL
         // matching is constrained by the source's own matchingHosts contract.
         val candidates = sourceManager.getOnlineSources()
-            .mapNotNull { it.getMainSource<UrlImportableSource>() }
-            .filter {
+            .mapNotNull { it.getMainSource<HttpSource>() }
+            .filter { source ->
                 try {
-                    it.matchesUri(uri)
+                    val urlImportable = source as? UrlImportableSource
+                    urlImportable?.matchesUri(uri) == true ||
+                        source.baseUrl.toUri().host.orEmpty().equals(uri.host.orEmpty(), ignoreCase = true)
                 } catch (_: Exception) {
                     false
                 }
             }
+            .distinctBy { it.id }
 
         // A direct nhentai.net URL can match more than one delegated source. The
         // source browser identifies library entries by (source ID, cleaned URL),
@@ -60,17 +64,21 @@ class GalleryAdder(
                 }
             }
         }
-        return candidates
+        return candidates.sortedByDescending { it is UrlImportableSource }
     }
 
-    fun pickSource(url: String): List<UrlImportableSource> = matchingSources(url.toUri())
+    fun pickSource(url: String): List<HttpSource> = matchingSources(url.toUri())
 
     /** Returns the exact (source ID, cleaned URL) key used by source-library status lookups. */
     suspend fun canonicalMangaIdentity(url: String): Pair<Long, String>? {
         val uri = url.toUri()
         val source = matchingSources(uri).firstOrNull() ?: return null
-        val mappedUrl = source.mapUrlToMangaUrl(uri) ?: return null
-        return source.id to source.cleanMangaUrl(mappedUrl)
+        return if (source is UrlImportableSource) {
+            val mappedUrl = source.mapUrlToMangaUrl(uri) ?: return null
+            source.id to source.cleanMangaUrl(mappedUrl)
+        } else {
+            source.id to uri.toString().trimEnd('/')
+        }
     }
 
     suspend fun addGallery(
@@ -86,7 +94,7 @@ class GalleryAdder(
             val uri = url.toUri()
 
             // Find matching source
-            val source = if (forceSource != null) {
+            val source: HttpSource = if (forceSource != null) {
                 try {
                     if (forceSource.matchesUri(uri)) {
                         forceSource
@@ -102,8 +110,10 @@ class GalleryAdder(
                     ?: return GalleryAddEvent.Fail.UnknownSource(url, context)
             }
 
+            val urlImportableSource = source as? UrlImportableSource
+
             val realChapterUrl = try {
-                source.mapUrlToChapterUrl(uri)
+                urlImportableSource?.mapUrlToChapterUrl(uri)
             } catch (e: Exception) {
                 logger()?.e(context.stringResource(SYMR.strings.gallery_adder_uri_map_to_chapter_error), e)
                 null
@@ -111,7 +121,7 @@ class GalleryAdder(
 
             val cleanedChapterUrl = if (realChapterUrl != null) {
                 try {
-                    source.cleanChapterUrl(realChapterUrl)
+                    urlImportableSource?.cleanChapterUrl(realChapterUrl)
                 } catch (e: Exception) {
                     logger()?.e(context.stringResource(SYMR.strings.gallery_adder_uri_clean_error), e)
                     null
@@ -120,15 +130,15 @@ class GalleryAdder(
                 null
             }
 
-            val chapterMangaUrl = if (realChapterUrl != null) {
-                source.mapChapterUrlToMangaUrl(realChapterUrl.toUri())
+            val chapterMangaUrl = if (realChapterUrl != null && urlImportableSource != null) {
+                urlImportableSource.mapChapterUrlToMangaUrl(realChapterUrl.toUri())
             } else {
                 null
             }
 
             // Map URL to manga URL
             val realMangaUrl = try {
-                chapterMangaUrl ?: source.mapUrlToMangaUrl(uri)
+                chapterMangaUrl ?: urlImportableSource?.mapUrlToMangaUrl(uri) ?: uri.toString()
             } catch (e: Exception) {
                 logger()?.e(context.stringResource(SYMR.strings.gallery_adder_uri_map_to_gallery_error), e)
                 null
@@ -136,7 +146,7 @@ class GalleryAdder(
 
             // Clean URL
             val cleanedMangaUrl = try {
-                source.cleanMangaUrl(realMangaUrl)
+                urlImportableSource?.cleanMangaUrl(realMangaUrl) ?: realMangaUrl.trimEnd('/')
             } catch (e: Exception) {
                 logger()?.e(context.stringResource(SYMR.strings.gallery_adder_uri_clean_error), e)
                 null

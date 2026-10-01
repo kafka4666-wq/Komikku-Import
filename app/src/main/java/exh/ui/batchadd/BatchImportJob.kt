@@ -113,7 +113,7 @@ class BatchImportJob(
                     repairExistingNhentaiIdentity(url)
                     val result = addGalleryRateLimited(url)
                     val wasAdded = result is GalleryAddEvent.Success
-                    val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
+                    val detail = if (wasAdded) null else result.logMessage
                     if (wasAdded) {
                         added++
                     } else {
