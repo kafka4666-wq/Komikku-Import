@@ -3,7 +3,6 @@ package exh
 import android.content.Context
 import androidx.core.net.toUri
 import eu.kanade.domain.manga.interactor.UpdateManga
-import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.tachiyomi.source.online.UrlImportableSource
 import eu.kanade.tachiyomi.source.online.all.EHentai
 import eu.kanade.tachiyomi.source.online.all.NHentai
@@ -29,30 +28,24 @@ class GalleryAdder(
     private val sourceManager: SourceManager = Injekt.get(),
 ) {
 
-    private val filters: Pair<Set<String>, Set<Long>> = Injekt.get<SourcePreferences>().run {
-        enabledLanguages().get() to disabledSources().get().map { it.toLong() }.toSet()
-    }
-
-    private val Pair<Set<String>, Set<Long>>.enabledLangs
-        get() = first
-    private val Pair<Set<String>, Set<Long>>.disabledSources
-        get() = second
-
     // KMK -->
     private val logger = ResettableLogger { safeXLogStackTag() }
-    // KMK <--
+    // KMK <---
 
     private fun matchingSources(uri: android.net.Uri): List<UrlImportableSource> {
-        val candidates = sourceManager.getVisibleSources()
+        // Direct URL imports must not depend on the source catalogue filters.
+        // A source can be hidden, unpinned, or have its language disabled while
+        // its installed extension still provides the exact URL importer needed
+        // for a pasted link. Catalogue visibility remains a UI concern; URL
+        // matching is constrained by the source's own matchingHosts contract.
+        val candidates = sourceManager.getOnlineSources()
             .mapNotNull { it.getMainSource<UrlImportableSource>() }
             .filter {
-                it.lang in filters.enabledLangs &&
-                    it.id !in filters.disabledSources &&
-                    try {
-                        it.matchesUri(uri)
-                    } catch (_: Exception) {
-                        false
-                    }
+                try {
+                    it.matchesUri(uri)
+                } catch (_: Exception) {
+                    false
+                }
             }
 
         // A direct nhentai.net URL can match more than one delegated source. The
