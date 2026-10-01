@@ -18,10 +18,10 @@ class BatchLinkParserTest {
 
         assertEquals(
             listOf(
-                "https://imhentai.xxx/g/12345",
-                "https://asmhentai.com/gallery/example",
+                "https://imhentai.xxx/g/12345/",
+                "https://asmhentai.com/gallery/example/",
                 "https://www.hentaiera.com/gallery/example",
-                "https://hentaifox.com/read/example",
+                "https://hentaifox.com/read/example/",
             ),
             result,
         )
