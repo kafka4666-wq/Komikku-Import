@@ -78,7 +78,7 @@ class GalleryAdder(
             val mappedUrl = source.mapUrlToMangaUrl(uri) ?: return null
             source.id to source.cleanMangaUrl(mappedUrl)
         } else {
-            source.id to uri.toString().trimEnd('/')
+            source.id to relativeSourceUrl(uri)
         }
     }
 
@@ -140,7 +140,7 @@ class GalleryAdder(
 
             // Map URL to manga URL
             val realMangaUrl = try {
-                chapterMangaUrl ?: urlImportableSource?.mapUrlToMangaUrl(uri) ?: uri.toString()
+                chapterMangaUrl ?: urlImportableSource?.mapUrlToMangaUrl(uri) ?: relativeSourceUrl(uri)
             } catch (e: Exception) {
                 logger()?.e(context.stringResource(SYMR.strings.gallery_adder_uri_map_to_gallery_error), e)
                 null
@@ -223,6 +223,21 @@ class GalleryAdder(
 
         return result!!
     }
+
+    /**
+     * Standard Mihon extensions expect manga.url to be relative because their
+     * default request is `baseUrl + manga.url`. Passing an absolute URL makes
+     * requests such as `https://site.examplehttps://site.example/gallery/1`.
+     * Preserve the encoded path and query for extensions that do not implement
+     * UrlImportableSource; custom URL-aware sources continue using their mapper.
+     */
+    private fun relativeSourceUrl(uri: android.net.Uri): String = buildString {
+        append(uri.encodedPath.orEmpty().ifBlank { "/" })
+        uri.encodedQuery?.takeIf { it.isNotBlank() }?.let {
+            append('?')
+            append(it)
+        }
+    }.trimEnd('/').ifBlank { "/" }
 }
 
 sealed class GalleryAddEvent {
