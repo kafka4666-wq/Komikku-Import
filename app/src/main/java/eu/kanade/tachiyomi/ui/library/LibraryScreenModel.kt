@@ -20,6 +20,7 @@ import eu.kanade.domain.manga.interactor.SmartSearchMerge
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.domain.ui.KomikkuFullFeatureEngine
+import eu.kanade.domain.ui.KodamiTreasuryPreferences
 import eu.kanade.domain.sync.SyncPreferences
 import eu.kanade.presentation.components.SEARCH_DEBOUNCE_MILLIS
 import eu.kanade.presentation.library.components.LibraryToolbarTitle
@@ -167,6 +168,7 @@ class LibraryScreenModel(
     // KMK -->
     private val smartSearchMerge: SmartSearchMerge = Injekt.get(),
     // KMK <--
+    private val treasuryPreferences: KodamiTreasuryPreferences = KodamiTreasuryPreferences(Injekt.get()),
 ) : StateScreenModel<LibraryScreenModel.State>(State()) {
 
     // SY -->
@@ -354,6 +356,7 @@ class LibraryScreenModel(
                 .fastAny { it != TriState.DISABLED } ||
                 // KMK -->
                 prefs.filterCategories
+                    || prefs.filterCached != TriState.DISABLED
             // KMK <--
         }
             .distinctUntilChanged()
@@ -440,6 +443,8 @@ class LibraryScreenModel(
         val downloadedOnly = preferences.globalFilterDownloaded
         val skipOutsideReleasePeriod = preferences.skipOutsideReleasePeriod
         val filterDownloaded = if (downloadedOnly) TriState.ENABLED_IS else preferences.filterDownloaded
+        val filterCached = preferences.filterCached
+        val dailyCacheMangaIds = preferences.dailyCacheMangaIds
         val filterUnread = preferences.filterUnread
         val filterStarted = preferences.filterStarted
         val filterBookmarked = preferences.filterBookmarked
@@ -476,6 +481,10 @@ class LibraryScreenModel(
 
         val filterFnUnread: (LibraryItem) -> Boolean = {
             applyFilter(filterUnread) { it.libraryManga.unreadCount > 0 }
+        }
+
+        val filterFnCached: (LibraryItem) -> Boolean = {
+            applyFilter(filterCached) { it.id in dailyCacheMangaIds }
         }
 
         val filterFnStarted: (LibraryItem) -> Boolean = {
@@ -537,6 +546,7 @@ class LibraryScreenModel(
 
         return fastFilter {
             filterFnDownloaded(it) &&
+                filterFnCached(it) &&
                 filterFnUnread(it) &&
                 filterFnStarted(it) &&
                 filterFnBookmarked(it) &&
@@ -760,6 +770,8 @@ class LibraryScreenModel(
             libraryPreferences.sourceBadge().changes(),
             libraryPreferences.useLangIcon().changes(),
             libraryPreferences.filterCategories().changes(),
+            treasuryPreferences.dailyCacheMangaIds().changes(),
+            treasuryPreferences.dailyCacheFilter().changes(),
             // KMK <--
         ) {
             ItemPreferences(
@@ -782,6 +794,12 @@ class LibraryScreenModel(
                 sourceBadge = it[13] as Boolean,
                 useLangIcon = it[14] as Boolean,
                 filterCategories = it[15] as Boolean,
+                dailyCacheMangaIds = (it[16] as String)
+                    .split(',')
+                    .mapNotNull(String::toLongOrNull)
+                    .toSet(),
+                filterCached = runCatching { TriState.valueOf(it[17] as String) }
+                    .getOrDefault(TriState.DISABLED),
             )
         }
     }
@@ -804,6 +822,9 @@ class LibraryScreenModel(
             // Database observers can emit the same snapshot repeatedly while a large
             // library is settling. Do not rematerialize every LibraryItem for each one.
             getLibraryManga.subscribe()
+                // Reader updates can invalidate several related rows in quick succession;
+                // consume only the settled snapshot instead of repeating a 100k-item pass.
+                .debounce(200L)
                 .distinctUntilChanged()
                 .conflate(),
             getLibraryItemPreferencesFlow(),
@@ -811,9 +832,16 @@ class LibraryScreenModel(
         ) { libraryManga, preferences, downloadRefresh ->
             // Resolve source metadata once per source instead of performing repeated lookups for every card.
             val sourcesById = sourceManager.getAll().associateBy { it.id }
-            val preferencesChanged = previousPreferences != preferences
+            val itemDisplayPreferencesChanged = previousPreferences?.let { previous ->
+                previous.downloadBadge != preferences.downloadBadge ||
+                    previous.unreadBadge != preferences.unreadBadge ||
+                    previous.localBadge != preferences.localBadge ||
+                    previous.languageBadge != preferences.languageBadge ||
+                    previous.sourceBadge != preferences.sourceBadge ||
+                    previous.useLangIcon != preferences.useLangIcon
+            } ?: true
             val downloadsChanged = previousDownloadRefresh !== downloadRefresh
-            if (preferencesChanged || downloadsChanged) previousItemsById = emptyMap()
+            if (itemDisplayPreferencesChanged || downloadsChanged) previousItemsById = emptyMap()
             // Build in cancellable batches. collectLatest can then abandon a stale
             // 300k-item refresh instead of waiting for one uninterrupted map operation.
             val items = ArrayList<LibraryItem>(libraryManga.size)
@@ -821,7 +849,7 @@ class LibraryScreenModel(
             libraryManga.forEachIndexed { index, manga ->
                 if (index % 256 == 0) yield()
                 val previous = previousItemsById[manga.manga.id]
-                if (!preferencesChanged && !downloadsChanged && previous?.libraryManga == manga) {
+                if (!itemDisplayPreferencesChanged && !downloadsChanged && previous?.libraryManga == manga) {
                     items += previous
                     nextItemsById[manga.manga.id] = previous
                     return@forEachIndexed
@@ -1756,6 +1784,8 @@ class LibraryScreenModel(
         // KMK -->
         val filterCategories: Boolean,
         // KMK <--
+        val dailyCacheMangaIds: Set<Long>,
+        val filterCached: TriState,
     )
 
     @Immutable

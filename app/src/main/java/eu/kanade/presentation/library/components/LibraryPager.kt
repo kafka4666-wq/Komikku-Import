@@ -1,6 +1,7 @@
 package eu.kanade.presentation.library.components
 
 import android.content.res.Configuration
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -81,12 +82,14 @@ fun LibraryPager(
         val items = getItemsForCategory(category)
 
         if (items.isEmpty()) {
-            LibraryPagerEmptyScreen(
-                searchQuery = searchQuery,
-                hasActiveFilters = hasActiveFilters,
-                contentPadding = contentPadding,
-                onGlobalSearchClicked = onGlobalSearchClicked,
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                LibraryPagerEmptyScreen(
+                    searchQuery = searchQuery,
+                    hasActiveFilters = hasActiveFilters,
+                    contentPadding = contentPadding,
+                    onGlobalSearchClicked = onGlobalSearchClicked,
+                )
+            }
             return@HorizontalPager
         }
 
@@ -220,17 +223,22 @@ fun LibraryPager(
                 }
             }
         }
-        if (adaptiveLayout.twoPane) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.width(200.dp).padding(12.dp)) {
-                    Text("Library", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
-                    Text(category.name, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
-                    Text("${items.size} visible items", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (adaptiveLayout.twoPane) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.width(200.dp).padding(12.dp)) {
+                        Text(category.name, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                        Text("${items.size} visible items", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        libraryBody()
+                    }
                 }
-                Column(modifier = Modifier.weight(1f)) { libraryBody() }
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    libraryBody()
+                }
             }
-        } else {
-            libraryBody()
         }
     }
 }

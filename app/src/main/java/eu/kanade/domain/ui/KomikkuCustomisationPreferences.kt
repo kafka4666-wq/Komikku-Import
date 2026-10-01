@@ -42,7 +42,7 @@ class KomikkuCustomisationPreferences(
     fun duplicateScanner() = preferenceStore.getBoolean("kmk_custom_duplicate_scanner", true)
     fun bulkUndo() = preferenceStore.getBoolean("kmk_custom_bulk_undo", true)
 
-    fun performanceMode() = preferenceStore.getString("kmk_custom_performance_mode", "balanced")
+    fun performanceMode() = preferenceStore.getString("kmk_custom_performance_mode", "performance")
     fun preloadPolicy() = preferenceStore.getString("kmk_custom_preload_policy", "balanced")
     fun animationMode() = preferenceStore.getString("kmk_custom_animation_mode", "full")
     fun lowMemoryImageMode() = preferenceStore.getBoolean("kmk_custom_low_memory_images", false)
@@ -234,7 +234,7 @@ class KomikkuCustomisationPreferences(
             cardStyle() to "normal",
             coverRadius() to "medium",
             coverAspect() to "original",
-            performanceMode() to "balanced",
+            performanceMode() to "performance",
             preloadPolicy() to "balanced",
             animationMode() to "full",
             imageQuality() to "balanced",

@@ -1,8 +1,11 @@
 package eu.kanade.presentation.library.components
 
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.FlipToBack
@@ -13,23 +16,28 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import eu.kanade.domain.ui.KodamiTreasuryPreferences
 import eu.kanade.domain.ui.KomikkuCustomisationPreferences
 import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.components.AppBarActions
 import eu.kanade.presentation.components.SearchToolbar
+import eu.kanade.presentation.more.KodamiProfileAvatar
 import kotlinx.collections.immutable.persistentListOf
+import tachiyomi.core.common.preference.PreferenceStore
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.sy.SYMR
 import tachiyomi.presentation.core.components.Pill
 import tachiyomi.presentation.core.i18n.stringResource
 import tachiyomi.presentation.core.theme.active
-import tachiyomi.core.common.preference.PreferenceStore
+import tachiyomi.presentation.core.util.collectAsState
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -42,6 +50,7 @@ fun LibraryToolbar(
     onClickSelectAll: () -> Unit,
     onClickInvertSelection: () -> Unit,
     onClickFilter: () -> Unit,
+    onClickProfile: () -> Unit,
     onClickRefresh: () -> Unit,
     onClickGlobalUpdate: () -> Unit,
     onClickOpenRandomManga: () -> Unit,
@@ -56,32 +65,40 @@ fun LibraryToolbar(
     onInvalidateDownloadCache: (Context) -> Unit,
 ) {
     val customisation = remember { KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>()) }
+    val treasury = remember { KodamiTreasuryPreferences(Injekt.get<PreferenceStore>()) }
+    val profileName by treasury.profileName().collectAsState()
+    val profilePhoto by treasury.profilePhotoUri().collectAsState()
+    val avatarFrame by treasury.avatarFrame().collectAsState()
     val collapseToolbar = customisation.toolbarCollapsed().get()
     when {
-    selectedCount > 0 -> LibrarySelectionToolbar(
-        selectedCount = selectedCount,
-        onClickUnselectAll = onClickUnselectAll,
-        onClickSelectAll = onClickSelectAll,
-        onClickInvertSelection = onClickInvertSelection,
-    )
-    else -> LibraryRegularToolbar(
-        title = title,
-        hasFilters = hasActiveFilters,
-        searchQuery = searchQuery,
-        onSearchQueryChange = onSearchQueryChange,
-        onClickFilter = onClickFilter,
-        onClickRefresh = onClickRefresh,
-        onClickGlobalUpdate = onClickGlobalUpdate,
-        onClickOpenRandomManga = onClickOpenRandomManga,
-        onClickSyncNow = onClickSyncNow,
-        // SY -->
-        onClickSyncExh = onClickSyncExh,
-        isSyncEnabled = isSyncEnabled,
-        // SY <--
-        scrollBehavior = scrollBehavior,
-        onInvalidateDownloadCache = onInvalidateDownloadCache,
-        collapseToolbar = collapseToolbar,
-    )
+        selectedCount > 0 -> LibrarySelectionToolbar(
+            selectedCount = selectedCount,
+            onClickUnselectAll = onClickUnselectAll,
+            onClickSelectAll = onClickSelectAll,
+            onClickInvertSelection = onClickInvertSelection,
+        )
+        else -> LibraryRegularToolbar(
+            title = title,
+            hasFilters = hasActiveFilters,
+            searchQuery = searchQuery,
+            onSearchQueryChange = onSearchQueryChange,
+            onClickFilter = onClickFilter,
+            onClickProfile = onClickProfile,
+            profileName = profileName,
+            profilePhoto = profilePhoto,
+            avatarFrame = avatarFrame,
+            onClickRefresh = onClickRefresh,
+            onClickGlobalUpdate = onClickGlobalUpdate,
+            onClickOpenRandomManga = onClickOpenRandomManga,
+            onClickSyncNow = onClickSyncNow,
+            // SY -->
+            onClickSyncExh = onClickSyncExh,
+            isSyncEnabled = isSyncEnabled,
+            // SY <--
+            scrollBehavior = scrollBehavior,
+            onInvalidateDownloadCache = onInvalidateDownloadCache,
+            collapseToolbar = collapseToolbar,
+        )
     }
 }
 
@@ -92,6 +109,10 @@ private fun LibraryRegularToolbar(
     searchQuery: String?,
     onSearchQueryChange: (String?) -> Unit,
     onClickFilter: () -> Unit,
+    onClickProfile: () -> Unit,
+    profileName: String,
+    profilePhoto: String,
+    avatarFrame: String,
     onClickRefresh: () -> Unit,
     onClickGlobalUpdate: () -> Unit,
     onClickOpenRandomManga: () -> Unit,
@@ -108,9 +129,19 @@ private fun LibraryRegularToolbar(
     val pillAlpha = if (isSystemInDarkTheme()) 0.12f else 0.08f
     SearchToolbar(
         titleContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.clickable(onClick = onClickProfile),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KodamiProfileAvatar(
+                    name = profileName,
+                    photoUri = profilePhoto,
+                    frame = avatarFrame,
+                    size = 34.dp,
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = title.text,
+                    text = profileName.ifBlank { "Komikku Reader" },
                     maxLines = 1,
                     modifier = Modifier.weight(1f, false),
                     overflow = TextOverflow.Ellipsis,

@@ -245,4 +245,12 @@
     <string name="pref_category_doujin_customisations">Doujin Customisations</string>
     <string name="pref_doujin_customisations_summary">Discovery, duplicate tools, metadata, page navigation, random browsing, and privacy</string>
     <string name="pref_komikku_customisation_reset">Reset Komikku Customisation settings</string>
+    <string name="pref_category_treasury">Treasury</string>
+    <string name="theme_onyx_gold">Onyx Gold</string>
+    <string name="theme_sakura_noir">Sakura Noir</string>
+    <string name="theme_nebula_tide">Nebula Tide</string>
+    <string name="theme_event_horizon">Event Horizon</string>
+    <string name="theme_void_red">Blood of Lilith</string>
+    <string name="theme_aurora_prime">Aurora Prime</string>
+    <string name="theme_lattice_protocol">Lattice Protocol</string>
 </resources>

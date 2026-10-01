@@ -66,6 +66,8 @@ jobs:
           cp ../domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt domain/src/main/java/tachiyomi/domain/manga/repository/MangaRepository.kt
           cp ../data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt data/src/main/java/tachiyomi/data/manga/MangaRepositoryImpl.kt
           cp ../data/src/main/sqldelight/tachiyomi/data/mangas.sq data/src/main/sqldelight/tachiyomi/data/mangas.sq
+          mkdir -p data/src/main/sqldelight/tachiyomi/view
+          cp ../data/src/main/sqldelight/tachiyomi/view/libraryView.sq data/src/main/sqldelight/tachiyomi/view/libraryView.sq
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt app/src/main/java/eu/kanade/domain/ui/KomikkuCustomisationPreferences.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuFeatureStore.kt
           cp ../app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt app/src/main/java/eu/kanade/domain/ui/KomikkuExtendedFeatureStore.kt
@@ -77,6 +79,13 @@ jobs:
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsMainScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsSearchScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsTreasuryScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsTreasuryScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/widget/AppThemePreferenceWidget.kt app/src/main/java/eu/kanade/presentation/more/settings/widget/AppThemePreferenceWidget.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/KodamiTreasuryPreferences.kt app/src/main/java/eu/kanade/domain/ui/KodamiTreasuryPreferences.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/model/AppTheme.kt app/src/main/java/eu/kanade/domain/ui/model/AppTheme.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/KodamiProfileCard.kt app/src/main/java/eu/kanade/presentation/more/KodamiProfileCard.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/KodamiTreasuryBackdrop.kt app/src/main/java/eu/kanade/presentation/more/KodamiTreasuryBackdrop.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt
           cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryToolbar.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
@@ -120,8 +129,12 @@ jobs:
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt app/src/main/java/eu/kanade/presentation/more/KomikkuFeatureHubScreen.kt
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/App.kt app/src/main/java/eu/kanade/tachiyomi/App.kt
           mkdir -p app/src/main/java/eu/kanade/presentation/library/components app/src/main/java/eu/kanade/presentation/theme app/src/main/java/eu/kanade/tachiyomi/ui/library
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
-          cp ../full-feature-overlay/app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
+          cp ../app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt app/src/main/java/eu/kanade/presentation/theme/TachiyomiTheme.kt
+          mkdir -p app/src/main/java/eu/kanade/presentation/theme/colorscheme
+          for palette in OnyxGold SakuraNoir NebulaTide EventHorizon VoidRed AuroraPrime LatticeProtocol; do
+            cp "../app/src/main/java/eu/kanade/presentation/theme/colorscheme/${palette}ColorScheme.kt" "app/src/main/java/eu/kanade/presentation/theme/colorscheme/${palette}ColorScheme.kt"
+          done
           cp ../full-feature-overlay/app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           grep -q '^package exh.ui.nhentaidate$' app/src/main/java/exh/ui/nhentaidate/NhentaiDateImportScreen.kt
           grep -q 'prefer the visible all-language Nhentai delegate first' app/src/main/java/exh/GalleryAdder.kt
@@ -129,7 +142,7 @@ jobs:
           grep -q 'LOG_QUEUE_CAPACITY' app/src/main/java/exh/log/EnhancedFilePrinter.kt
           grep -q 'formatThrowable' app/src/main/java/eu/kanade/tachiyomi/crash/GlobalExceptionHandler.kt
           grep -q 'Sync stopped because the device ran out of memory' app/src/main/java/eu/kanade/tachiyomi/data/sync/SyncDataJob.kt
-          grep -q 'maxSizePercent(context, 0.08)' app/src/main/java/eu/kanade/tachiyomi/App.kt
+          grep -q 'KomikkuFullFeatureEngine.applyCustomisationValues' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'startSyncIfNotRecentlyAttempted' app/src/main/java/eu/kanade/tachiyomi/App.kt
           grep -q 'CHANNEL_KOMIKKU_IMPORT' app/src/main/java/eu/kanade/tachiyomi/data/notification/Notifications.kt
           grep -q 'reorderByPriority' app/src/main/java/eu/kanade/tachiyomi/ui/download/DownloadQueueScreenModel.kt
@@ -180,13 +193,24 @@ jobs:
           test -s app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'recordSourceEvent' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'batch_import_retry' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          # The final archive is the authoritative, API-compatible overlay. Apply it last
+          # so older piecemeal copies cannot replace newer source snapshots.
+          unzip -oq ../komikku-final-overlay.zip -d .
+          grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
+          grep -q 'class DailyOfflineCacheWorker' app/src/main/java/eu/kanade/tachiyomi/data/download/dailycache/DailyOfflineCache.kt
+          grep -q 'PickVisualMedia' app/src/main/java/eu/kanade/presentation/more/settings/screen/TreasuryExtraControls.kt
+          grep -q 'filterCached' app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
+          grep -q 'windowSplashScreenBackground">#000000' app/src/main/res/values/themes.xml
+          grep -q 'label_cached' i18n/src/commonMain/moko-resources/base/strings.xml
+          sed -i 's#com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533#eu.davidea:flexible-adapter:5.1.0#g' gradle/libs.versions.toml
+          grep -q 'eu.davidea:flexible-adapter:5.1.0' gradle/libs.versions.toml
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 86/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.2"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 93/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.14.9"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
-          grep -q 'versionCode = 86' app/build.gradle.kts
-          grep -q 'versionName = "1.14.2' app/build.gradle.kts
+          grep -q 'versionCode = 93' app/build.gradle.kts
+          grep -q 'versionName = "1.14.9' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
           # Date discovery and library insertion run as foreground WorkManager tasks.
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
@@ -260,13 +284,14 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='86' versionName='1.14.2'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='93' versionName='1.14.9'" /tmp/komikku-badging.txt
+          grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.14.9-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30

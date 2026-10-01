@@ -26,10 +26,10 @@ android {
     namespace = "eu.kanade.tachiyomi"
 
     defaultConfig {
-        applicationId = "app.komikku"
+        applicationId = "com.manus.komikku"
 
-        versionCode = 83
-        versionName = "1.14.3"
+        versionCode = 93
+        versionName = "1.14.9"
 
         buildConfigField("String", "COMMIT_COUNT", "\"${getCommitCount()}\"")
         buildConfigField("String", "COMMIT_SHA", "\"${getGitSha()}\"")
@@ -42,7 +42,7 @@ android {
 
     buildTypes {
         val debug by getting {
-            applicationIdSuffix = ".dev"
+            applicationIdSuffix = ""
             versionNameSuffix = "-${getCommitCount()}"
             isPseudoLocalesEnabled = true
         }

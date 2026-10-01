@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import eu.kanade.domain.ui.DoujinCustomisationsPreferences
+import eu.kanade.domain.ui.KomikkuCustomisationPreferences
 import tachiyomi.core.common.preference.PreferenceStore
 import tachiyomi.presentation.core.util.collectAsState
 import uy.kohesive.injekt.Injekt
@@ -30,6 +31,8 @@ data class DoujinCardAppearance(
 @Composable
 internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
     val preferences = remember { DoujinCustomisationsPreferences(Injekt.get<PreferenceStore>()) }
+    val appPreferences = remember { KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>()) }
+    val performanceMode by appPreferences.performanceMode().collectAsState()
     val cornerRadius by preferences.coverCornerRadius().collectAsState()
     val cardStyle by preferences.cardStyle().collectAsState()
     val dynamicCoverColors by preferences.dynamicCoverColors().collectAsState()
@@ -43,7 +46,9 @@ internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
     val coverSize by preferences.coverSize().collectAsState()
     val customCoverSize by preferences.customCoverSize().collectAsState()
     val metadataDensity by preferences.metadataDensity().collectAsState()
+    val reducedEffects = performanceMode == "performance" || performanceMode == "battery"
     return remember(
+        performanceMode,
         cornerRadius,
         cardStyle,
         dynamicCoverColors,
@@ -61,12 +66,12 @@ internal fun rememberDoujinCardAppearance(): DoujinCardAppearance {
         DoujinCardAppearance(
             cornerRadius = cornerRadius,
             cardStyle = cardStyle,
-            dynamicCoverColors = dynamicCoverColors,
-            coverFade = coverFade,
-            coverGradient = coverGradient,
-            cardShadow = cardShadow,
-            coverShadow = coverShadow,
-            coverHighlight = coverHighlight,
+            dynamicCoverColors = dynamicCoverColors && !reducedEffects,
+            coverFade = coverFade && !reducedEffects,
+            coverGradient = coverGradient && !reducedEffects,
+            cardShadow = cardShadow && !reducedEffects,
+            coverShadow = coverShadow && !reducedEffects,
+            coverHighlight = coverHighlight && !reducedEffects,
             compactMode = compactMode,
             titlePosition = titlePosition,
             coverSize = coverSize,

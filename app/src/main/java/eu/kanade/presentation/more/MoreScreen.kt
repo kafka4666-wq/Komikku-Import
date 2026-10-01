@@ -4,9 +4,11 @@ import androidx.compose.animation.graphics.res.animatedVectorResource
 import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -34,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -86,6 +89,7 @@ fun MoreScreen(
     onClickHistory: () -> Unit,
     onClickLibrary: () -> Unit,
     onClickFeatureHub: () -> Unit,
+    onClickTreasury: () -> Unit = {},
     // KMK -->
     onClickLibraryUpdateErrors: () -> Unit,
     // KMK <--
@@ -100,7 +104,9 @@ fun MoreScreen(
     val showContinueBrowsing = customisation.continueBrowsing().get()
     val dashboardCards = customisation.dashboardCardOrder().get().split(',').map(String::trim)
 
-    Scaffold { contentPadding ->
+    Scaffold(containerColor = Color.Transparent) { contentPadding ->
+        Box(modifier = Modifier.fillMaxSize()) {
+        KodamiTreasuryBackdrop(Modifier.fillMaxSize())
         ScrollbarLazyColumn(
             // KMK: use contentPadding as preferable padding for ScrollbarLazyColumn when not using stickyHeader
             contentPadding = contentPadding,
@@ -109,11 +115,27 @@ fun MoreScreen(
                 LogoHeader()
             }
             item {
+                KodamiProfileCard(
+                    modifier = Modifier.padding(
+                        horizontal = MaterialTheme.padding.medium,
+                        vertical = MaterialTheme.padding.small,
+                    ),
+                )
+            }
+            item {
                 TextPreferenceWidget(
                     title = "Komikku Action Center",
                     subtitle = "Clipboard import, recovery, recipes, cleanup, reports, and reading tools",
                     icon = Icons.Outlined.LibraryBooks,
                     onPreferenceClick = onClickFeatureHub,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Treasury",
+                    subtitle = "Themes, background effects, profile cosmetics, and manga options — all available now",
+                    icon = Icons.Outlined.LibraryBooks,
+                    onPreferenceClick = onClickTreasury,
                 )
             }
             if (showCustomDashboard) {
@@ -337,6 +359,7 @@ fun MoreScreen(
                 Sponsor()
             }
             // KMK <--
+        }
         }
     }
 }

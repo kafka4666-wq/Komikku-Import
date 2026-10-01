@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -19,28 +20,36 @@ import eu.kanade.domain.ui.KomikkuCustomisationPreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.domain.ui.model.AppTheme
 import eu.kanade.presentation.theme.colorscheme.BaseColorScheme
+import eu.kanade.presentation.theme.colorscheme.AuroraPrimeColorScheme
 import eu.kanade.presentation.theme.colorscheme.CatppuccinColorScheme
 import eu.kanade.presentation.theme.colorscheme.CloudflareColorScheme
 import eu.kanade.presentation.theme.colorscheme.CottoncandyColorScheme
 import eu.kanade.presentation.theme.colorscheme.CustomColorScheme
 import eu.kanade.presentation.theme.colorscheme.DoomColorScheme
+import eu.kanade.presentation.theme.colorscheme.EventHorizonColorScheme
 import eu.kanade.presentation.theme.colorscheme.GreenAppleColorScheme
+import eu.kanade.presentation.theme.colorscheme.LatticeProtocolColorScheme
 import eu.kanade.presentation.theme.colorscheme.LavenderColorScheme
 import eu.kanade.presentation.theme.colorscheme.MatrixColorScheme
 import eu.kanade.presentation.theme.colorscheme.MidnightDuskColorScheme
 import eu.kanade.presentation.theme.colorscheme.MochaColorScheme
 import eu.kanade.presentation.theme.colorscheme.MonetColorScheme
 import eu.kanade.presentation.theme.colorscheme.MonochromeColorScheme
+import eu.kanade.presentation.theme.colorscheme.NebulaTideColorScheme
 import eu.kanade.presentation.theme.colorscheme.NordColorScheme
+import eu.kanade.presentation.theme.colorscheme.OnyxGoldColorScheme
+import eu.kanade.presentation.theme.colorscheme.SakuraNoirColorScheme
 import eu.kanade.presentation.theme.colorscheme.SapphireColorScheme
 import eu.kanade.presentation.theme.colorscheme.StrawberryColorScheme
 import eu.kanade.presentation.theme.colorscheme.TachiyomiColorScheme
 import eu.kanade.presentation.theme.colorscheme.TakoColorScheme
 import eu.kanade.presentation.theme.colorscheme.TealTurqoiseColorScheme
 import eu.kanade.presentation.theme.colorscheme.TidalWaveColorScheme
+import eu.kanade.presentation.theme.colorscheme.VoidRedColorScheme
 import eu.kanade.presentation.theme.colorscheme.YinYangColorScheme
 import eu.kanade.presentation.theme.colorscheme.YotsubaColorScheme
 import tachiyomi.core.common.preference.PreferenceStore
+import tachiyomi.presentation.core.util.collectAsState
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -69,8 +78,10 @@ fun TachiyomiTheme(
     content: @Composable () -> Unit,
 ) {
     val doujinPreferences = remember { DoujinCustomisationsPreferences(Injekt.get<PreferenceStore>()) }
+    val appPreferences = remember { KomikkuCustomisationPreferences(Injekt.get<PreferenceStore>()) }
+    val performanceMode by appPreferences.performanceMode().collectAsState()
     val cosmeticAmoled = doujinPreferences.amoledStyle().get()
-    val animations = doujinPreferences.animations().get()
+    val animations = doujinPreferences.animations().get() && performanceMode !in setOf("performance", "battery")
     val selectedAccent = doujinPreferences.accentColor().get()
     val customAccent = doujinPreferences.customAccentColor().get()
     val appliedSeed = when (selectedAccent) {
@@ -189,4 +200,11 @@ private val colorSchemes: Map<AppTheme, BaseColorScheme> = mapOf(
     AppTheme.MATRIX to MatrixColorScheme,
     AppTheme.MOCHA to MochaColorScheme,
     AppTheme.SAPPHIRE to SapphireColorScheme,
+    AppTheme.ONYX_GOLD to OnyxGoldColorScheme,
+    AppTheme.SAKURA_NOIR to SakuraNoirColorScheme,
+    AppTheme.NEBULA_TIDE to NebulaTideColorScheme,
+    AppTheme.EVENT_HORIZON to EventHorizonColorScheme,
+    AppTheme.VOID_RED to VoidRedColorScheme,
+    AppTheme.AURORA_PRIME to AuroraPrimeColorScheme,
+    AppTheme.LATTICE_PROTOCOL to LatticeProtocolColorScheme,
 )
