@@ -53,7 +53,7 @@ object BatchLinkParser {
             .map { normalize(it.value) }
             .filter(String::isNotBlank)
             .filterNot { it.startsWith("#") }
-            .distinctBy(String::lowercase)
+            .distinctBy { it.lowercase().trimEnd('/') }
             .toList()
     }
 
