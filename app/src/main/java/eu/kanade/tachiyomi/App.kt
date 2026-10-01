@@ -112,6 +112,11 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 
     private val disableIncognitoReceiver = DisableIncognitoReceiver()
 
+    // ProcessLifecycleOwner.onStart fires again whenever the app returns from the
+    // background. A full sync on every such transition rewrites library rows and
+    // makes the library rebuild after the user leaves the reader.
+    private var syncStartedForProcess = false
+
     @SuppressLint("LaunchActivityFromNotification")
     override fun onCreate() {
         super<Application>.onCreate()
@@ -364,7 +369,8 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 
         val syncPreferences: SyncPreferences = Injekt.get()
         val syncTriggerOpt = syncPreferences.getSyncTriggerOptions()
-        if (syncPreferences.isSyncEnabled() && syncTriggerOpt.syncOnAppResume) {
+        if (!syncStartedForProcess && syncPreferences.isSyncEnabled() && syncTriggerOpt.syncOnAppResume) {
+            syncStartedForProcess = true
             startSyncIfNotRecentlyAttempted()
         }
 
