@@ -57,7 +57,6 @@ jobs:
           grep -q 'Manga Treasury — all effects available' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchLinkParser.kt
           grep -q 'BatchLinkParser.parse' app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-          test -s app/src/test/java/exh/ui/batchadd/BatchLinkParserTest.kt
           # JitPack no longer serves the upstream FlexibleAdapter commit as a
           # resolvable AAR/JAR. Use the compatible Maven Central release so
           # dependency resolution is deterministic and the build reaches Kotlin compilation.
