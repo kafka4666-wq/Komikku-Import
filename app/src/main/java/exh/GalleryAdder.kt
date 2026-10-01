@@ -67,7 +67,8 @@ class GalleryAdder(
         return candidates.sortedByDescending { it is UrlImportableSource }
     }
 
-    fun pickSource(url: String): List<HttpSource> = matchingSources(url.toUri())
+    fun pickSource(url: String): List<UrlImportableSource> = matchingSources(url.toUri())
+        .mapNotNull { it as? UrlImportableSource }
 
     /** Returns the exact (source ID, cleaned URL) key used by source-library status lookups. */
     suspend fun canonicalMangaIdentity(url: String): Pair<Long, String>? {
@@ -97,7 +98,8 @@ class GalleryAdder(
             val source: HttpSource = if (forceSource != null) {
                 try {
                     if (forceSource.matchesUri(uri)) {
-                        forceSource
+                        forceSource as? HttpSource
+                            ?: return GalleryAddEvent.Fail.UnknownType(url, context)
                     } else {
                         return GalleryAddEvent.Fail.UnknownSource(url, context)
                     }
