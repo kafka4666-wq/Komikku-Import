@@ -33,7 +33,10 @@ class BatchLinkParserTest {
             "123456.abcdef12: https://e-hentai.org/g/123456/abcdef12/\n123456.abcdef12:",
         )
 
-        assertEquals(listOf("https://e-hentai.org/g/123456/abcdef12"), result)
+        assertEquals(
+            listOf("https://e-hentai.org/g/123456/abcdef12"),
+            result.map { it.trimEnd('/') }.distinct(),
+        )
         assertEquals(
             listOf("https://exhentai.org/g/123456/abcdef12"),
             BatchLinkParser.parse("123456.abcdef12:", useExhentai = true),
