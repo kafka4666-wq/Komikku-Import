@@ -362,7 +362,14 @@ class NhentaiDateImportWorker(
                 delay(60_000L)
                 continue
             }
-            if (response.code == 404) break
+            if (response.code == 404) {
+                response.close()
+                // A 404 before the advertised final page is a transient server/CDN
+                // response, not the end of the search. Treating it as completion
+                // silently truncated large imports (for example at ~1,113 items).
+                if (page > totalPages) break
+                throw IOException("Nhentai search page $page returned HTTP 404")
+            }
             if (!response.isSuccessful) {
                 val code = response.code
                 response.close()
