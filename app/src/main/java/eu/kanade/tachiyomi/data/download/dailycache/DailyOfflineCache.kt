@@ -142,9 +142,10 @@ class DailyOfflineCacheManager(
         }
 
         // Persist ownership before starting the queue. At midnight, only chapters newly
-        // admitted by this job are deleted; pre-existing downloads and queue entries survive.
+        // admitted by this job are deleted; favorited titles are retained explicitly.
         writeRecords(newlyQueued)
-        preferences.dailyCacheMangaIds().set(selected.joinToString(",") { it.manga.id.toString() })
+        val retainedIds = readRecords().map { it.first }.distinct()
+        preferences.dailyCacheMangaIds().set((retainedIds + selected.map { it.manga.id }).distinct().joinToString(","))
         preferences.dailyCacheDate().set(today)
         downloadManager.startDownloads()
         preferences.dailyCacheStatus().set(
@@ -158,8 +159,13 @@ class DailyOfflineCacheManager(
         val today = LocalDate.now().toString()
         if (cacheDate.isBlank() || cacheDate >= today) return@withContext
 
+        val retained = mutableListOf<Pair<Long, Long>>()
         readRecords().groupBy { it.first }.forEach { (mangaId, records) ->
             val manga = getManga.await(mangaId) ?: return@forEach
+            if (manga.favorite) {
+                retained += records
+                return@forEach
+            }
             val source = sourceManager.get(manga.source) ?: return@forEach
             val wantedChapterIds = records.mapTo(hashSetOf()) { it.second }
             val ownedChapters = getChaptersByMangaId.await(mangaId, applyFilter = false)
@@ -174,16 +180,17 @@ class DailyOfflineCacheManager(
             }
         }
 
-        recordsFile.delete()
-        preferences.dailyCacheMangaIds().set("")
+        if (retained.isEmpty()) recordsFile.delete() else writeRecords(retained, replace = true)
+        preferences.dailyCacheMangaIds().set(retained.map { it.first }.distinct().joinToString(","))
         preferences.dailyCacheChapterRecords().set("")
         preferences.dailyCacheDate().set("")
         preferences.dailyCacheStatus().set("")
     }
 
-    private fun writeRecords(records: List<Pair<Long, Long>>) {
+    private fun writeRecords(records: List<Pair<Long, Long>>, replace: Boolean = false) {
+        val merged = if (replace) records.distinct() else (readRecords() + records).distinct()
         val tempFile = File(context.filesDir, "komikku-daily-cache-owned-chapters.tmp")
-        tempFile.writeText(records.joinToString("\n") { (mangaId, chapterId) -> "$mangaId:$chapterId" })
+        tempFile.writeText(merged.joinToString("\n") { (mangaId, chapterId) -> "$mangaId:$chapterId" })
         if (recordsFile.exists() && !recordsFile.delete()) error("Could not replace daily-cache ownership records")
         if (!tempFile.renameTo(recordsFile)) error("Could not save daily-cache ownership records")
     }

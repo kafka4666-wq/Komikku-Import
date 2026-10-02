@@ -452,6 +452,7 @@ object NhentaiDailyImportSchedule {
     private const val PREFS = "nhentai_daily_import"
     private const val ENABLED = "enabled"
     private const val TIME = "time"
+    private const val LAST_TRIGGER_DATE = "last_trigger_date"
     private const val DEFAULT_TIME = "00:00"
     private const val TAG = "nhentai-daily-import"
     private const val ALARM_REQUEST_CODE = 9040
@@ -504,24 +505,22 @@ object NhentaiDailyImportSchedule {
             Intent(ACTION_DAILY_IMPORT_ALARM).setPackage(context.packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val exactScheduled = runCatching {
+        runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 false
             } else {
                 alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, alarmIntent)
                 true
             }
-        }.getOrDefault(false)
-        if (exactScheduled) {
-            context.workManager.cancelUniqueWork(TAG)
-        } else {
-            // Devices that deny exact alarms still get a persisted fallback.
-            val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
-                .setInitialDelay((triggerAt - System.currentTimeMillis()).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
-                .addTag(TAG)
-                .build()
-            context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
         }
+        // Keep a WorkManager fallback even when the exact alarm is accepted.
+        // Some OEMs silently drop exact alarms after force-stop/reboot. The
+        // once-per-day guard in onAlarm prevents a duplicate if both fire.
+        val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
+            .setInitialDelay((triggerAt - System.currentTimeMillis()).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+            .addTag(TAG)
+            .build()
+        context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
     }
 
     fun cancel(context: Context) {
@@ -541,6 +540,9 @@ object NhentaiDailyImportSchedule {
         val ist = TimeZone.getTimeZone("Asia/Kolkata")
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = ist }
             .format(Calendar.getInstance(ist).time)
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (preferences.getString(LAST_TRIGGER_DATE, null) == today) return
+        preferences.edit().putString(LAST_TRIGGER_DATE, today).apply()
         NhentaiDateImportWorker.start(context, today, today)
         schedule(context)
     }
