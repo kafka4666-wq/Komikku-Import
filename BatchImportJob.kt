@@ -47,7 +47,7 @@ import java.util.concurrent.TimeUnit
 object BatchImportRequestLimiter {
     // Keep normal imports at the current speed. A 429 is handled with a
     // targeted cooldown below instead of slowing every request globally.
-    private const val REQUEST_INTERVAL_MS = 1_500L
+    private const val REQUEST_INTERVAL_MS = 2_000L
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 
