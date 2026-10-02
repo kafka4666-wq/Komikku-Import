@@ -135,8 +135,15 @@ class GlobalExceptionHandler private constructor(
         fun getThrowableFromIntent(intent: Intent): Throwable? {
             return try {
                 Json.decodeFromString(ThrowableSerializer, intent.getStringExtra(INTENT_EXTRA)!!)
-            } catch (e: Exception) {
-                logcat(LogPriority.ERROR, e) { "Wasn't able to retrieve throwable from intent" }
+            } catch (error: Throwable) {
+                // Crash details are commonly opened while the process is already
+                // near its heap limit. Deserialization may itself throw an
+                // OutOfMemoryError; never let the crash screen crash a second time.
+                try {
+                    logcat(LogPriority.ERROR, error) { "Wasn't able to retrieve throwable from intent" }
+                } catch (_: Throwable) {
+                    // Logging is best-effort during crash recovery.
+                }
                 null
             }
         }

@@ -30,8 +30,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import tachiyomi.domain.manga.interactor.GetLibraryManga
 import tachiyomi.domain.manga.model.MangaUpdate
+import tachiyomi.domain.manga.repository.MangaRepository
 import tachiyomi.domain.storage.service.StoragePreferences
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -68,12 +68,10 @@ class BatchImportJob(
 ) : CoroutineWorker(context, workerParams) {
     private val status: BatchImportStatus = Injekt.get()
     private val storagePreferences: StoragePreferences = Injekt.get()
-    private val getLibraryManga: GetLibraryManga = Injekt.get()
+    private val mangaRepository: MangaRepository = Injekt.get()
     private val updateManga: UpdateManga = Injekt.get()
     private val identityRepairLock = Mutex()
-    private var identityRepairLoaded = false
-    private val sourceByCanonicalUrl = mutableMapOf<String, Long>()
-    private val mangaIdByCanonicalUrl = mutableMapOf<String, Long>()
+    private val repairedIdentities = mutableSetOf<String>()
 
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
@@ -184,24 +182,19 @@ class BatchImportJob(
         val canonicalUrl = identity.second.trimEnd('/').ifBlank { return }
         val targetSource = identity.first
         identityRepairLock.withLock {
-            if (!identityRepairLoaded) {
-                getLibraryManga.await().forEach { libraryManga ->
-                    val manga = libraryManga.manga
-                    val normalizedUrl = manga.url.trimEnd('/').ifBlank { return@forEach }
-                    val sourceIsNhentai = nHentaiSourceIds.isEmpty() || manga.source in nHentaiSourceIds
-                    if (sourceIsNhentai && normalizedUrl.startsWith("/g/")) {
-                        sourceByCanonicalUrl[normalizedUrl] = manga.source
-                        mangaIdByCanonicalUrl[normalizedUrl] = manga.id
-                    }
-                }
-                identityRepairLoaded = true
-            }
+            if (!repairedIdentities.add("$targetSource:$canonicalUrl")) return
 
-            val existingSource = sourceByCanonicalUrl[canonicalUrl] ?: return
-            if (existingSource == targetSource) return
-            val mangaId = mangaIdByCanonicalUrl[canonicalUrl] ?: return
-            if (updateManga.await(MangaUpdate(id = mangaId, source = targetSource))) {
-                sourceByCanonicalUrl[canonicalUrl] = targetSource
+            // Do not load the entire library here. A large library makes that query
+            // materialize every category/chapter aggregate and was the direct cause
+            // of OOMs while automatic nhentai addition was running. Query only the
+            // small set of possible nhentai source IDs for this one gallery.
+            val sourceIds = (nHentaiSourceIds + targetSource).distinct()
+            for (sourceId in sourceIds) {
+                if (sourceId == targetSource) continue
+                val existing = mangaRepository.getMangaByUrlAndSourceId(canonicalUrl, sourceId) ?: continue
+                if (updateManga.await(MangaUpdate(id = existing.id, source = targetSource))) {
+                    break
+                }
             }
         }
     }
@@ -335,15 +328,16 @@ class BatchImportJob(
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
             input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
-            return enqueue(context, input, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
+            return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
         }
 
         fun startFromFile(context: Context, input: File) {
             input.parentFile?.mkdirs()
             if (!input.exists()) input.createNewFile()
             // Discovery retries must not replace a worker that is already draining
-            // this same growing file. KEEP also starts it again if the process died.
-            enqueue(context, input, androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false)
+            // this same growing file. Use a queue-specific name so a second manual
+            // or daily nhentai import cannot strand its URLs behind an older queue.
+            enqueue(context, input, queueWorkName(input), androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false)
         }
 
         fun savedJobId(context: Context): String? = prefs(context).getString(PREF_JOB_ID, null)
@@ -351,6 +345,7 @@ class BatchImportJob(
         private fun enqueue(
             context: Context,
             input: File,
+            workName: String,
             policy: androidx.work.ExistingWorkPolicy,
             saveJobId: Boolean,
         ): UUID {
@@ -361,13 +356,16 @@ class BatchImportJob(
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
-            context.workManager.enqueueUniqueWork(TAG, policy, request)
+            context.workManager.enqueueUniqueWork(workName, policy, request)
             if (saveJobId) prefs(context).edit().putString(PREF_JOB_ID, requestId.toString()).apply()
             return requestId
         }
 
+        private fun queueWorkName(input: File): String = "$TAG-${input.absolutePath.hashCode()}"
+
         fun stop(context: Context) {
-            context.workManager.cancelUniqueWork(TAG)
+            // Queue workers have per-file unique names; cancel by the shared tag.
+            context.workManager.cancelAllWorkByTag(TAG)
         }
 
         fun cancel(context: Context) {

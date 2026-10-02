@@ -9,6 +9,8 @@ import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import eu.kanade.domain.manga.interactor.UpdateManga
+import eu.kanade.domain.ui.KomikkuExtendedFeatureStore
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
@@ -20,6 +22,7 @@ import eu.kanade.tachiyomi.util.system.setForegroundSafely
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.GalleryAddEvent
 import exh.GalleryAdder
+import exh.source.nHentaiSourceIds
 import exh.log.xLogE
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -27,6 +30,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import tachiyomi.domain.manga.model.MangaUpdate
+import tachiyomi.domain.manga.repository.MangaRepository
 import tachiyomi.domain.storage.service.StoragePreferences
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -35,11 +40,14 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /** A single process-wide gate shared by discovery and library insertion. */
 object BatchImportRequestLimiter {
-    private const val REQUEST_INTERVAL_MS = 4_000L
+    // Keep the batch polite to sources while avoiding the old 4-second idle gap
+    // for every gallery. A server 429 still switches this worker to its cooldown.
+    private const val REQUEST_INTERVAL_MS = 1_500L
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 
@@ -60,6 +68,10 @@ class BatchImportJob(
 ) : CoroutineWorker(context, workerParams) {
     private val status: BatchImportStatus = Injekt.get()
     private val storagePreferences: StoragePreferences = Injekt.get()
+    private val mangaRepository: MangaRepository = Injekt.get()
+    private val updateManga: UpdateManga = Injekt.get()
+    private val identityRepairLock = Mutex()
+    private val repairedIdentities = mutableSetOf<String>()
 
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
@@ -68,7 +80,7 @@ class BatchImportJob(
         val failedFile = File("$inputPath.failed")
         val eventsFile = File("$inputPath.events")
         val doneFile = File("$inputPath.done")
-        var urls = inputFile.readLinesSafely().toMutableList()
+        var urls = inputFile.readCompleteLinesSafely().toMutableList()
         if (urls.isEmpty() && !inputFile.exists()) return Result.failure()
         var nextIndex = checkpointFile.readLinesSafely().firstOrNull()?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         var failedLinks = failedFile.readLinesSafely().toMutableList()
@@ -78,25 +90,28 @@ class BatchImportJob(
 
         status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
         setForegroundSafely()
+        setProgress(progressData(nextIndex, urls.size, added, failed))
         showProgress(nextIndex, urls.size, added, failed)
 
         return try {
             while (true) {
-                val available = inputFile.readLinesSafely()
+                val available = inputFile.readCompleteLinesSafely()
                 if (available.size > urls.size) {
                     urls.addAll(available.drop(urls.size))
                 }
                 if (urls.size != announcedTotal) {
                     status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
                     announcedTotal = urls.size
+                    setProgress(progressData(nextIndex, urls.size, added, failed))
                     showProgress(nextIndex, urls.size, added, failed)
                 }
 
                 if (nextIndex < urls.size) {
                     val url = urls[nextIndex]
+                    repairExistingNhentaiIdentity(url)
                     val result = addGalleryRateLimited(url)
                     val wasAdded = result is GalleryAddEvent.Success
-                    val detail = if (wasAdded) null else (result as? GalleryAddEvent.Fail.Error)?.logMessage
+                    val detail = if (wasAdded) null else result.logMessage
                     if (wasAdded) {
                         added++
                     } else {
@@ -109,6 +124,7 @@ class BatchImportJob(
                     nextIndex++
                     checkpointFile.writeText(nextIndex.toString())
                     status.record(url, wasAdded, detail)
+                    setProgress(progressData(nextIndex, urls.size, added, failed))
                     showProgress(nextIndex, urls.size, added, failed)
                     continue
                 }
@@ -119,25 +135,27 @@ class BatchImportJob(
 
             writeLinksFile("batch_import_failed_links", failedLinks)
             showComplete(nextIndex, urls.size, added, failed)
-            Result.success()
+            Result.success(progressData(nextIndex, urls.size, added, failed))
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                val currentUrls = inputFile.readLinesSafely()
+                val currentUrls = inputFile.readCompleteLinesSafely()
                 writeUnprocessedLinks(currentUrls, nextIndex, failedLinks)
+                KomikkuExtendedFeatureStore.recordRecovery(context, "batch_import_cancelled", "Saved checkpoint at ${nextIndex}/${currentUrls.size}")
                 status.restore(currentUrls.size, nextIndex.coerceAtMost(currentUrls.size), added, failed, eventsFile.readLinesSafely(), running = false)
             }
             throw cancelled
         } catch (error: Throwable) {
             xLogE("Batch import error", error)
             withContext(NonCancellable) {
-                val currentUrls = inputFile.readLinesSafely()
+                val currentUrls = inputFile.readCompleteLinesSafely()
                 writeUnprocessedLinks(currentUrls, nextIndex, failedLinks)
+                KomikkuExtendedFeatureStore.recordRecovery(context, "batch_import_retry", "Saved checkpoint at ${nextIndex}/${currentUrls.size}: ${error.javaClass.simpleName}")
                 status.restore(currentUrls.size, nextIndex.coerceAtMost(currentUrls.size), added, failed, eventsFile.readLinesSafely(), running = false)
             }
             Result.retry()
         } finally {
             context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-            if (!isStopped && doneFile.exists() && nextIndex >= inputFile.readLinesSafely().size) {
+            if (!isStopped && doneFile.exists() && nextIndex >= inputFile.readCompleteLinesSafely().size) {
                 inputFile.delete()
                 checkpointFile.delete()
                 failedFile.delete()
@@ -153,14 +171,53 @@ class BatchImportJob(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
 
+    /**
+     * The source grid marks a result as present by querying (manga.url, manga.source).
+     * Older importer builds could resolve the same nhentai gallery through a different
+     * delegated language/source ID. Repair that key before GalleryAdder looks it up,
+     * preserving the existing row, favorite state, chapters, and categories.
+     */
+    private suspend fun repairExistingNhentaiIdentity(url: String) {
+        val identity = runCatching { GalleryAdder().canonicalMangaIdentity(url) }.getOrNull() ?: return
+        val canonicalUrl = identity.second.trimEnd('/').ifBlank { return }
+        val targetSource = identity.first
+        identityRepairLock.withLock {
+            if (!repairedIdentities.add("$targetSource:$canonicalUrl")) return
+
+            // Do not load the entire library here. A large library makes that query
+            // materialize every category/chapter aggregate and was the direct cause
+            // of OOMs while automatic nhentai addition was running. Query only the
+            // small set of possible nhentai source IDs for this one gallery.
+            val sourceIds = (nHentaiSourceIds + targetSource).distinct()
+            for (sourceId in sourceIds) {
+                if (sourceId == targetSource) continue
+                val existing = mangaRepository.getMangaByUrlAndSourceId(canonicalUrl, sourceId) ?: continue
+                if (updateManga.await(MangaUpdate(id = existing.id, source = targetSource))) {
+                    break
+                }
+            }
+        }
+    }
+
     private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
         awaitResume()
         var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
         for (attempt in 0 until RATE_LIMIT_RETRIES) {
             awaitResume()
             BatchImportRequestLimiter.await()
+            val startedAt = System.currentTimeMillis()
             result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
-            if (!isRateLimited(result)) return result
+            val elapsed = System.currentTimeMillis() - startedAt
+            val rateLimited = isRateLimited(result)
+            KomikkuExtendedFeatureStore.recordSourceEvent(
+                context = context,
+                source = "nhentai",
+                kind = if (rateLimited) "rate_limit" else "import",
+                success = result is GalleryAddEvent.Success,
+                latencyMs = elapsed,
+                error = (result as? GalleryAddEvent.Fail.Error)?.logMessage,
+            )
+            if (!rateLimited) return result
             if (attempt < RATE_LIMIT_RETRIES - 1) {
                 delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
             }
@@ -196,7 +253,17 @@ class BatchImportJob(
         context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed))
     }
 
+    private fun progressData(completed: Int, total: Int, added: Int, failed: Int) = workDataOf(
+        KEY_COMPLETED to completed,
+        KEY_TOTAL to total,
+        KEY_ADDED to added,
+        KEY_FAILED to failed,
+    )
+
     private fun showComplete(completed: Int, total: Int, added: Int, failed: Int) {
+        // Stop the app-wide banner as soon as the queue is fully drained. A later
+        // import calls begin() again, so the banner reappears for the new job.
+        status.restore(total, completed, added, failed, status.state.value.events, running = false)
         context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
         context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
             setSmallIcon(R.drawable.ic_komikku)
@@ -223,6 +290,19 @@ class BatchImportJob(
 
     private fun File.readLinesSafely(): List<String> = runCatching { if (exists()) readLines().filter(String::isNotBlank) else emptyList() }.getOrDefault(emptyList())
 
+    /** Ignore a concurrently appended, unterminated final URL. */
+    private fun File.readCompleteLinesSafely(): List<String> = runCatching {
+        if (!exists()) return@runCatching emptyList()
+        val text = readText()
+        val end = text.lastIndexOf('\n')
+        if (end < 0) return@runCatching emptyList()
+        text.substring(0, end)
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toList()
+    }.getOrDefault(emptyList())
+
     private fun File.appendLineSafely(value: String) {
         parentFile?.mkdirs()
         appendText(value + "\n")
@@ -237,41 +317,65 @@ class BatchImportJob(
         private const val PAUSE_POLL_MS = 500L
         private const val PREFS_NAME = "batch_import_controls"
         private const val PREFS_PAUSED = "paused"
+        private const val PREF_JOB_ID = "batch_import_job_id"
 
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         fun isPaused(context: Context): Boolean = prefs(context).getBoolean(PREFS_PAUSED, false)
         fun pause(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, true).apply() }
         fun resume(context: Context) { prefs(context).edit().putBoolean(PREFS_PAUSED, false).apply() }
 
-        fun start(context: Context, urls: List<String>) {
+        fun start(context: Context, urls: List<String>): UUID {
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
-            input.writeText(urls.joinToString("\n"))
+            input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
-            enqueue(context, input)
+            return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
         }
 
         fun startFromFile(context: Context, input: File) {
             input.parentFile?.mkdirs()
             if (!input.exists()) input.createNewFile()
-            enqueue(context, input)
+            // Discovery retries must not replace a worker that is already draining
+            // this same growing file. Use a queue-specific name so a second manual
+            // or daily nhentai import cannot strand its URLs behind an older queue.
+            enqueue(context, input, queueWorkName(input), androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false)
         }
 
-        private fun enqueue(context: Context, input: File) {
+        fun savedJobId(context: Context): String? = prefs(context).getString(PREF_JOB_ID, null)
+
+        private fun enqueue(
+            context: Context,
+            input: File,
+            workName: String,
+            policy: androidx.work.ExistingWorkPolicy,
+            saveJobId: Boolean,
+        ): UUID {
+            val requestId = UUID.randomUUID()
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
+                .setId(requestId)
                 .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
-            context.workManager.enqueueUniqueWork(TAG, androidx.work.ExistingWorkPolicy.REPLACE, request)
+            context.workManager.enqueueUniqueWork(workName, policy, request)
+            if (saveJobId) prefs(context).edit().putString(PREF_JOB_ID, requestId.toString()).apply()
+            return requestId
         }
 
+        private fun queueWorkName(input: File): String = "$TAG-${input.absolutePath.hashCode()}"
+
         fun stop(context: Context) {
-            context.workManager.cancelUniqueWork(TAG)
+            // Queue workers have per-file unique names; cancel by the shared tag.
+            context.workManager.cancelAllWorkByTag(TAG)
         }
 
         fun cancel(context: Context) {
             resume(context)
             stop(context)
         }
+
+        const val KEY_COMPLETED = "completed"
+        const val KEY_TOTAL = "total"
+        const val KEY_ADDED = "added"
+        const val KEY_FAILED = "failed"
     }
 }
