@@ -66,6 +66,9 @@ jobs:
           if grep -Fq 'com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533' gradle/libs.versions.toml; then
             sed -i 's#com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533#eu.davidea:flexible-adapter:5.1.0#g' gradle/libs.versions.toml
           fi
+          if grep -Fq 'flexibleAdapter = { module = "eu.davidea:flexible-adapter"' gradle/libs.versions.toml; then
+            sed -i 's/^flexibleAdapter = { module = "eu\.davidea:flexible-adapter"/flexibleAdapterCore = { module = "eu.davidea:flexible-adapter"/' gradle/libs.versions.toml
+          fi
           grep -Eq 'eu\.davidea:flexible-adapter|flexibleAdapter' gradle/libs.versions.toml
           # The worker copy remains available for the legacy importer path, but
           # the final archive wins if it contains the same source.
