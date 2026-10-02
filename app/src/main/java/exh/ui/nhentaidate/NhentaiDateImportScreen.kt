@@ -367,24 +367,20 @@ class NhentaiDateImportWorker(
                 // A 404 while traversing the advertised result pages is a transient
                 // server/CDN response, not the end of the search. Treating it as
                 // completion silently truncated large imports (for example at ~1,113
-                // items). Retry in this run first; after the bounded retries below,
-                // the worker throws and WorkManager retries the same queue.
+                // items). Keep retrying this exact page in this run. Handing a
+                // partial queue back to WorkManager made the notification look
+                // finished at values such as 642 while discovery was still blocked.
                 transientFailures++
-                if (transientFailures <= DISCOVERY_RETRIES) {
-                    delay((15_000L * transientFailures).coerceAtMost(60_000L))
-                    continue
-                }
-                throw IOException("Nhentai search page $page returned HTTP 404")
+                delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
+                continue
             }
             if (!response.isSuccessful) {
                 val code = response.code
                 response.close()
                 if (code == 408 || code == 425 || code in 500..599) {
                     transientFailures++
-                    if (transientFailures <= DISCOVERY_RETRIES) {
-                        delay((15_000L * transientFailures).coerceAtMost(60_000L))
-                        continue
-                    }
+                    delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
+                    continue
                 }
                 throw IOException("Nhentai search HTTP $code")
             }

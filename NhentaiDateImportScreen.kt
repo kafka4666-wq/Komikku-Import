@@ -1,11 +1,16 @@
 package exh.ui.nhentaidate
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.DatePickerDialog
+import android.app.PendingIntent
+import android.app.TimePickerDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,18 +37,18 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkerParameters
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.BuildConfig
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
@@ -62,10 +68,12 @@ import tachiyomi.presentation.core.components.material.padding
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 
@@ -78,22 +86,21 @@ class NhentaiDateImportScreen : Screen() {
         var started by remember { mutableStateOf(false) }
         var paused by remember { mutableStateOf(BatchImportJob.isPaused(context)) }
         var excludedTags by remember { mutableStateOf("") }
+        var dailyImportEnabled by remember { mutableStateOf(NhentaiDailyImportSchedule.isEnabled(context)) }
+        var dailyImportTime by remember { mutableStateOf(NhentaiDailyImportSchedule.time(context)) }
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission(),
-        ) { granted ->
-            if (granted) {
-                started = true
-                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
-            }
-        }
+        ) { /* Notifications are optional; the import has already started. */ }
         fun startImport() {
+            // Never gate the actual import on notification permission. On Android 13+
+            // a denied/dismissed prompt previously left the button looking idle and
+            // prevented the worker from ever being enqueued.
+            started = true
+            NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                started = true
-                NhentaiDateImportWorker.start(context, startDate, endDate, excludedTags)
             }
         }
 
@@ -190,10 +197,46 @@ class NhentaiDateImportScreen : Screen() {
                 if (startDate > endDate) {
                     Text("The end date must be on or after the start date.", color = MaterialTheme.colorScheme.error)
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Switch(
+                        checked = dailyImportEnabled,
+                        onCheckedChange = {
+                            dailyImportEnabled = it
+                            NhentaiDailyImportSchedule.setEnabled(context, it)
+                        },
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Automatically import every day", style = MaterialTheme.typography.titleMedium)
+                        Text("Runs at ${dailyImportTime} IST and adds that day’s books.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val (hour, minute) = NhentaiDailyImportSchedule.parseTime(dailyImportTime)
+                            TimePickerDialog(context, { _, selectedHour, selectedMinute ->
+                                dailyImportTime = NhentaiDailyImportSchedule.formatTime(selectedHour, selectedMinute)
+                                NhentaiDailyImportSchedule.setTime(context, dailyImportTime)
+                            }, hour, minute, true).show()
+                        },
+                    ) { Text(dailyImportTime) }
+                }
                 Text(
-                    "A reminder is scheduled daily at 9:00 PM local time. It will remind you to open this page and import that day’s books.",
+                    "The schedule uses Asia/Kolkata time. Exact alarms can run during Doze; for the most reliable overnight import, set Komikku to Unrestricted battery use in Android settings.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).setPackage(context.packageName))
+                        }.onFailure {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                    },
+                ) { Text("Open battery and alarm settings") }
             }
         }
     }
@@ -225,13 +268,20 @@ class NhentaiDateImportWorker(
             .split(',').map(String::trim).filter(String::isNotBlank).distinct()
         if (startDate > endDate) return Result.failure()
 
-        val queueFile = File(applicationContext.cacheDir, "nhentai-import-${System.currentTimeMillis()}.txt")
+        val queueId = inputData.getString(KEY_QUEUE_ID)
+            ?: "legacy-${startDate}-${endDate}-${System.currentTimeMillis()}"
+        val queueFile = File(applicationContext.cacheDir, "nhentai-import-$queueId.txt")
         val doneFile = File("${queueFile.absolutePath}.done")
+        val startedFile = File("${queueFile.absolutePath}.started")
         queueFile.parentFile?.mkdirs()
-        queueFile.writeText("")
-        status.begin(total = 0, events = listOf("Adding manga…"))
+        if (!queueFile.exists()) queueFile.createNewFile()
+        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Adding manga…"))
         setForegroundSafely()
-        BatchImportJob.startFromFile(applicationContext, queueFile)
+        // WorkManager can retry discovery after a transient error. Keep the original
+        // queue worker alive instead of replacing it and losing already discovered URLs.
+        if (startedFile.createNewFile()) {
+            BatchImportJob.startFromFile(applicationContext, queueFile)
+        }
 
         return try {
             val found = fetchGalleryUrls(startDate, endDate, excludedTags, queueFile)
@@ -242,9 +292,16 @@ class NhentaiDateImportWorker(
             }
             Result.success()
         } catch (error: Throwable) {
-            doneFile.writeText("done")
-            status.restore(0, 0, 0, 1, listOf("[FAILED] nhentai date discovery — ${error.message.orEmpty()}"), running = false)
-            applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+            // Do not create .done here. The queue worker must continue draining URLs
+            // already discovered while WorkManager retries discovery.
+            status.restore(
+                queueFile.readCompleteQueueLines().size,
+                0,
+                0,
+                1,
+                listOf("[RETRYING] nhentai date discovery — ${error.message.orEmpty()}"),
+                running = true,
+            )
             Result.retry()
         }
     }
@@ -258,7 +315,10 @@ class NhentaiDateImportWorker(
     private fun buildInitialAddingNotification() = applicationContext.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
         setSmallIcon(R.drawable.ic_komikku)
         setContentTitle("Adding manga")
-        setContentText("Adding recognized books in the background")
+        setContentText("0% • 0/0 processed • 0 added • 0 failed")
+        // Discovery appends URLs while BatchImportJob drains them. That worker replaces
+        // this placeholder with the live total and determinate progress on each update.
+        setProgress(1, 0, false)
         setOngoing(true)
         setOnlyAlertOnce(true)
         setAutoCancel(false)
@@ -278,20 +338,16 @@ class NhentaiDateImportWorker(
         val start = dateFormat.parse(startDate) ?: return 0
         val end = dateFormat.parse(endDate) ?: return 0
         val now = System.currentTimeMillis()
-        if (start.time > now) return 0
+        if (start.time > now || end.before(start)) return 0
 
-        val startAgeDays = ((now - start.time) / DAY_MS).coerceAtLeast(0L)
-        val endAgeDays = ((now - end.time) / DAY_MS).coerceAtLeast(0L)
-        val upperBound = (startAgeDays + 1L).coerceAtLeast(2L)
-        val filters = mutableListOf("uploaded:<${upperBound}d")
-        if (end.time < now - (2L * DAY_MS)) {
-            filters += "uploaded:>${endAgeDays.coerceAtLeast(2L)}d"
-        }
-        filters += excludedTags.map { "-tags:$it" }
-        val query = filters.joinToString(" ")
-        val all = LinkedHashSet<String>()
+        val query = NhentaiDateQuery.build(startDate, endDate, now, excludedTags)
+        val endExclusive = end.time + 86_400_000L
+        // A WorkManager retry must resume the same queue rather than starting
+        // from an empty set and risking loss of already discovered pages.
+        val all = LinkedHashSet<String>(queueFile.readCompleteQueueLines())
         var page = 1
         var totalPages = MAX_PAGES
+        var transientFailures = 0
 
         while (page <= totalPages && page <= MAX_PAGES) {
             BatchImportRequestLimiter.await()
@@ -306,19 +362,47 @@ class NhentaiDateImportWorker(
                 delay(60_000L)
                 continue
             }
-            if (response.code == 404) break
-            if (!response.isSuccessful) {
+            if (response.code == 404) {
                 response.close()
-                break
+                // A 404 while traversing the advertised result pages is a transient
+                // server/CDN response, not the end of the search. Treating it as
+                // completion silently truncated large imports (for example at ~1,113
+                // items). Keep retrying this exact page in this run. Handing a
+                // partial queue back to WorkManager made the notification look
+                // finished at values such as 642 while discovery was still blocked.
+                transientFailures++
+                delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
+                continue
             }
+            if (!response.isSuccessful) {
+                val code = response.code
+                response.close()
+                if (code == 408 || code == 425 || code in 500..599) {
+                    transientFailures++
+                    delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
+                    continue
+                }
+                throw IOException("Nhentai search HTTP $code")
+            }
+            transientFailures = 0
             val json = JSONObject(response.use { it.body.string() })
             val results = json.optJSONArray("result") ?: break
             if (results.length() == 0) break
             totalPages = json.optInt("num_pages", totalPages).coerceAtMost(MAX_PAGES)
             val pageUrls = LinkedHashSet<String>()
             for (index in 0 until results.length()) {
-                val id = results.optJSONObject(index)?.optLong("id", 0L) ?: 0L
-                if (id > 0L) pageUrls += "https://nhentai.net/g/$id/"
+                val result = results.optJSONObject(index) ?: continue
+                val id = result.optLong("id", 0L)
+                val uploadMillis = result.optLong("upload_date", 0L) * 1_000L
+                // nhentai's search endpoint currently omits upload_date from result
+                // objects. The relative uploaded query is the server-side filter in
+                // that case; only apply the precise local boundary when the timestamp
+                // is actually present. Treating the missing value as a date caused the
+                // queue to remain empty and the UI to finish at 0/0.
+                val matchesRange = uploadMillis <= 0L || uploadMillis in start.time until endExclusive
+                if (id > 0L && matchesRange) {
+                    pageUrls += "https://nhentai.net/g/$id/"
+                }
             }
             val newUrls = pageUrls.filter { all.add(it) }
             if (newUrls.isNotEmpty()) queueFile.appendText(newUrls.joinToString("\n") + "\n")
@@ -327,17 +411,41 @@ class NhentaiDateImportWorker(
         return all.size
     }
 
+    /**
+     * Discovery appends URLs while the importer drains this file. Ignore an
+     * unterminated final line so a partially written URL cannot be skipped.
+     */
+    private fun File.readCompleteQueueLines(): List<String> = runCatching {
+        if (!exists()) return@runCatching emptyList()
+        val text = readText()
+        val end = text.lastIndexOf('\n')
+        if (end < 0) return@runCatching emptyList()
+        text.substring(0, end)
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toList()
+    }.getOrDefault(emptyList())
+
     companion object {
         private const val KEY_START_DATE = "start_date"
         private const val KEY_END_DATE = "end_date"
         private const val KEY_EXCLUDED_TAGS = "excluded_tags"
+        private const val KEY_QUEUE_ID = "queue_id"
         private const val MAX_PAGES = 400
-        private const val DAY_MS = 86_400_000L
+        private const val DISCOVERY_RETRIES = 5
         private const val TAG = "nhentai-date-import"
 
         fun start(context: Context, startDate: String, endDate: String = startDate, excludedTags: String = "") {
             val request = OneTimeWorkRequestBuilder<NhentaiDateImportWorker>()
-                .setInputData(androidx.work.workDataOf(KEY_START_DATE to startDate, KEY_END_DATE to endDate, KEY_EXCLUDED_TAGS to excludedTags))
+                .setInputData(
+                    androidx.work.workDataOf(
+                        KEY_START_DATE to startDate,
+                        KEY_END_DATE to endDate,
+                        KEY_EXCLUDED_TAGS to excludedTags,
+                        KEY_QUEUE_ID to System.currentTimeMillis().toString(),
+                    ),
+                )
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
@@ -350,41 +458,114 @@ class NhentaiDateImportWorker(
     }
 }
 
+object NhentaiDailyImportSchedule {
+    private const val PREFS = "nhentai_daily_import"
+    private const val ENABLED = "enabled"
+    private const val TIME = "time"
+    private const val DEFAULT_TIME = "00:00"
+    private const val TAG = "nhentai-daily-import"
+    private const val ALARM_REQUEST_CODE = 9040
+    const val ACTION_DAILY_IMPORT_ALARM = "${BuildConfig.APPLICATION_ID}.ACTION_NHENTAI_DAILY_IMPORT"
+    private val IST = TimeZone.getTimeZone("Asia/Kolkata")
+
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, true)
+
+    fun time(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TIME, DEFAULT_TIME) ?: DEFAULT_TIME
+
+    fun setEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
+        if (enabled) schedule(context) else cancel(context)
+    }
+
+    fun setTime(context: Context, value: String) {
+        val (hour, minute) = parseTime(value)
+        val normalized = formatTime(hour, minute)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TIME, normalized).apply()
+        if (isEnabled(context)) schedule(context)
+    }
+
+    fun parseTime(value: String): Pair<Int, Int> {
+        val parts = value.split(':')
+        val hour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 0
+        val minute = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
+        return hour to minute
+    }
+
+    fun formatTime(hour: Int, minute: Int): String = "%02d:%02d".format(Locale.US, hour.coerceIn(0, 23), minute.coerceIn(0, 59))
+
+    fun schedule(context: Context) {
+        if (!isEnabled(context)) return
+        val now = Calendar.getInstance(IST)
+        val (hour, minute) = parseTime(time(context))
+        val next = Calendar.getInstance(IST).apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
+        }
+        val triggerAt = next.timeInMillis
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val alarmIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            Intent(ACTION_DAILY_IMPORT_ALARM).setPackage(context.packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val exactScheduled = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                false
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, alarmIntent)
+                true
+            }
+        }.getOrDefault(false)
+        if (exactScheduled) {
+            context.workManager.cancelUniqueWork(TAG)
+        } else {
+            // Devices that deny exact alarms still get a persisted fallback.
+            val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
+                .setInitialDelay((triggerAt - System.currentTimeMillis()).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+                .addTag(TAG)
+                .build()
+            context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+        }
+    }
+
+    fun cancel(context: Context) {
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val alarmIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            Intent(ACTION_DAILY_IMPORT_ALARM).setPackage(context.packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        alarmManager.cancel(alarmIntent)
+        context.workManager.cancelUniqueWork(TAG)
+    }
+
+    fun onAlarm(context: Context) {
+        if (!isEnabled(context)) return
+        val ist = TimeZone.getTimeZone("Asia/Kolkata")
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = ist }
+            .format(Calendar.getInstance(ist).time)
+        NhentaiDateImportWorker.start(context, today, today)
+        schedule(context)
+    }
+}
+
 class NhentaiDailyReminderWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
-        applicationContext.notify(
-            Notifications.ID_NHENTAI_DAILY_REMINDER,
-            applicationContext.notificationBuilder(Notifications.CHANNEL_NHENTAI_REMINDER) {
-                setSmallIcon(R.drawable.ic_komikku)
-                setContentTitle("nhentai books of the day")
-                setContentText("Open More → Nhentai Book Import to add today’s books")
-                setAutoCancel(true)
-            }.build(),
-        )
+        NhentaiDailyImportSchedule.onAlarm(applicationContext)
         return Result.success()
     }
 
     companion object {
-        private const val TAG = "nhentai-daily-reminder"
-
-        fun schedule(context: Context) {
-            val now = Calendar.getInstance()
-            val next = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 21)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-                if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
-            }
-            val initialDelay = (next.timeInMillis - now.timeInMillis).coerceAtLeast(1L)
-            val request = PeriodicWorkRequestBuilder<NhentaiDailyReminderWorker>(24, TimeUnit.HOURS)
-                .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
-                .addTag(TAG)
-                .build()
-            context.workManager.enqueueUniquePeriodicWork(TAG, ExistingPeriodicWorkPolicy.UPDATE, request)
-        }
+        fun schedule(context: Context) = NhentaiDailyImportSchedule.schedule(context)
     }
 }
