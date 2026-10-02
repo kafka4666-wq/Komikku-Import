@@ -135,6 +135,11 @@ import uy.kohesive.injekt.api.get
 import kotlin.random.Random
 import tachiyomi.domain.source.model.Source as DomainSource
 
+private object LibraryStateCache {
+    @Volatile
+    var lastLoadedState: LibraryScreenModel.State? = null
+}
+
 class LibraryScreenModel(
     private val getLibraryManga: GetLibraryManga = Injekt.get(),
     private val getCategories: GetCategories = Injekt.get(),
@@ -169,7 +174,14 @@ class LibraryScreenModel(
     private val smartSearchMerge: SmartSearchMerge = Injekt.get(),
     // KMK <--
     private val treasuryPreferences: KodamiTreasuryPreferences = KodamiTreasuryPreferences(Injekt.get()),
-) : StateScreenModel<LibraryScreenModel.State>(State()) {
+) : StateScreenModel<LibraryScreenModel.State>(
+    LibraryStateCache.lastLoadedState?.copy(
+        // Do not restore transient controls from a previous screen instance.
+        selection = emptySet(),
+        dialog = null,
+        isLoading = false,
+    ) ?: State(),
+) {
 
     // SY -->
     val favoritesSync = FavoritesSyncHelper(preferences.context)
@@ -316,7 +328,9 @@ class LibraryScreenModel(
                         state.copy(
                             isLoading = false,
                             groupedFavorites = it,
-                        )
+                        ).also { loadedState ->
+                            LibraryStateCache.lastLoadedState = loadedState
+                        }
                     }
                 }
         }
