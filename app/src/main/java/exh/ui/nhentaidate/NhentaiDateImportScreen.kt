@@ -340,7 +340,8 @@ class NhentaiDateImportWorker(
         val now = System.currentTimeMillis()
         if (start.time > now || end.before(start)) return 0
 
-        val query = NhentaiDateQuery.build(startDate, endDate, excludedTags)
+        val query = NhentaiDateQuery.build(startDate, endDate, now, excludedTags)
+        val endExclusive = end.time + 86_400_000L
         // A WorkManager retry must resume the same queue rather than starting
         // from an empty set and risking loss of already discovered pages.
         val all = LinkedHashSet<String>(queueFile.readCompleteQueueLines())
@@ -381,8 +382,12 @@ class NhentaiDateImportWorker(
             totalPages = json.optInt("num_pages", totalPages).coerceAtMost(MAX_PAGES)
             val pageUrls = LinkedHashSet<String>()
             for (index in 0 until results.length()) {
-                val id = results.optJSONObject(index)?.optLong("id", 0L) ?: 0L
-                if (id > 0L) pageUrls += "https://nhentai.net/g/$id/"
+                val result = results.optJSONObject(index) ?: continue
+                val id = result.optLong("id", 0L)
+                val uploadMillis = result.optLong("upload_date", 0L) * 1_000L
+                if (id > 0L && uploadMillis in start.time until endExclusive) {
+                    pageUrls += "https://nhentai.net/g/$id/"
+                }
             }
             val newUrls = pageUrls.filter { all.add(it) }
             if (newUrls.isNotEmpty()) queueFile.appendText(newUrls.joinToString("\n") + "\n")
