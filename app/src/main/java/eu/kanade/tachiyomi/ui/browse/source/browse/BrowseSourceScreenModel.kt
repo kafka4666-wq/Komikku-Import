@@ -230,9 +230,6 @@ open class BrowseSourceScreenModel(
             Pager(
                 PagingConfig(
                     pageSize = 25,
-                    // Begin the next page while the user is still browsing the current one.
-                    // This improves continuity without increasing concurrent source requests.
-                    prefetchDistance = 12,
                     enablePlaceholders = false,
                     maxSize = 200,
                 ),
@@ -247,7 +244,13 @@ open class BrowseSourceScreenModel(
                         // SY -->
                         .combineMetadata(metadata)
                         // SY <--
-                        .stateIn(ioCoroutineScope)
+                        // Render the network result immediately; local library/metadata
+                        // enrichment can replace it asynchronously instead of blocking first paint.
+                        .stateIn(
+                            ioCoroutineScope,
+                            SharingStarted.WhileSubscribed(5_000L),
+                            manga to metadata,
+                        )
                 }
                     .filter { !hideInLibraryItems || !it.value.first.favorite }
             }

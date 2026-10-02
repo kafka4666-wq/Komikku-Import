@@ -290,17 +290,9 @@ class NhentaiDateImportWorker(
         val start = dateFormat.parse(startDate) ?: return 0
         val end = dateFormat.parse(endDate) ?: return 0
         val now = System.currentTimeMillis()
-        if (start.time > now) return 0
+        if (start.time > now || end.before(start)) return 0
 
-        val startAgeDays = ((now - start.time) / DAY_MS).coerceAtLeast(0L)
-        val endAgeDays = ((now - end.time) / DAY_MS).coerceAtLeast(0L)
-        val upperBound = (startAgeDays + 1L).coerceAtLeast(2L)
-        val filters = mutableListOf("uploaded:<${upperBound}d")
-        if (end.time < now - (2L * DAY_MS)) {
-            filters += "uploaded:>${endAgeDays.coerceAtLeast(2L)}d"
-        }
-        filters += excludedTags.map { "-tags:$it" }
-        val query = filters.joinToString(" ")
+        val query = NhentaiDateQuery.build(startDate, endDate, excludedTags)
         // A WorkManager retry must resume the same queue rather than starting
         // from an empty set and risking loss of already discovered pages.
         val all = LinkedHashSet<String>(queueFile.readCompleteQueueLines())
@@ -374,7 +366,6 @@ class NhentaiDateImportWorker(
         private const val KEY_QUEUE_ID = "queue_id"
         private const val MAX_PAGES = 400
         private const val DISCOVERY_RETRIES = 5
-        private const val DAY_MS = 86_400_000L
         private const val TAG = "nhentai-date-import"
 
         fun start(context: Context, startDate: String, endDate: String = startDate, excludedTags: String = "") {
