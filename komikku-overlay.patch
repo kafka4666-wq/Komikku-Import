@@ -1398,6 +1398,7 @@ index 0266552..5e0a3b6 100644
                  .collectLatest {
                      onUpdateProgress(download)
                  }
+diff --git a/app/src/main/java/eu/kanade/presentation/manga/MangaScreen.kt b/app/src/main/java/eu/kanade/presentation/manga/MangaScreen.kt
 --- a/app/src/main/java/eu/kanade/presentation/manga/MangaScreen.kt
 +++ b/app/src/main/java/eu/kanade/presentation/manga/MangaScreen.kt
 @@ -658,6 +658,7 @@
