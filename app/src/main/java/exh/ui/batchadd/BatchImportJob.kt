@@ -75,6 +75,8 @@ class BatchImportJob(
 
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
+        val nhentaiImport = inputData.getBoolean(KEY_NHENTAI_IMPORT, false)
+        val progressNotificationId = if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS
         val inputFile = File(inputPath)
         val checkpointFile = File("$inputPath.progress")
         val failedFile = File("$inputPath.failed")
@@ -154,7 +156,7 @@ class BatchImportJob(
             }
             Result.retry()
         } finally {
-            context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+            context.cancelNotification(progressNotificationId)
             if (!isStopped && doneFile.exists() && nextIndex >= inputFile.readCompleteLinesSafely().size) {
                 inputFile.delete()
                 checkpointFile.delete()
@@ -166,8 +168,8 @@ class BatchImportJob(
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
-        Notifications.ID_BATCH_IMPORT_PROGRESS,
-        buildProgressNotification(0, 1, 0, 0),
+        inputData.getInt(KEY_NOTIFICATION_ID, Notifications.ID_BATCH_IMPORT_PROGRESS),
+        buildProgressNotification(0, 1, 0, 0, inputData.getBoolean(KEY_NHENTAI_IMPORT, false)),
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
 
@@ -234,8 +236,8 @@ class BatchImportJob(
             "429" in it || "too many request" in it || "rate limit" in it || "rate-limit" in it
         }
 
-    private fun buildProgressNotification(completed: Int, total: Int, added: Int, failed: Int) =
-        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
+    private fun buildProgressNotification(completed: Int, total: Int, added: Int, failed: Int, nhentaiImport: Boolean = false) =
+        context.notificationBuilder(if (nhentaiImport) Notifications.CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
             setSmallIcon(R.drawable.ic_komikku)
             setContentTitle("Adding manga")
             setContentText("${if (total == 0) 0 else completed * 100 / total}% • $completed/$total processed • $added added • $failed failed")
@@ -250,7 +252,8 @@ class BatchImportJob(
         }.build()
 
     private fun showProgress(completed: Int, total: Int, added: Int, failed: Int) {
-        context.notify(Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed))
+        val nhentaiImport = inputData.getBoolean(KEY_NHENTAI_IMPORT, false)
+        context.notify(if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS, buildProgressNotification(completed, total, added, failed, nhentaiImport))
     }
 
     private fun progressData(completed: Int, total: Int, added: Int, failed: Int) = workDataOf(
@@ -264,13 +267,14 @@ class BatchImportJob(
         // Stop the app-wide banner as soon as the queue is fully drained. A later
         // import calls begin() again, so the banner reappears for the new job.
         status.restore(total, completed, added, failed, status.state.value.events, running = false)
-        context.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
-        context.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
+        val nhentaiImport = inputData.getBoolean(KEY_NHENTAI_IMPORT, false)
+        context.cancelNotification(if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS)
+        context.notificationBuilder(if (nhentaiImport) Notifications.CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.CHANNEL_BATCH_IMPORT_COMPLETE) {
             setSmallIcon(R.drawable.ic_komikku)
             setContentTitle("Manga adding complete")
             setContentText("100% • $completed/$total processed • $added added • $failed failed")
             setAutoCancel(true)
-        }.also { context.notify(Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
+        }.also { context.notify(if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_COMPLETE else Notifications.ID_BATCH_IMPORT_COMPLETE, it.build()) }
     }
 
     private fun writeUnprocessedLinks(urls: List<String>, nextIndex: Int, failedLinks: List<String>) {
@@ -311,6 +315,8 @@ class BatchImportJob(
     companion object {
         private const val TAG = "BatchImport"
         private const val INPUT_PATH = "input_path"
+        private const val KEY_NHENTAI_IMPORT = "nhentai_import"
+        private const val KEY_NOTIFICATION_ID = "notification_id"
         private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
         private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
         private const val RATE_LIMIT_RETRIES = 3
@@ -337,7 +343,7 @@ class BatchImportJob(
             // Discovery retries must not replace a worker that is already draining
             // this same growing file. Use a queue-specific name so a second manual
             // or daily nhentai import cannot strand its URLs behind an older queue.
-            enqueue(context, input, queueWorkName(input), androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false)
+            enqueue(context, input, queueWorkName(input), androidx.work.ExistingWorkPolicy.KEEP, saveJobId = false, nhentaiImport = true)
         }
 
         fun savedJobId(context: Context): String? = prefs(context).getString(PREF_JOB_ID, null)
@@ -348,11 +354,12 @@ class BatchImportJob(
             workName: String,
             policy: androidx.work.ExistingWorkPolicy,
             saveJobId: Boolean,
+            nhentaiImport: Boolean = false,
         ): UUID {
             val requestId = UUID.randomUUID()
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
                 .setId(requestId)
-                .setInputData(workDataOf(INPUT_PATH to input.absolutePath))
+                .setInputData(workDataOf(INPUT_PATH to input.absolutePath, KEY_NHENTAI_IMPORT to nhentaiImport, KEY_NOTIFICATION_ID to if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()

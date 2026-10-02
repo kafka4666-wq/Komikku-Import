@@ -288,7 +288,7 @@ class NhentaiDateImportWorker(
             doneFile.writeText("done")
             if (found == 0) {
                 status.restore(0, 0, 0, 0, listOf("No nhentai books matched the selected date range."), running = false)
-                applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
+                applicationContext.cancelNotification(Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS)
             }
             Result.success()
         } catch (error: Throwable) {
@@ -307,12 +307,12 @@ class NhentaiDateImportWorker(
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
-        Notifications.ID_BATCH_IMPORT_PROGRESS,
+        Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS,
         buildInitialAddingNotification(),
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
 
-    private fun buildInitialAddingNotification() = applicationContext.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
+    private fun buildInitialAddingNotification() = applicationContext.notificationBuilder(Notifications.CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS) {
         setSmallIcon(R.drawable.ic_komikku)
         setContentTitle("Adding manga")
         setContentText("0% • 0/0 processed • 0 added • 0 failed")

@@ -94,6 +94,9 @@ object Notifications {
     const val ID_BATCH_IMPORT_COMPLETE = -802
     const val CHANNEL_NHENTAI_REMINDER = "nhentai_daily_reminder_channel"
     const val ID_NHENTAI_DAILY_REMINDER = -803
+    const val CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS = "nhentai_batch_import_progress_channel"
+    const val ID_NHENTAI_BATCH_IMPORT_PROGRESS = -804
+    const val ID_NHENTAI_BATCH_IMPORT_COMPLETE = -805
 
     // AM (DISCORD) -->
     /**
@@ -234,6 +237,10 @@ object Notifications {
                 },
                 buildNotificationChannel(CHANNEL_BATCH_IMPORT_PROGRESS, IMPORTANCE_LOW) {
                     setName("Batch import progress")
+                    setShowBadge(false)
+                },
+                buildNotificationChannel(CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS, IMPORTANCE_LOW) {
+                    setName("nhentai book import progress")
                     setShowBadge(false)
                 },
                 buildNotificationChannel(CHANNEL_BATCH_IMPORT_COMPLETE, IMPORTANCE_DEFAULT) {
