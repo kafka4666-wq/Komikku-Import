@@ -438,7 +438,8 @@ object NhentaiDailyImportSchedule {
     }
 
     fun setTime(context: Context, value: String) {
-        val normalized = formatTime(*parseTime(value))
+        val (hour, minute) = parseTime(value)
+        val normalized = formatTime(hour, minute)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TIME, normalized).apply()
         if (isEnabled(context)) schedule(context)
     }
