@@ -275,17 +275,19 @@ class NhentaiDateImportWorker(
         val startedFile = File("${queueFile.absolutePath}.started")
         queueFile.parentFile?.mkdirs()
         if (!queueFile.exists()) queueFile.createNewFile()
-        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Adding manga…"))
+        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Finding all nhentai books…"))
         setForegroundSafely()
-        // WorkManager can retry discovery after a transient error. Keep the original
-        // queue worker alive instead of replacing it and losing already discovered URLs.
-        if (startedFile.createNewFile()) {
-            BatchImportJob.startFromFile(applicationContext, queueFile)
-        }
 
         return try {
             val found = fetchGalleryUrls(startDate, endDate, excludedTags, queueFile)
             doneFile.writeText("done")
+            // Do not expose a partial queue as the final import total. Discovery
+            // can span hundreds of pages and may pause on a transient 404; start
+            // the addition worker only after every advertised page was traversed.
+            if (startedFile.createNewFile()) {
+                BatchImportJob.startFromFile(applicationContext, queueFile)
+            }
+            status.begin(total = found, events = listOf("Adding manga…"))
             if (found == 0) {
                 status.restore(0, 0, 0, 0, listOf("No nhentai books matched the selected date range."), running = false)
                 applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)

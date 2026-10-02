@@ -60,11 +60,13 @@ jobs:
           grep -q 'Manga Treasury — all effects available' app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchLinkParser.kt
           grep -q 'BatchLinkParser.parse' app/src/main/java/exh/ui/batchadd/BatchAddScreenModel.kt
-          # JitPack no longer serves the upstream FlexibleAdapter commit as a
-          # resolvable AAR/JAR. Use the compatible Maven Central release so
-          # dependency resolution is deterministic and the build reaches Kotlin compilation.
-          sed -i 's#com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533#eu.davidea:flexible-adapter:5.1.0#g' gradle/libs.versions.toml
-          grep -q 'eu.davidea:flexible-adapter:5.1.0' gradle/libs.versions.toml
+          # The pinned upstream revision already uses Maven Central's
+          # FlexibleAdapter coordinate. Keep the fallback for older revisions,
+          # but do not fail merely because the catalog uses a version reference.
+          if grep -Fq 'com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533' gradle/libs.versions.toml; then
+            sed -i 's#com.github.arkon.FlexibleAdapter:flexible-adapter:c8013533#eu.davidea:flexible-adapter:5.1.0#g' gradle/libs.versions.toml
+          fi
+          grep -Eq 'eu\.davidea:flexible-adapter|flexibleAdapter' gradle/libs.versions.toml
           # The worker copy remains available for the legacy importer path, but
           # the final archive wins if it contains the same source.
           if test -f ../worker-overlay/BatchImportJob.kt; then
