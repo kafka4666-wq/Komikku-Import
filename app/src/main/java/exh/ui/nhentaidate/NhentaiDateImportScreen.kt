@@ -275,19 +275,17 @@ class NhentaiDateImportWorker(
         val startedFile = File("${queueFile.absolutePath}.started")
         queueFile.parentFile?.mkdirs()
         if (!queueFile.exists()) queueFile.createNewFile()
-        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Finding all nhentai books…"))
+        status.begin(total = queueFile.readCompleteQueueLines().size, events = listOf("Adding manga…"))
         setForegroundSafely()
+        // WorkManager can retry discovery after a transient error. Keep the original
+        // queue worker alive instead of replacing it and losing already discovered URLs.
+        if (startedFile.createNewFile()) {
+            BatchImportJob.startFromFile(applicationContext, queueFile)
+        }
 
         return try {
             val found = fetchGalleryUrls(startDate, endDate, excludedTags, queueFile)
             doneFile.writeText("done")
-            // Do not expose a partial queue as the final import total. Discovery
-            // can span hundreds of pages and may pause on a transient 404; start
-            // the addition worker only after every advertised page was traversed.
-            if (startedFile.createNewFile()) {
-                BatchImportJob.startFromFile(applicationContext, queueFile)
-            }
-            status.begin(total = found, events = listOf("Adding manga…"))
             if (found == 0) {
                 status.restore(0, 0, 0, 0, listOf("No nhentai books matched the selected date range."), running = false)
                 applicationContext.cancelNotification(Notifications.ID_BATCH_IMPORT_PROGRESS)
@@ -350,7 +348,6 @@ class NhentaiDateImportWorker(
         var page = 1
         var totalPages = MAX_PAGES
         var transientFailures = 0
-        val emptyPageAttempts = mutableMapOf<Int, Int>()
 
         while (page <= totalPages && page <= MAX_PAGES) {
             BatchImportRequestLimiter.await()
@@ -359,75 +356,36 @@ class NhentaiDateImportWorker(
                 .addQueryParameter("sort", "date")
                 .addQueryParameter("page", page.toString())
                 .build()
-            val request = GET(url).newBuilder()
-                .header("User-Agent", "Komikku/${BuildConfig.VERSION_NAME}")
-                .header("Accept", "application/json")
-                .header("Cache-Control", "no-cache")
-                .header("Pragma", "no-cache")
-                .build()
-            val response = client.newCall(request).execute()
+            val response = client.newCall(GET(url)).execute()
             if (response.code == 429) {
                 response.close()
                 delay(60_000L)
                 continue
             }
-            if (response.code == 404) {
-                response.close()
-                // A 404 while traversing the advertised result pages is a transient
-                // server/CDN response, not the end of the search. Treating it as
-                // completion silently truncated large imports (for example at ~1,113
-                // items). Keep retrying this exact page in this run. Handing a
-                // partial queue back to WorkManager made the notification look
-                // finished at values such as 642 while discovery was still blocked.
-                transientFailures++
-                delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
-                continue
-            }
+            if (response.code == 404) break
             if (!response.isSuccessful) {
                 val code = response.code
                 response.close()
                 if (code == 408 || code == 425 || code in 500..599) {
                     transientFailures++
-                    delay((15_000L * transientFailures.coerceAtMost(DISCOVERY_RETRIES)).coerceAtMost(60_000L))
-                    continue
+                    if (transientFailures <= DISCOVERY_RETRIES) {
+                        delay((15_000L * transientFailures).coerceAtMost(60_000L))
+                        continue
+                    }
                 }
                 throw IOException("Nhentai search HTTP $code")
             }
             transientFailures = 0
             val json = JSONObject(response.use { it.body.string() })
+            val results = json.optJSONArray("result") ?: break
+            if (results.length() == 0) break
             totalPages = json.optInt("num_pages", totalPages).coerceAtMost(MAX_PAGES)
-            val results = json.optJSONArray("result")
-            if (results == null || results.length() == 0) {
-                // nhentai can temporarily return a valid 200 response with an
-                // empty hole in the middle of a paginated search. It still
-                // advertises later pages, so an empty intermediate page is not
-                // end-of-results (page 26 is a known example for this range).
-                if (page < totalPages) {
-                    val attempts = (emptyPageAttempts[page] ?: 0) + 1
-                    if (attempts < 3) {
-                        emptyPageAttempts[page] = attempts
-                        delay(2_000L)
-                        continue
-                    }
-                    emptyPageAttempts.remove(page)
-                    page++
-                    continue
-                }
-                break
-            }
-            emptyPageAttempts.remove(page)
             val pageUrls = LinkedHashSet<String>()
             for (index in 0 until results.length()) {
                 val result = results.optJSONObject(index) ?: continue
                 val id = result.optLong("id", 0L)
                 val uploadMillis = result.optLong("upload_date", 0L) * 1_000L
-                // nhentai's search endpoint currently omits upload_date from result
-                // objects. The relative uploaded query is the server-side filter in
-                // that case; only apply the precise local boundary when the timestamp
-                // is actually present. Treating the missing value as a date caused the
-                // queue to remain empty and the UI to finish at 0/0.
-                val matchesRange = uploadMillis <= 0L || uploadMillis in start.time until endExclusive
-                if (id > 0L && matchesRange) {
+                if (id > 0L && uploadMillis in start.time until endExclusive) {
                     pageUrls += "https://nhentai.net/g/$id/"
                 }
             }
