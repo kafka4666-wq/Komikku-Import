@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.CallMerge
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.HourglassDisabled
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.PersonOutline
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Schedule
@@ -93,6 +95,7 @@ import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownAnnotatorConfig
 import com.mikepenz.markdown.utils.getUnescapedTextInNode
 import eu.kanade.domain.ui.DoujinCustomisationsPreferences
+import eu.kanade.domain.ui.KodamiTreasuryPreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.presentation.components.MangaTreasuryVisuals.mangaTreasuryTitleSurface
 import eu.kanade.presentation.components.MangaAuroraDesignSystem.mangaAuroraCard
@@ -279,6 +282,7 @@ fun MangaActionRow(
     // KMK -->
     status: Long,
     interval: Int,
+    mangaId: Long = -1L,
     // KMK <--
     modifier: Modifier = Modifier,
 ) {
@@ -289,6 +293,11 @@ fun MangaActionRow(
     val selectedInterval by remember(interval) { mutableIntStateOf(if (interval < 0) -interval else 0) }
     // KMK <--
     val defaultActionButtonColor = MaterialTheme.colorScheme.onSurface.copy(alpha = DISABLED_ALPHA)
+    val treasuryPreferences = remember { KodamiTreasuryPreferences(Injekt.get()) }
+    val cachedIds by treasuryPreferences.dailyCacheMangaIds().collectAsState()
+    val protectedIds by treasuryPreferences.dailyCacheProtectedMangaIds().collectAsState()
+    val isCached = mangaId > 0L && cachedIds.split(',').mapNotNull(String::toLongOrNull).contains(mangaId)
+    val isProtected = protectedIds.split(',').mapNotNull(String::toLongOrNull).contains(mangaId)
 
     // TODO: show something better when using custom interval
     val nextUpdateDays = remember(nextUpdate, selectedInterval, notSkipCompleted) {
@@ -320,6 +329,19 @@ fun MangaActionRow(
             onClick = onAddToLibraryClicked,
             onLongClick = onEditCategory,
         )
+        if (isCached) {
+            MangaActionButton(
+                title = if (isProtected) "Keep cached" else "Keep cached overnight",
+                icon = if (isProtected) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                color = if (isProtected) MaterialTheme.colorScheme.primary else defaultActionButtonColor,
+                onClick = {
+                    val ids = protectedIds.split(',').mapNotNull(String::toLongOrNull).toMutableSet()
+                    if (!ids.add(mangaId)) ids.remove(mangaId)
+                    treasuryPreferences.dailyCacheProtectedMangaIds().set(ids.joinToString(","))
+                },
+                onLongClick = null,
+            )
+        }
         MangaActionButton(
             title = when (nextUpdateDays) {
                 null -> stringResource(MR.strings.not_applicable)
