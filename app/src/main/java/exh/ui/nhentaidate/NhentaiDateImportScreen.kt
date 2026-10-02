@@ -364,10 +364,16 @@ class NhentaiDateImportWorker(
             }
             if (response.code == 404) {
                 response.close()
-                // A 404 before the advertised final page is a transient server/CDN
-                // response, not the end of the search. Treating it as completion
-                // silently truncated large imports (for example at ~1,113 items).
-                if (page > totalPages) break
+                // A 404 while traversing the advertised result pages is a transient
+                // server/CDN response, not the end of the search. Treating it as
+                // completion silently truncated large imports (for example at ~1,113
+                // items). Retry in this run first; after the bounded retries below,
+                // the worker throws and WorkManager retries the same queue.
+                transientFailures++
+                if (transientFailures <= DISCOVERY_RETRIES) {
+                    delay((15_000L * transientFailures).coerceAtMost(60_000L))
+                    continue
+                }
                 throw IOException("Nhentai search page $page returned HTTP 404")
             }
             if (!response.isSuccessful) {
