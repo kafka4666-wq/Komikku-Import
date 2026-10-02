@@ -392,9 +392,19 @@ class NhentaiDateImportWorker(
             }
             transientFailures = 0
             val json = JSONObject(response.use { it.body.string() })
-            val results = json.optJSONArray("result") ?: break
-            if (results.length() == 0) break
             totalPages = json.optInt("num_pages", totalPages).coerceAtMost(MAX_PAGES)
+            val results = json.optJSONArray("result")
+            if (results == null || results.length() == 0) {
+                // nhentai can temporarily return a valid 200 response with an
+                // empty hole in the middle of a paginated search. It still
+                // advertises later pages, so an empty intermediate page is not
+                // end-of-results (page 26 is a known example for this range).
+                if (page < totalPages) {
+                    page++
+                    continue
+                }
+                break
+            }
             val pageUrls = LinkedHashSet<String>()
             for (index in 0 until results.length()) {
                 val result = results.optJSONObject(index) ?: continue
