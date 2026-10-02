@@ -2,6 +2,7 @@ package exh.ui.nhentaidate
 
 import android.Manifest
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,15 +33,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkerParameters
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.R
@@ -79,6 +80,8 @@ class NhentaiDateImportScreen : Screen() {
         var started by remember { mutableStateOf(false) }
         var paused by remember { mutableStateOf(BatchImportJob.isPaused(context)) }
         var excludedTags by remember { mutableStateOf("") }
+        var dailyImportEnabled by remember { mutableStateOf(NhentaiDailyImportSchedule.isEnabled(context)) }
+        var dailyImportTime by remember { mutableStateOf(NhentaiDailyImportSchedule.time(context)) }
         val notificationPermissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission(),
         ) { /* Notifications are optional; the import has already started. */ }
@@ -188,8 +191,34 @@ class NhentaiDateImportScreen : Screen() {
                 if (startDate > endDate) {
                     Text("The end date must be on or after the start date.", color = MaterialTheme.colorScheme.error)
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Switch(
+                        checked = dailyImportEnabled,
+                        onCheckedChange = {
+                            dailyImportEnabled = it
+                            NhentaiDailyImportSchedule.setEnabled(context, it)
+                        },
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Automatically import every day", style = MaterialTheme.typography.titleMedium)
+                        Text("Runs at ${dailyImportTime} local device time and adds that day’s books.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val (hour, minute) = NhentaiDailyImportSchedule.parseTime(dailyImportTime)
+                            TimePickerDialog(context, { _, selectedHour, selectedMinute ->
+                                dailyImportTime = NhentaiDailyImportSchedule.formatTime(selectedHour, selectedMinute)
+                                NhentaiDailyImportSchedule.setTime(context, dailyImportTime)
+                            }, hour, minute, true).show()
+                        },
+                    ) { Text(dailyImportTime) }
+                }
                 Text(
-                    "A reminder is scheduled daily at 9:00 PM local time. It will remind you to open this page and import that day’s books.",
+                    "The schedule survives app restarts and device reboots through WorkManager. Turn it off here to stop automatic imports.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -390,41 +419,78 @@ class NhentaiDateImportWorker(
     }
 }
 
+object NhentaiDailyImportSchedule {
+    private const val PREFS = "nhentai_daily_import"
+    private const val ENABLED = "enabled"
+    private const val TIME = "time"
+    private const val DEFAULT_TIME = "20:00"
+    private const val TAG = "nhentai-daily-import"
+
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, true)
+
+    fun time(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TIME, DEFAULT_TIME) ?: DEFAULT_TIME
+
+    fun setEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
+        if (enabled) schedule(context) else cancel(context)
+    }
+
+    fun setTime(context: Context, value: String) {
+        val normalized = formatTime(*parseTime(value))
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TIME, normalized).apply()
+        if (isEnabled(context)) schedule(context)
+    }
+
+    fun parseTime(value: String): Pair<Int, Int> {
+        val parts = value.split(':')
+        val hour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 20
+        val minute = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
+        return hour to minute
+    }
+
+    fun formatTime(hour: Int, minute: Int): String = "%02d:%02d".format(Locale.US, hour.coerceIn(0, 23), minute.coerceIn(0, 59))
+
+    fun schedule(context: Context) {
+        if (!isEnabled(context)) return
+        val now = Calendar.getInstance()
+        val (hour, minute) = parseTime(time(context))
+        val next = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
+        }
+        val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
+            .setInitialDelay((next.timeInMillis - now.timeInMillis).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+            .addTag(TAG)
+            .build()
+        context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    fun cancel(context: Context) {
+        context.workManager.cancelUniqueWork(TAG)
+    }
+}
+
 class NhentaiDailyReminderWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
-        applicationContext.notify(
-            Notifications.ID_NHENTAI_DAILY_REMINDER,
-            applicationContext.notificationBuilder(Notifications.CHANNEL_NHENTAI_REMINDER) {
-                setSmallIcon(R.drawable.ic_komikku)
-                setContentTitle("nhentai books of the day")
-                setContentText("Open More → Nhentai Book Import to add today’s books")
-                setAutoCancel(true)
-            }.build(),
-        )
+        if (NhentaiDailyImportSchedule.isEnabled(applicationContext)) {
+            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+            NhentaiDateImportWorker.start(applicationContext, today, today)
+            // Use a one-time request so the next run follows the configured wall-clock time
+            // across timezone and daylight-saving changes instead of drifting by 24 hours.
+            NhentaiDailyImportSchedule.schedule(applicationContext)
+        }
         return Result.success()
     }
 
     companion object {
-        private const val TAG = "nhentai-daily-reminder"
-
-        fun schedule(context: Context) {
-            val now = Calendar.getInstance()
-            val next = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 21)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-                if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
-            }
-            val initialDelay = (next.timeInMillis - now.timeInMillis).coerceAtLeast(1L)
-            val request = PeriodicWorkRequestBuilder<NhentaiDailyReminderWorker>(24, TimeUnit.HOURS)
-                .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
-                .addTag(TAG)
-                .build()
-            context.workManager.enqueueUniquePeriodicWork(TAG, ExistingPeriodicWorkPolicy.UPDATE, request)
-        }
+        fun schedule(context: Context) = NhentaiDailyImportSchedule.schedule(context)
     }
 }
