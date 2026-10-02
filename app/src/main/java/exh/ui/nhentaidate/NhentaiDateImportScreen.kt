@@ -1,12 +1,16 @@
 package exh.ui.nhentaidate
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.DatePickerDialog
+import android.app.PendingIntent
 import android.app.TimePickerDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,6 +48,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.BuildConfig
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
@@ -219,9 +224,19 @@ class NhentaiDateImportScreen : Screen() {
                     ) { Text(dailyImportTime) }
                 }
                 Text(
-                    "The schedule uses Asia/Kolkata time and survives app restarts and device reboots through WorkManager. Turn it off here to stop automatic imports.",
+                    "The schedule uses Asia/Kolkata time. Exact alarms can run during Doze; for the most reliable overnight import, set Komikku to Unrestricted battery use in Android settings.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).setPackage(context.packageName))
+                        }.onFailure {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                    },
+                ) { Text("Open battery and alarm settings") }
             }
         }
     }
@@ -429,6 +444,8 @@ object NhentaiDailyImportSchedule {
     private const val TIME = "time"
     private const val DEFAULT_TIME = "00:00"
     private const val TAG = "nhentai-daily-import"
+    private const val ALARM_REQUEST_CODE = 9040
+    const val ACTION_DAILY_IMPORT_ALARM = "${BuildConfig.APPLICATION_ID}.ACTION_NHENTAI_DAILY_IMPORT"
     private val IST = TimeZone.getTimeZone("Asia/Kolkata")
 
     fun isEnabled(context: Context): Boolean =
@@ -469,15 +486,53 @@ object NhentaiDailyImportSchedule {
             set(Calendar.MILLISECOND, 0)
             if (!after(now)) add(Calendar.DAY_OF_YEAR, 1)
         }
-        val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
-            .setInitialDelay((next.timeInMillis - now.timeInMillis).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
-            .addTag(TAG)
-            .build()
-        context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+        val triggerAt = next.timeInMillis
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val alarmIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            Intent(ACTION_DAILY_IMPORT_ALARM).setPackage(context.packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val exactScheduled = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                false
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, alarmIntent)
+                true
+            }
+        }.getOrDefault(false)
+        if (exactScheduled) {
+            context.workManager.cancelUniqueWork(TAG)
+        } else {
+            // Devices that deny exact alarms still get a persisted fallback.
+            val request = OneTimeWorkRequestBuilder<NhentaiDailyReminderWorker>()
+                .setInitialDelay((triggerAt - System.currentTimeMillis()).coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+                .addTag(TAG)
+                .build()
+            context.workManager.enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+        }
     }
 
     fun cancel(context: Context) {
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val alarmIntent = PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE,
+            Intent(ACTION_DAILY_IMPORT_ALARM).setPackage(context.packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        alarmManager.cancel(alarmIntent)
         context.workManager.cancelUniqueWork(TAG)
+    }
+
+    fun onAlarm(context: Context) {
+        if (!isEnabled(context)) return
+        val ist = TimeZone.getTimeZone("Asia/Kolkata")
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = ist }
+            .format(Calendar.getInstance(ist).time)
+        NhentaiDateImportWorker.start(context, today, today)
+        schedule(context)
     }
 }
 
@@ -486,14 +541,7 @@ class NhentaiDailyReminderWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
-        if (NhentaiDailyImportSchedule.isEnabled(applicationContext)) {
-            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("Asia/Kolkata") }
-                .format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Kolkata")).time)
-            NhentaiDateImportWorker.start(applicationContext, today, today)
-            // Use a one-time request so the next run follows the configured wall-clock time
-            // across timezone and daylight-saving changes instead of drifting by 24 hours.
-            NhentaiDailyImportSchedule.schedule(applicationContext)
-        }
+        NhentaiDailyImportSchedule.onAlarm(applicationContext)
         return Result.success()
     }
 

@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.data.library.LibraryUpdateJob
 import exh.ui.batchadd.BatchImportJob
 import exh.ui.nhentaidate.NhentaiDateImportWorker
+import exh.ui.nhentaidate.NhentaiDailyImportSchedule
 import eu.kanade.tachiyomi.data.sync.SyncDataJob
 import eu.kanade.tachiyomi.data.updater.AppUpdateDownloadJob
 import eu.kanade.tachiyomi.ui.main.MainActivity
@@ -83,6 +84,8 @@ class NotificationReceiver : BroadcastReceiver() {
                 BatchImportJob.cancel(context)
                 NhentaiDateImportWorker.stop(context)
             }
+            NhentaiDailyImportSchedule.ACTION_DAILY_IMPORT_ALARM ->
+                NhentaiDailyImportSchedule.onAlarm(context)
             // Cancel library update and dismiss notification
             ACTION_CANCEL_LIBRARY_UPDATE -> cancelLibraryUpdate(context)
             // Start downloading app update
