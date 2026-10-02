@@ -45,9 +45,10 @@ import java.util.concurrent.TimeUnit
 
 /** A single process-wide gate shared by discovery and library insertion. */
 object BatchImportRequestLimiter {
-    // Keep the batch polite to sources while avoiding the old 4-second idle gap
-    // for every gallery. A server 429 still switches this worker to its cooldown.
-    private const val REQUEST_INTERVAL_MS = 1_500L
+    // nhentai may return transient 429/404 responses when search pages are
+    // requested too quickly. Keep the source-safe cadence for discovery and
+    // gallery addition so a large date range cannot stall around page 25.
+    private const val REQUEST_INTERVAL_MS = 4_000L
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 

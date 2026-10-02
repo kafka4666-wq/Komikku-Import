@@ -358,7 +358,11 @@ class NhentaiDateImportWorker(
                 .addQueryParameter("sort", "date")
                 .addQueryParameter("page", page.toString())
                 .build()
-            val response = client.newCall(GET(url)).execute()
+            val request = GET(url).newBuilder()
+                .header("User-Agent", "Komikku/${BuildConfig.VERSION_NAME}")
+                .header("Accept", "application/json")
+                .build()
+            val response = client.newCall(request).execute()
             if (response.code == 429) {
                 response.close()
                 delay(60_000L)
