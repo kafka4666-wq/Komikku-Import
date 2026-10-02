@@ -68,6 +68,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 
@@ -205,7 +206,7 @@ class NhentaiDateImportScreen : Screen() {
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Automatically import every day", style = MaterialTheme.typography.titleMedium)
-                        Text("Runs at ${dailyImportTime} local device time and adds that day’s books.", style = MaterialTheme.typography.bodySmall)
+                        Text("Runs at ${dailyImportTime} IST and adds that day’s books.", style = MaterialTheme.typography.bodySmall)
                     }
                     OutlinedButton(
                         onClick = {
@@ -218,7 +219,7 @@ class NhentaiDateImportScreen : Screen() {
                     ) { Text(dailyImportTime) }
                 }
                 Text(
-                    "The schedule survives app restarts and device reboots through WorkManager. Turn it off here to stop automatic imports.",
+                    "The schedule uses Asia/Kolkata time and survives app restarts and device reboots through WorkManager. Turn it off here to stop automatic imports.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -426,8 +427,9 @@ object NhentaiDailyImportSchedule {
     private const val PREFS = "nhentai_daily_import"
     private const val ENABLED = "enabled"
     private const val TIME = "time"
-    private const val DEFAULT_TIME = "20:00"
+    private const val DEFAULT_TIME = "00:00"
     private const val TAG = "nhentai-daily-import"
+    private val IST = TimeZone.getTimeZone("Asia/Kolkata")
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, true)
@@ -449,7 +451,7 @@ object NhentaiDailyImportSchedule {
 
     fun parseTime(value: String): Pair<Int, Int> {
         val parts = value.split(':')
-        val hour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 20
+        val hour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 0
         val minute = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
         return hour to minute
     }
@@ -458,9 +460,9 @@ object NhentaiDailyImportSchedule {
 
     fun schedule(context: Context) {
         if (!isEnabled(context)) return
-        val now = Calendar.getInstance()
+        val now = Calendar.getInstance(IST)
         val (hour, minute) = parseTime(time(context))
-        val next = Calendar.getInstance().apply {
+        val next = Calendar.getInstance(IST).apply {
             set(Calendar.HOUR_OF_DAY, hour)
             set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
@@ -485,7 +487,8 @@ class NhentaiDailyReminderWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         if (NhentaiDailyImportSchedule.isEnabled(applicationContext)) {
-            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("Asia/Kolkata") }
+                .format(Calendar.getInstance(TimeZone.getTimeZone("Asia/Kolkata")).time)
             NhentaiDateImportWorker.start(applicationContext, today, today)
             // Use a one-time request so the next run follows the configured wall-clock time
             // across timezone and daylight-saving changes instead of drifting by 24 hours.
