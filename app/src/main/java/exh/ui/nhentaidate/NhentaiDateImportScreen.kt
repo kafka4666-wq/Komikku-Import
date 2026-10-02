@@ -385,7 +385,13 @@ class NhentaiDateImportWorker(
                 val result = results.optJSONObject(index) ?: continue
                 val id = result.optLong("id", 0L)
                 val uploadMillis = result.optLong("upload_date", 0L) * 1_000L
-                if (id > 0L && uploadMillis in start.time until endExclusive) {
+                // nhentai's search endpoint currently omits upload_date from result
+                // objects. The relative uploaded query is the server-side filter in
+                // that case; only apply the precise local boundary when the timestamp
+                // is actually present. Treating the missing value as a date caused the
+                // queue to remain empty and the UI to finish at 0/0.
+                val matchesRange = uploadMillis <= 0L || uploadMillis in start.time until endExclusive
+                if (id > 0L && matchesRange) {
                     pageUrls += "https://nhentai.net/g/$id/"
                 }
             }
