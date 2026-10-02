@@ -299,7 +299,10 @@ class NhentaiDateImportWorker(
     private fun buildInitialAddingNotification() = applicationContext.notificationBuilder(Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
         setSmallIcon(R.drawable.ic_komikku)
         setContentTitle("Adding manga")
-        setContentText("Adding recognized books in the background")
+        setContentText("0% • 0/0 processed • 0 added • 0 failed")
+        // Discovery appends URLs while BatchImportJob drains them. That worker replaces
+        // this placeholder with the live total and determinate progress on each update.
+        setProgress(1, 0, false)
         setOngoing(true)
         setOnlyAlertOnce(true)
         setAutoCancel(false)
