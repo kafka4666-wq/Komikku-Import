@@ -350,6 +350,7 @@ class NhentaiDateImportWorker(
         var page = 1
         var totalPages = MAX_PAGES
         var transientFailures = 0
+        val emptyPageAttempts = mutableMapOf<Int, Int>()
 
         while (page <= totalPages && page <= MAX_PAGES) {
             BatchImportRequestLimiter.await()
@@ -361,6 +362,8 @@ class NhentaiDateImportWorker(
             val request = GET(url).newBuilder()
                 .header("User-Agent", "Komikku/${BuildConfig.VERSION_NAME}")
                 .header("Accept", "application/json")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
                 .build()
             val response = client.newCall(request).execute()
             if (response.code == 429) {
@@ -400,11 +403,19 @@ class NhentaiDateImportWorker(
                 // advertises later pages, so an empty intermediate page is not
                 // end-of-results (page 26 is a known example for this range).
                 if (page < totalPages) {
+                    val attempts = (emptyPageAttempts[page] ?: 0) + 1
+                    if (attempts < 3) {
+                        emptyPageAttempts[page] = attempts
+                        delay(2_000L)
+                        continue
+                    }
+                    emptyPageAttempts.remove(page)
                     page++
                     continue
                 }
                 break
             }
+            emptyPageAttempts.remove(page)
             val pageUrls = LinkedHashSet<String>()
             for (index in 0 until results.length()) {
                 val result = results.optJSONObject(index) ?: continue
