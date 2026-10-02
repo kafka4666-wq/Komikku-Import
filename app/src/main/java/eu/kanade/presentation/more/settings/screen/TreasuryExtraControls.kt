@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,11 +28,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import eu.kanade.domain.ui.KodamiTreasuryPreferences
 import eu.kanade.presentation.more.KodamiProfileAvatar
 import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheJob
 import java.time.LocalDate
 import tachiyomi.presentation.core.util.collectAsState
+import tachiyomi.domain.manga.interactor.GetManga
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 
 @Composable
 internal fun ProfilePhotoPreference(preferences: KodamiTreasuryPreferences) {
@@ -83,13 +89,23 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
     val context = LocalContext.current
     val cacheDate by preferences.dailyCacheDate().collectAsState()
     val cacheIds by preferences.dailyCacheMangaIds().collectAsState()
+    val protectedIdsText by preferences.dailyCacheProtectedMangaIds().collectAsState()
     val cacheStatus by preferences.dailyCacheStatus().collectAsState()
     var showConfirmation by rememberSaveable { mutableStateOf(false) }
     var status by rememberSaveable { mutableStateOf("") }
+    var cachedTitles by remember { mutableStateOf(emptyList<Pair<Long, String>>()) }
     val cachedCount = remember(cacheIds) {
         cacheIds.split(',').mapNotNull(String::toLongOrNull).distinct().size
     }
     val hasCacheToday = cacheDate == LocalDate.now().toString() && cachedCount > 0
+    val protectedIds = remember(protectedIdsText) { protectedIdsText.split(',').mapNotNull(String::toLongOrNull).toSet() }
+    LaunchedEffect(cacheIds) {
+        val ids = cacheIds.split(',').mapNotNull(String::toLongOrNull).distinct()
+        cachedTitles = withContext(Dispatchers.IO) {
+            val getManga: GetManga = Injekt.get()
+            ids.map { id -> id to (getManga.await(id)?.title ?: "Manga $id") }
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -116,6 +132,21 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
         }
         val visibleStatus = cacheStatus.ifBlank { status }
         if (visibleStatus.isNotBlank()) Text(visibleStatus, fontSize = 12.sp)
+        if (cachedTitles.isNotEmpty()) {
+            Text("Keep cached overnight", fontSize = 14.sp)
+            Text("Choose titles that should survive the midnight cleanup without adding them to your library.", fontSize = 12.sp)
+            cachedTitles.forEach { (id, title) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    TextButton(
+                        onClick = {
+                            val next = if (id in protectedIds) protectedIds - id else protectedIds + id
+                            preferences.dailyCacheProtectedMangaIds().set(next.joinToString(","))
+                        },
+                    ) { Text(if (id in protectedIds) "Keep on" else "Keep") }
+                }
+            }
+        }
     }
 
     if (showConfirmation) {

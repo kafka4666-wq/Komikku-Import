@@ -20,6 +20,7 @@ class KodamiTreasuryPreferences(
 
     fun dailyCacheDate() = preferenceStore.getString("kodami_daily_cache_date", "")
     fun dailyCacheMangaIds() = preferenceStore.getString("kodami_daily_cache_manga_ids", "")
+    fun dailyCacheProtectedMangaIds() = preferenceStore.getString("kodami_daily_cache_protected_manga_ids", "")
     fun dailyCacheChapterRecords() = preferenceStore.getString("kodami_daily_cache_chapter_records", "")
     fun dailyCacheStatus() = preferenceStore.getString("kodami_daily_cache_status", "")
     fun dailyCacheFilter() = preferenceStore.getString("kodami_daily_cache_filter", "DISABLED")

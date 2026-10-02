@@ -159,10 +159,11 @@ class DailyOfflineCacheManager(
         val today = LocalDate.now().toString()
         if (cacheDate.isBlank() || cacheDate >= today) return@withContext
 
+        val protectedIds = parseIds(preferences.dailyCacheProtectedMangaIds().get()).toSet()
         val retained = mutableListOf<Pair<Long, Long>>()
         readRecords().groupBy { it.first }.forEach { (mangaId, records) ->
             val manga = getManga.await(mangaId) ?: return@forEach
-            if (manga.favorite) {
+            if (mangaId in protectedIds || manga.favorite) {
                 retained += records
                 return@forEach
             }
