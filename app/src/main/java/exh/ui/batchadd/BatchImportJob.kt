@@ -45,10 +45,9 @@ import java.util.concurrent.TimeUnit
 
 /** A single process-wide gate shared by discovery and library insertion. */
 object BatchImportRequestLimiter {
-    // nhentai may return transient 429/404 responses when search pages are
-    // requested too quickly. Keep the source-safe cadence for discovery and
-    // gallery addition so a large date range cannot stall around page 25.
-    private const val REQUEST_INTERVAL_MS = 4_000L
+    // Keep normal imports at the current speed. A 429 is handled with a
+    // targeted cooldown below instead of slowing every request globally.
+    private const val REQUEST_INTERVAL_MS = 1_500L
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 
