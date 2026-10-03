@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.PowerManager
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -91,6 +94,9 @@ class BatchImportJob(
         var announcedTotal = -1
 
         status.begin(urls.size, nextIndex.coerceAtMost(urls.size), added, failed, eventsFile.readLinesSafely())
+        val wakeLock = context.getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Komikku:BatchImport")
+        wakeLock.acquire()
         setForegroundSafely()
         setProgress(progressData(nextIndex, urls.size, added, failed))
         showProgress(nextIndex, urls.size, added, failed)
@@ -156,6 +162,7 @@ class BatchImportJob(
             }
             Result.retry()
         } finally {
+            if (wakeLock.isHeld) wakeLock.release()
             context.cancelNotification(progressNotificationId)
             if (!isStopped && doneFile.exists() && nextIndex >= inputFile.readCompleteLinesSafely().size) {
                 inputFile.delete()
@@ -203,12 +210,12 @@ class BatchImportJob(
 
     private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
         awaitResume()
-        var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Rate limit retry exhausted")
-        for (attempt in 0 until RATE_LIMIT_RETRIES) {
+        var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Transient retry exhausted")
+        for (attempt in 0 until MAX_ADD_ATTEMPTS) {
             awaitResume()
             BatchImportRequestLimiter.await()
             val startedAt = System.currentTimeMillis()
-            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = 1)
+            result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = INNER_ADD_RETRIES)
             val elapsed = System.currentTimeMillis() - startedAt
             val rateLimited = isRateLimited(result)
             KomikkuExtendedFeatureStore.recordSourceEvent(
@@ -219,9 +226,14 @@ class BatchImportJob(
                 latencyMs = elapsed,
                 error = (result as? GalleryAddEvent.Fail.Error)?.logMessage,
             )
-            if (!rateLimited) return result
-            if (attempt < RATE_LIMIT_RETRIES - 1) {
-                delay((RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS))
+            if (result is GalleryAddEvent.Success || !isTransientFailure(result)) return result
+            if (attempt < MAX_ADD_ATTEMPTS - 1) {
+                val pause = if (rateLimited) {
+                    (RATE_LIMIT_COOLDOWN_MS * (1L shl attempt)).coerceAtMost(MAX_RATE_LIMIT_COOLDOWN_MS)
+                } else {
+                    (TRANSIENT_COOLDOWN_MS * (attempt + 1)).coerceAtMost(MAX_TRANSIENT_COOLDOWN_MS)
+                }
+                delay(pause)
             }
         }
         return result
@@ -235,6 +247,18 @@ class BatchImportJob(
         result is GalleryAddEvent.Fail.Error && result.logMessage.lowercase().let {
             "429" in it || "too many request" in it || "rate limit" in it || "rate-limit" in it
         }
+
+    private fun isTransientFailure(result: GalleryAddEvent): Boolean {
+        if (result !is GalleryAddEvent.Fail.Error) return false
+        if (result is GalleryAddEvent.Fail.NotFound) return false
+        val message = result.logMessage.lowercase()
+        return listOf(
+            "429", "too many request", "rate limit", "rate-limit", "timeout",
+            "timed out", "connection", "connect", "network", "socket", "reset",
+            "refused", "unreachable", "unavailable", "eof", "broken pipe",
+            "5xx", "500", "502", "503", "504", "ssl",
+        ).any(message::contains)
+    }
 
     private fun buildProgressNotification(completed: Int, total: Int, added: Int, failed: Int, nhentaiImport: Boolean = false) =
         context.notificationBuilder(if (nhentaiImport) Notifications.CHANNEL_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.CHANNEL_BATCH_IMPORT_PROGRESS) {
@@ -319,8 +343,11 @@ class BatchImportJob(
         private const val KEY_NOTIFICATION_ID = "notification_id"
         private const val RATE_LIMIT_COOLDOWN_MS = 60_000L
         private const val MAX_RATE_LIMIT_COOLDOWN_MS = 10 * 60_000L
-        private const val RATE_LIMIT_RETRIES = 3
+        private const val MAX_ADD_ATTEMPTS = 4
+        private const val INNER_ADD_RETRIES = 2
         private const val PAUSE_POLL_MS = 500L
+        private const val TRANSIENT_COOLDOWN_MS = 10_000L
+        private const val MAX_TRANSIENT_COOLDOWN_MS = 60_000L
         private const val PREFS_NAME = "batch_import_controls"
         private const val PREFS_PAUSED = "paused"
         private const val PREF_JOB_ID = "batch_import_job_id"
@@ -357,7 +384,11 @@ class BatchImportJob(
             nhentaiImport: Boolean = false,
         ): UUID {
             val requestId = UUID.randomUUID()
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
+                .setConstraints(constraints)
                 .setId(requestId)
                 .setInputData(workDataOf(INPUT_PATH to input.absolutePath, KEY_NHENTAI_IMPORT to nhentaiImport, KEY_NOTIFICATION_ID to if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)

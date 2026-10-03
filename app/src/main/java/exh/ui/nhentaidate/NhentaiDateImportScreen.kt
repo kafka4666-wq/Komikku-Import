@@ -41,9 +41,11 @@ import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import eu.kanade.presentation.util.Screen
@@ -428,6 +430,11 @@ class NhentaiDateImportWorker(
 
         fun start(context: Context, startDate: String, endDate: String = startDate, excludedTags: String = "") {
             val request = OneTimeWorkRequestBuilder<NhentaiDateImportWorker>()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build(),
+                )
                 .setInputData(
                     androidx.work.workDataOf(
                         KEY_START_DATE to startDate,
