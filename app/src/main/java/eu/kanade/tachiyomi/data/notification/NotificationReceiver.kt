@@ -8,6 +8,8 @@ import android.net.Uri
 import androidx.core.net.toUri
 import eu.kanade.tachiyomi.data.backup.restore.BackupRestoreJob
 import eu.kanade.tachiyomi.data.download.DownloadManager
+import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheCleanupWorker
+import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheManager
 import eu.kanade.tachiyomi.data.library.LibraryUpdateJob
 import exh.ui.batchadd.BatchImportJob
 import exh.ui.nhentaidate.NhentaiDateImportWorker
@@ -86,6 +88,10 @@ class NotificationReceiver : BroadcastReceiver() {
             }
             NhentaiDailyImportSchedule.ACTION_DAILY_IMPORT_ALARM ->
                 NhentaiDailyImportSchedule.onAlarm(context)
+            ACTION_DAILY_CACHE_CLEANUP_ALARM -> launchIO {
+                DailyOfflineCacheManager(context.applicationContext).expireIfNeeded()
+                DailyOfflineCacheCleanupWorker.scheduleNext(context.applicationContext)
+            }
             // Cancel library update and dismiss notification
             ACTION_CANCEL_LIBRARY_UPDATE -> cancelLibraryUpdate(context)
             // Start downloading app update
@@ -301,6 +307,7 @@ class NotificationReceiver : BroadcastReceiver() {
         private const val ACTION_PAUSE_BATCH_IMPORT = "$ID.$NAME.ACTION_PAUSE_BATCH_IMPORT"
         private const val ACTION_RESUME_BATCH_IMPORT = "$ID.$NAME.ACTION_RESUME_BATCH_IMPORT"
         private const val ACTION_CANCEL_BATCH_IMPORT = "$ID.$NAME.ACTION_CANCEL_BATCH_IMPORT"
+        internal const val ACTION_DAILY_CACHE_CLEANUP_ALARM = "$ID.$NAME.ACTION_DAILY_CACHE_CLEANUP_ALARM"
 
         private const val ACTION_DISMISS_NOTIFICATION = "$ID.$NAME.ACTION_DISMISS_NOTIFICATION"
 

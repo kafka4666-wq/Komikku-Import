@@ -1,6 +1,10 @@
 package eu.kanade.tachiyomi.data.download.dailycache
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -8,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import eu.kanade.domain.ui.KodamiTreasuryPreferences
+import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.download.DownloadManager
 import java.io.File
 import java.time.Duration
@@ -94,6 +99,31 @@ class DailyOfflineCacheCleanupWorker(
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
+            val alarmIntent = Intent(context, NotificationReceiver::class.java).apply {
+                action = NotificationReceiver.ACTION_DAILY_CACHE_CLEANUP_ALARM
+            }
+            val alarmPendingIntent = PendingIntent.getBroadcast(
+                context,
+                0xDA1, // Stable request code: keep one cleanup alarm.
+                alarmIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val alarmManager = context.getSystemService(AlarmManager::class.java)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        nextMidnight.toInstant().toEpochMilli(),
+                        alarmPendingIntent,
+                    )
+                } else {
+                    alarmManager.set(
+                        AlarmManager.RTC_WAKEUP,
+                        nextMidnight.toInstant().toEpochMilli(),
+                        alarmPendingIntent,
+                    )
+                }
+            }
         }
     }
 }
