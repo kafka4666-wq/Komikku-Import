@@ -84,6 +84,15 @@ class DailyOfflineCacheCleanupWorker(
     companion object {
         private const val CLEANUP_WORK_PREFIX = "komikku-daily-cache-expiry-"
 
+        fun enqueueNow(context: Context) {
+            val request = OneTimeWorkRequestBuilder<DailyOfflineCacheCleanupWorker>().build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "${CLEANUP_WORK_PREFIX}now",
+                ExistingWorkPolicy.REPLACE,
+                request,
+            )
+        }
+
         /** WorkManager is persisted across process death and reboot; expireIfNeeded also runs on app resume. */
         fun scheduleNext(context: Context) {
             val zone = ZoneId.systemDefault()
@@ -187,21 +196,34 @@ class DailyOfflineCacheManager(
     suspend fun expireIfNeeded() = withContext(Dispatchers.IO) {
         val cacheDate = preferences.dailyCacheDate().get()
         val today = LocalDate.now().toString()
-        if (cacheDate.isBlank() || cacheDate >= today) return@withContext
-
         val protectedIds = parseIds(preferences.dailyCacheProtectedMangaIds().get()).toSet()
+        val records = readRecords()
+        val cachedIds = parseIds(preferences.dailyCacheMangaIds().get())
+        // A previous cleanup could have cleared the date marker while leaving
+        // ownership records behind. Those records must remain retryable.
+        if (records.isEmpty() && cachedIds.isEmpty()) return@withContext
+        if (cacheDate.isNotBlank() && cacheDate >= today) return@withContext
+
         val retained = mutableListOf<Pair<Long, Long>>()
-        readRecords().groupBy { it.first }.forEach { (mangaId, records) ->
-            val manga = getManga.await(mangaId) ?: return@forEach
-            // Being in the library is not protection: the daily cache selects
-            // library titles by design. Only the explicit Keep cached overnight
-            // action may retain this title across midnight.
-            if (mangaId in protectedIds) {
-                retained += records
+        records.groupBy { it.first }.forEach { (mangaId, mangaRecords) ->
+            val manga = getManga.await(mangaId)
+            if (manga == null) {
+                retained += mangaRecords
                 return@forEach
             }
-            val source = sourceManager.get(manga.source) ?: return@forEach
-            val wantedChapterIds = records.mapTo(hashSetOf()) { it.second }
+            // Being in the library is not protection: the daily cache selects
+            // library titles by design. Only the explicit Keep cached
+            // action may retain this title across midnight.
+            if (mangaId in protectedIds) {
+                retained += mangaRecords
+                return@forEach
+            }
+            val source = sourceManager.get(manga.source)
+            if (source == null) {
+                retained += mangaRecords
+                return@forEach
+            }
+            val wantedChapterIds = mangaRecords.mapTo(hashSetOf()) { it.second }
             val ownedChapters = getChaptersByMangaId.await(mangaId, applyFilter = false)
                 .filter { it.id in wantedChapterIds }
             if (ownedChapters.isNotEmpty()) {

@@ -139,12 +139,12 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
         }
         val visibleStatus = cacheStatus.ifBlank { status }
         if (visibleStatus.isNotBlank()) Text(visibleStatus, fontSize = 12.sp)
-        if (cacheDate.isNotBlank() && cacheDate < LocalDate.now().toString()) {
+        if (cachedCount > 0) {
             OutlinedButton(
                 onClick = {
                     scope.launch {
                         withContext(Dispatchers.IO) { DailyOfflineCacheManager(context).expireIfNeeded() }
-                        status = "Expired unmarked cache chapters cleaned up."
+                        status = "Expired unmarked cache chapters cleaned up; protected titles were kept."
                     }
                 },
             ) { Text("Clean expired cache now") }

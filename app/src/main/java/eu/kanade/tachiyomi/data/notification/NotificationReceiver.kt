@@ -88,8 +88,10 @@ class NotificationReceiver : BroadcastReceiver() {
             }
             NhentaiDailyImportSchedule.ACTION_DAILY_IMPORT_ALARM ->
                 NhentaiDailyImportSchedule.onAlarm(context)
-            ACTION_DAILY_CACHE_CLEANUP_ALARM -> launchIO {
-                DailyOfflineCacheManager(context.applicationContext).expireIfNeeded()
+            ACTION_DAILY_CACHE_CLEANUP_ALARM -> {
+                // Dispatch through WorkManager so cleanup is not lost when
+                // Android kills the short-lived broadcast process.
+                DailyOfflineCacheCleanupWorker.enqueueNow(context.applicationContext)
                 DailyOfflineCacheCleanupWorker.scheduleNext(context.applicationContext)
             }
             // Cancel library update and dismiss notification
