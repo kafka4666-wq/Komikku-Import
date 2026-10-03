@@ -163,7 +163,10 @@ class DailyOfflineCacheManager(
         val retained = mutableListOf<Pair<Long, Long>>()
         readRecords().groupBy { it.first }.forEach { (mangaId, records) ->
             val manga = getManga.await(mangaId) ?: return@forEach
-            if (mangaId in protectedIds || manga.favorite) {
+            // Being in the library is not protection: the daily cache selects
+            // library titles by design. Only the explicit Keep cached overnight
+            // action may retain this title across midnight.
+            if (mangaId in protectedIds) {
                 retained += records
                 return@forEach
             }
