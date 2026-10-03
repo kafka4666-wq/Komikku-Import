@@ -28,6 +28,7 @@ import eu.kanade.presentation.manga.DownloadAction
 import eu.kanade.tachiyomi.data.cache.CoverCache
 import eu.kanade.tachiyomi.data.download.DownloadCache
 import eu.kanade.tachiyomi.data.download.DownloadManager
+import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheManager
 import eu.kanade.tachiyomi.data.library.LibraryUpdateJob
 import eu.kanade.tachiyomi.data.track.TrackStatus
 import eu.kanade.tachiyomi.data.track.TrackerManager
@@ -191,6 +192,9 @@ class LibraryScreenModel(
     // SY <--
 
     init {
+        screenModelScope.launchIO {
+            DailyOfflineCacheManager(preferences.context).expireIfNeeded()
+        }
         mutableState.update { state ->
             state.copy(activeCategoryIndex = libraryPreferences.lastUsedCategory().get())
         }

@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,10 +30,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import eu.kanade.domain.ui.KodamiTreasuryPreferences
 import eu.kanade.presentation.more.KodamiProfileAvatar
 import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheJob
+import eu.kanade.tachiyomi.data.download.dailycache.DailyOfflineCacheManager
 import java.time.LocalDate
 import tachiyomi.presentation.core.util.collectAsState
 import tachiyomi.domain.manga.interactor.GetManga
@@ -91,6 +94,7 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
     val cacheIds by preferences.dailyCacheMangaIds().collectAsState()
     val protectedIdsText by preferences.dailyCacheProtectedMangaIds().collectAsState()
     val cacheStatus by preferences.dailyCacheStatus().collectAsState()
+    val scope = rememberCoroutineScope()
     var showConfirmation by rememberSaveable { mutableStateOf(false) }
     var status by rememberSaveable { mutableStateOf("") }
     var cachedTitles by remember { mutableStateOf(emptyList<Pair<Long, String>>()) }
@@ -99,6 +103,9 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
     }
     val hasCacheToday = cacheDate == LocalDate.now().toString() && cachedCount > 0
     val protectedIds = remember(protectedIdsText) { protectedIdsText.split(',').mapNotNull(String::toLongOrNull).toSet() }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { DailyOfflineCacheManager(context).expireIfNeeded() }
+    }
     LaunchedEffect(cacheIds) {
         val ids = cacheIds.split(',').mapNotNull(String::toLongOrNull).distinct()
         cachedTitles = withContext(Dispatchers.IO) {
@@ -132,6 +139,16 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
         }
         val visibleStatus = cacheStatus.ifBlank { status }
         if (visibleStatus.isNotBlank()) Text(visibleStatus, fontSize = 12.sp)
+        if (cacheDate.isNotBlank() && cacheDate < LocalDate.now().toString()) {
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { DailyOfflineCacheManager(context).expireIfNeeded() }
+                        status = "Expired unmarked cache chapters cleaned up."
+                    }
+                },
+            ) { Text("Clean expired cache now") }
+        }
         if (cachedTitles.isNotEmpty()) {
             Text("Keep cached overnight", fontSize = 14.sp)
             Text("Choose titles that should survive the midnight cleanup without adding them to your library.", fontSize = 12.sp)
