@@ -271,7 +271,6 @@ class DailyOfflineCacheManager(
                 false
             }
         }
-    }
 
     private fun readRecords(): List<Pair<Long, Long>> {
         if (!recordsFile.exists()) return emptyList()
