@@ -236,19 +236,41 @@ class DailyOfflineCacheManager(
             }
         }
 
-        if (retained.isEmpty()) recordsFile.delete() else writeRecords(retained, replace = true)
+        val recordsSaved = if (retained.isEmpty()) {
+            synchronized(RECORDS_LOCK) {
+                !recordsFile.exists() || recordsFile.delete()
+            }
+        } else {
+            writeRecords(retained, replace = true)
+        }
+        // Do not clear the date/IDs if the ownership file could not be
+        // updated. The next startup, alarm, or manual cleanup can retry it.
+        if (!recordsSaved) return@withContext
         preferences.dailyCacheMangaIds().set(retained.map { it.first }.distinct().joinToString(","))
         preferences.dailyCacheChapterRecords().set("")
         preferences.dailyCacheDate().set("")
         preferences.dailyCacheStatus().set("")
     }
 
-    private fun writeRecords(records: List<Pair<Long, Long>>, replace: Boolean = false) {
-        val merged = if (replace) records.distinct() else (readRecords() + records).distinct()
-        val tempFile = File(context.filesDir, "komikku-daily-cache-owned-chapters.tmp")
-        tempFile.writeText(merged.joinToString("\n") { (mangaId, chapterId) -> "$mangaId:$chapterId" })
-        if (recordsFile.exists() && !recordsFile.delete()) error("Could not replace daily-cache ownership records")
-        if (!tempFile.renameTo(recordsFile)) error("Could not save daily-cache ownership records")
+    private fun writeRecords(records: List<Pair<Long, Long>>, replace: Boolean = false): Boolean =
+        synchronized(RECORDS_LOCK) {
+            val merged = if (replace) records.distinct() else (readRecords() + records).distinct()
+            val tempFile = File(context.filesDir, "komikku-daily-cache-owned-chapters.tmp")
+            runCatching {
+                tempFile.writeText(merged.joinToString("\n") { (mangaId, chapterId) -> "$mangaId:$chapterId" })
+                // renameTo() is not reliable on all Android filesystems when
+                // the destination exists. Copy with overwrite as a fallback,
+                // and never throw from cache maintenance into the UI process.
+                if (!tempFile.renameTo(recordsFile)) {
+                    tempFile.copyTo(recordsFile, overwrite = true)
+                    tempFile.delete()
+                }
+                true
+            }.getOrElse {
+                tempFile.delete()
+                false
+            }
+        }
     }
 
     private fun readRecords(): List<Pair<Long, Long>> {
@@ -279,6 +301,7 @@ class DailyOfflineCacheManager(
     )
 
     private companion object {
+        val RECORDS_LOCK = Any()
         const val TITLES_PER_DAY = 30
     }
 }
