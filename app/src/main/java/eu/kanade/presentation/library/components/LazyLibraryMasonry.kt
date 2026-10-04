@@ -123,6 +123,7 @@ internal fun LazyLibraryMasonry(
                 },
                 preserveCoverAspect = true,
                 appearance = appearance,
+                animateTreasury = false,
                 usePanoramaCover = false,
             )
         }

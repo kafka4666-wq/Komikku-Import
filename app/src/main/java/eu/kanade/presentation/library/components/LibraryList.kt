@@ -73,6 +73,7 @@ internal fun LibraryList(
                 onLongClick = { onLongClick(libraryItem.libraryManga) },
                 onClick = { onClick(libraryItem.libraryManga) },
                 appearance = cardAppearance,
+                animateTreasury = false,
                 onClickContinueReading = if (onClickContinueReading != null && libraryItem.unreadCount > 0) {
                     { onClickContinueReading(libraryItem.libraryManga) }
                 } else {

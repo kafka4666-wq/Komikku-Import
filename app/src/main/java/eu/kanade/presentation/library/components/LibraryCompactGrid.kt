@@ -150,6 +150,7 @@ private fun LibraryCompactGridCard(
             if (showUnread) UnreadBadge(count = libraryItem.unreadCount)
         },
         appearance = appearance,
+        animateTreasury = false,
         coverBadgeEnd = {
             LanguageBadge(
                 isLocal = libraryItem.isLocal,

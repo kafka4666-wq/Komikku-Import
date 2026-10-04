@@ -100,6 +100,7 @@ fun MangaCompactGridItem(
     // KMK -->
     libraryColored: Boolean = true,
     appearance: DoujinCardAppearance? = null,
+    animateTreasury: Boolean = true,
     // KMK <--
 ) {
     // KMK -->
@@ -148,7 +149,7 @@ fun MangaCompactGridItem(
             },
             intensity = cardAppearance.treasuryIntensity,
             cornerRadius = cornerRadius.dp,
-            animated = cardAppearance.treasuryAnimations,
+            animated = cardAppearance.treasuryAnimations && animateTreasury,
         ).mangaAuroraCard(
             radius = cornerRadius.dp,
             accent = MaterialTheme.colorScheme.primary,
@@ -292,6 +293,7 @@ fun MangaComfortableGridItem(
     fitToPanoramaCover: Boolean = false,
     preserveCoverAspect: Boolean = false,
     appearance: DoujinCardAppearance? = null,
+    animateTreasury: Boolean = true,
     // KMK <—
 ) {
     // KMK -->
@@ -340,7 +342,7 @@ fun MangaComfortableGridItem(
             },
             intensity = cardAppearance.treasuryIntensity,
             cornerRadius = cornerRadius.dp,
-            animated = cardAppearance.treasuryAnimations,
+            animated = cardAppearance.treasuryAnimations && animateTreasury,
         ).mangaAuroraCard(
             radius = cornerRadius.dp,
             accent = MaterialTheme.colorScheme.primary,
@@ -566,6 +568,7 @@ fun MangaListItem(
     // KMK -->
     libraryColored: Boolean = true,
     appearance: DoujinCardAppearance? = null,
+    animateTreasury: Boolean = true,
     // KMK <--
 ) {
     // KMK -->
@@ -597,7 +600,7 @@ fun MangaListItem(
             },
                 intensity = cardAppearance.treasuryIntensity,
                 cornerRadius = cornerRadius.dp,
-                animated = cardAppearance.treasuryAnimations,
+                animated = cardAppearance.treasuryAnimations && animateTreasury,
             )
             .mangaAuroraCard(
                 radius = cornerRadius.dp,
