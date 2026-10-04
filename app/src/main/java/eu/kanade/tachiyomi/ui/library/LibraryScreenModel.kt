@@ -719,7 +719,14 @@ class LibraryScreenModel(
                     manga1.libraryManga.latestUpload.compareTo(manga2.libraryManga.latestUpload)
                 }
                 LibrarySort.Type.ChapterFetchDate -> {
-                    manga1.libraryManga.chapterFetchedAt.compareTo(manga2.libraryManga.chapterFetchedAt)
+                    // chapterFetchedAt is the max(date_fetch) of the manga's
+                    // chapters. Use the latest upload as a deterministic
+                    // secondary key when several titles were fetched in the
+                    // same refresh batch.
+                    manga1.libraryManga.chapterFetchedAt
+                        .compareTo(manga2.libraryManga.chapterFetchedAt)
+                        .takeIf { it != 0 }
+                        ?: manga1.libraryManga.latestUpload.compareTo(manga2.libraryManga.latestUpload)
                 }
                 LibrarySort.Type.DateAdded -> {
                     manga1.libraryManga.manga.dateAdded.compareTo(manga2.libraryManga.manga.dateAdded)
@@ -1321,6 +1328,45 @@ class LibraryScreenModel(
             // AZ <--
             // Prepare filter object
             val parsedQuery = searchEngine.parseQuery(query)
+
+            // A plain text query is common and should not force a 100k-item
+            // metadata/tracker scan. Search the fields already present in the
+            // library snapshot first; this also makes direct Nhentai code
+            // searches work even when the title does not contain the code.
+            val simpleText = parsedQuery.singleOrNull() as? Text
+            val rawNhentaiCode = extractNhentaiCode(query.trim())
+            if (simpleText != null || rawNhentaiCode != null) {
+                val needle = simpleText?.asQuery()?.trim().orEmpty()
+                val nhentaiCode = rawNhentaiCode ?: extractNhentaiCode(needle)
+                if (needle.isNotEmpty() || nhentaiCode != null) {
+                    val quickMatches = unfiltered.fastFilter { item ->
+                        val manga = item.libraryManga.manga
+                        val codeMatch = nhentaiCode != null && mangaMatchesNhentaiCode(manga, nhentaiCode)
+                        codeMatch || (
+                            needle.isNotEmpty() && (
+                                manga.title.contains(needle, true) ||
+                                    manga.author?.contains(needle, true) == true ||
+                                    manga.artist?.contains(needle, true) == true ||
+                                    manga.description?.contains(needle, true) == true ||
+                                    manga.genre?.fastAny { it.contains(needle, true) } == true ||
+                                    manga.url.contains(needle, true)
+                                )
+                            )
+                    }
+                    if (quickMatches.isNotEmpty()) {
+                        return if (nhentaiCode != null) {
+                            quickMatches.sortedWith(
+                                compareByDescending<LibraryItem> {
+                                    mangaMatchesNhentaiCode(it.libraryManga.manga, nhentaiCode)
+                                },
+                            )
+                        } else {
+                            quickMatches
+                        }
+                    }
+                }
+            }
+
             val mangaWithMetaIds = getIdsOfFavoriteMangaWithMetadata.await()
             val tracks = if (loggedInTrackServices.isNotEmpty()) {
                 getTracks.await().groupBy { it.mangaId }
@@ -1928,6 +1974,19 @@ class LibraryScreenModel(
 
     // KMK -->
     companion object {
+        private val NHENTAI_CODE_QUERY = Regex(
+            "(?i)^(?:nhentai(?:\\.net)?\\s*)?(?:code\\s*[:#=-]?\\s*|#\\s*)?(\\d{5,7})$",
+        )
+        private val NHENTAI_CODE_URL = Regex("(?i)(?:^|/g/)(\\d{5,7})(?:/|$)")
+
+        private fun extractNhentaiCode(query: String): String? =
+            NHENTAI_CODE_QUERY.matchEntire(query)?.groupValues?.getOrNull(1)
+
+        private fun mangaMatchesNhentaiCode(manga: Manga, code: String): Boolean {
+            if (manga.source !in nHentaiSourceIds && !manga.url.contains("nhentai", true)) return false
+            return NHENTAI_CODE_URL.find(manga.url)?.groupValues?.getOrNull(1) == code
+        }
+
         /** List of MangaDex UUIDs subject to DMCA takedowns */
         @Volatile
         private var mangaDexDmcaUuids = hashSetOf<String>()
