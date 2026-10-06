@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.content.pm.ServiceInfo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -48,7 +51,6 @@ import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.util.system.notificationBuilder
-import eu.kanade.tachiyomi.util.system.notify
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.log.xLogE
 import kotlinx.coroutines.Dispatchers
@@ -175,15 +177,24 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         resultFile.writeText("")
         val completed = AtomicInteger(0)
         val semaphore = Semaphore(12)
+        val writeLock = Any()
+        setForeground(getForegroundInfo())
         setProgress(workDataOf(KEY_COMPLETED to 0, KEY_TOTAL to titles.size))
+        updateNotification(0, titles.size, "Searching ${sources.size} enabled sources")
         coroutineScope {
             titles.map { title -> async(Dispatchers.IO) {
-                val candidates = sources.flatMap { source -> searchSource(source, title, semaphore) }
-                candidates.distinctBy { it.url }.take(8).forEach { candidate -> resultFile.appendText(encode(candidate) + "\n") }
+                val candidates = coroutineScope {
+                    sources.map { source -> async { searchSource(source, title, semaphore) } }.awaitAll().flatten()
+                }
+                synchronized(writeLock) {
+                    candidates.distinctBy { it.url }.take(8).forEach { candidate -> resultFile.appendText(encode(candidate) + "\n") }
+                }
                 val done = completed.incrementAndGet()
                 setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size))
+                updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
             } }.awaitAll()
         }
+        updateNotification(titles.size, titles.size, "Search complete · review matches in the app")
         return Result.success(workDataOf(KEY_RESULT_FILE to resultFile.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
     }
     private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
@@ -195,7 +206,33 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             emptyList()
         }
     }
-    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(NOTIFICATION_ID, applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) { setSmallIcon(R.drawable.ic_komikku); setContentTitle("Finding titles"); setContentText("Searching enabled sources") }.build())
+    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
+        NOTIFICATION_ID,
+        applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) {
+            setSmallIcon(R.drawable.ic_komikku)
+            setContentTitle("Finding titles in enabled sources")
+            setContentText("Searching enabled sources")
+            setOngoing(true)
+            setOnlyAlertOnce(true)
+            setPriority(NotificationCompat.PRIORITY_LOW)
+        }.build(),
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+    )
+    private fun updateNotification(completed: Int, total: Int, detail: String) {
+        NotificationManagerCompat.from(applicationContext).notify(
+            NOTIFICATION_ID,
+            NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT)
+                .setSmallIcon(R.drawable.ic_komikku)
+                .setContentTitle("Finding titles in enabled sources")
+                .setContentText(detail)
+                .setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total), false)
+                .setOngoing(completed < total)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id))
+                .build(),
+        )
+    }
     companion object {
         const val KEY_URI = "title_uri"
         const val KEY_RESULT_FILE = "result_file"
