@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -35,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -50,6 +52,7 @@ import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.source.Source
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.log.xLogE
@@ -62,6 +65,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import tachiyomi.core.common.util.QuerySanitizer.sanitize
+import mihon.domain.manga.model.toDomainManga
 import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.presentation.core.components.material.Scaffold
 import tachiyomi.presentation.core.util.plus
@@ -71,6 +75,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.Base64
+import coil3.compose.AsyncImage
 
 class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
     @Composable
@@ -131,7 +136,7 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
                     Button(
                         enabled = selectedUrls.isNotEmpty(),
                         onClick = {
-                            BatchImportJob.start(context.applicationContext, selectedUrls)
+                            BatchImportJob.startTitleMatches(context.applicationContext, selectedUrls)
                             navigator?.pop()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -146,6 +151,12 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
                             Checkbox(checked = candidate.id in selected, onCheckedChange = {
                                 if (it) selected.add(candidate.id) else selected.remove(candidate.id)
                             })
+                            AsyncImage(
+                                model = candidate.thumbnailUrl,
+                                contentDescription = candidate.matchedTitle,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(64.dp),
+                            )
                             Column(Modifier.weight(1f)) {
                                 Text(candidate.matchedTitle, style = MaterialTheme.typography.titleSmall)
                                 Text("${candidate.sourceName} · from: ${candidate.inputTitle}", style = MaterialTheme.typography.bodySmall)
@@ -159,7 +170,14 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
     }
 }
 
-data class TitleSearchCandidate(val id: String, val inputTitle: String, val matchedTitle: String, val sourceName: String, val url: String)
+data class TitleSearchCandidate(
+    val id: String,
+    val inputTitle: String,
+    val matchedTitle: String,
+    val sourceName: String,
+    val url: String,
+    val thumbnailUrl: String?,
+)
 
 class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val sourceManager: SourceManager = Injekt.get()
@@ -174,7 +192,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }.getOrElse { xLogE("Title file read failed", it); return Result.failure() }
         val enabledLanguages = sourcePreferences.enabledLanguages().get()
         val disabled = sourcePreferences.disabledSources().get()
-        val sources = sourceManager.getVisibleSources().filter { it.lang in enabledLanguages && it.id.toString() !in disabled }
+        val sources = sourceManager.getVisibleSources()
+            .filterIsInstance<HttpSource>()
+            .filter { it.lang in enabledLanguages && it.id.toString() !in disabled }
         resultFile.writeText("")
         val completed = AtomicInteger(0)
         val semaphore = Semaphore(12)
@@ -202,7 +222,17 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         return try {
             val page = semaphore.withPermit { withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) } }
                 ?: return emptyList()
-            page.mangas.map { manga -> TitleSearchCandidate("${title.hashCode()}-${source.id}-${manga.url.hashCode()}", title, manga.title, source.name, manga.url) }
+            page.mangas.map { manga ->
+                val local = manga.toDomainManga(source.id)
+                TitleSearchCandidate(
+                    id = "${title.hashCode()}-${source.id}-${manga.url.hashCode()}",
+                    inputTitle = title,
+                    matchedTitle = manga.title,
+                    sourceName = source.name,
+                    url = absoluteUrl(source, manga.url),
+                    thumbnailUrl = local.thumbnailUrl?.let { absoluteUrl(source, it) },
+                )
+            }
         } catch (_: Exception) {
             emptyList()
         }
@@ -246,8 +276,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             return request.id
         }
         fun readResults(context: Context, path: String?): List<TitleSearchCandidate> = runCatching { path?.let(::File)?.readLines()?.mapNotNull(::decode).orEmpty() }.getOrDefault(emptyList())
-        private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
-        private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4]) }.getOrNull()
+        private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
+        private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4], v.getOrNull(5)?.ifBlank { null }) }.getOrNull()
         private fun cleanTitle(value: String): String = value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ").replace(Regex("\\s+"), " ").trim()
+        private fun absoluteUrl(source: Source, value: String): String {
+            if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
+            val baseUrl = (source as? HttpSource)?.baseUrl?.trimEnd('/') ?: return value
+            return "$baseUrl/${value.trimStart('/')}"
+        }
     }
 }

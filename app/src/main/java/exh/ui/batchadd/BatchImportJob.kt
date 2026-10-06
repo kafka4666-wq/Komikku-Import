@@ -54,11 +54,11 @@ object BatchImportRequestLimiter {
     private val mutex = Mutex()
     private var nextRequestAt = 0L
 
-    suspend fun await() {
+    suspend fun await(intervalMs: Long = REQUEST_INTERVAL_MS) {
         val waitFor = mutex.withLock {
             val now = System.currentTimeMillis()
             val wait = (nextRequestAt - now).coerceAtLeast(0L)
-            nextRequestAt = maxOf(now, nextRequestAt) + REQUEST_INTERVAL_MS
+            nextRequestAt = maxOf(now, nextRequestAt) + intervalMs
             wait
         }
         if (waitFor > 0) delay(waitFor)
@@ -79,6 +79,7 @@ class BatchImportJob(
     override suspend fun doWork(): Result {
         val inputPath = inputData.getString(INPUT_PATH) ?: return Result.failure()
         val nhentaiImport = inputData.getBoolean(KEY_NHENTAI_IMPORT, false)
+        val fastTitleImport = inputData.getBoolean(KEY_FAST_TITLE_IMPORT, false)
         val progressNotificationId = if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS
         val inputFile = File(inputPath)
         val checkpointFile = File("$inputPath.progress")
@@ -117,7 +118,7 @@ class BatchImportJob(
                 if (nextIndex < urls.size) {
                     val url = urls[nextIndex]
                     repairExistingNhentaiIdentity(url)
-                    val result = addGalleryRateLimited(url)
+                    val result = addGalleryRateLimited(url, fastTitleImport)
                     val wasAdded = result is GalleryAddEvent.Success
                     val detail = if (wasAdded) null else result.logMessage
                     if (wasAdded) {
@@ -208,12 +209,12 @@ class BatchImportJob(
         }
     }
 
-    private suspend fun addGalleryRateLimited(url: String): GalleryAddEvent {
+    private suspend fun addGalleryRateLimited(url: String, fastTitleImport: Boolean = false): GalleryAddEvent {
         awaitResume()
         var result: GalleryAddEvent = GalleryAddEvent.Fail.Error(url, "Transient retry exhausted")
         for (attempt in 0 until MAX_ADD_ATTEMPTS) {
             awaitResume()
-            BatchImportRequestLimiter.await()
+            BatchImportRequestLimiter.await(if (fastTitleImport) FAST_TITLE_INTERVAL_MS else NORMAL_TITLE_INTERVAL_MS)
             val startedAt = System.currentTimeMillis()
             result = GalleryAdder().addGallery(context = context, url = url, fav = true, retry = INNER_ADD_RETRIES)
             val elapsed = System.currentTimeMillis() - startedAt
@@ -348,6 +349,8 @@ class BatchImportJob(
         private const val PAUSE_POLL_MS = 500L
         private const val TRANSIENT_COOLDOWN_MS = 10_000L
         private const val MAX_TRANSIENT_COOLDOWN_MS = 60_000L
+        private const val NORMAL_TITLE_INTERVAL_MS = 1_500L
+        private const val FAST_TITLE_INTERVAL_MS = 500L
         private const val PREFS_NAME = "batch_import_controls"
         private const val PREFS_PAUSED = "paused"
         private const val PREF_JOB_ID = "batch_import_job_id"
@@ -362,6 +365,20 @@ class BatchImportJob(
             input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
             return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
+        }
+
+        fun startTitleMatches(context: Context, urls: List<String>): UUID {
+            val input = File(context.cacheDir, "batch-title-import-${System.currentTimeMillis()}.txt")
+            input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
+            File("${input.absolutePath}.done").writeText("done")
+            return enqueue(
+                context,
+                input,
+                "$TAG-title-matches",
+                androidx.work.ExistingWorkPolicy.REPLACE,
+                saveJobId = true,
+                fastTitleImport = true,
+            )
         }
 
         fun startFromFile(context: Context, input: File) {
@@ -382,6 +399,7 @@ class BatchImportJob(
             policy: androidx.work.ExistingWorkPolicy,
             saveJobId: Boolean,
             nhentaiImport: Boolean = false,
+            fastTitleImport: Boolean = false,
         ): UUID {
             val requestId = UUID.randomUUID()
             val constraints = Constraints.Builder()
@@ -390,7 +408,7 @@ class BatchImportJob(
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
                 .setConstraints(constraints)
                 .setId(requestId)
-                .setInputData(workDataOf(INPUT_PATH to input.absolutePath, KEY_NHENTAI_IMPORT to nhentaiImport, KEY_NOTIFICATION_ID to if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS))
+                .setInputData(workDataOf(INPUT_PATH to input.absolutePath, KEY_NHENTAI_IMPORT to nhentaiImport, KEY_FAST_TITLE_IMPORT to fastTitleImport, KEY_NOTIFICATION_ID to if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS))
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
@@ -415,5 +433,6 @@ class BatchImportJob(
         const val KEY_TOTAL = "total"
         const val KEY_ADDED = "added"
         const val KEY_FAILED = "failed"
+        private const val KEY_FAST_TITLE_IMPORT = "fast_title_import"
     }
 }
