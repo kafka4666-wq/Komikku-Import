@@ -72,7 +72,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.Base64
 
-class BatchTitleSearchScreen(private val inputUri: Uri) : Screen() {
+class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
     @Composable
     override fun Content() {
         val context = LocalContext.current
@@ -82,6 +82,7 @@ class BatchTitleSearchScreen(private val inputUri: Uri) : Screen() {
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
         val selected = remember { mutableStateListOf<String>() }
+        val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
         LaunchedEffect(inputUri) {
             runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
