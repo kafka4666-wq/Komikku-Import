@@ -15,17 +15,11 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.data.notification.Notifications
-import eu.kanade.tachiyomi.source.Source
-import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
+import exh.ui.batchadd.BatchTitleSearchWorker
 import kotlinx.coroutines.sync.Semaphore
-import tachiyomi.core.common.util.QuerySanitizer.sanitize
-import tachiyomi.domain.source.service.SourceManager
-import eu.kanade.domain.source.service.SourcePreferences
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -46,8 +40,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Searches selected images in the background and imports only confident matches. */
 class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
-    private val sourceManager: SourceManager = Injekt.get()
-    private val sourcePreferences: SourcePreferences = Injekt.get()
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -79,7 +71,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
 
         val completed = AtomicInteger(0)
         val foundCount = AtomicInteger(0)
-        val found = supervisorScope {
+        val outcomes = supervisorScope {
             val gate = Semaphore(MAX_PARALLEL)
             images.map { uri ->
                 async(Dispatchers.IO) {
@@ -87,17 +79,17 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                         if (isStopped) return@withPermit null
                         // A timeout, HTTP error, malformed response, or unreadable image only
                         // skips that image instead of cancelling the entire album job.
-                        var url: String? = null
+                        var outcome: ReverseOutcome? = null
                         try {
                             val reverse = withTimeoutOrNull(45_000L) { searchSauceNao(uri) }
-                            url = reverse?.directUrl ?: reverse?.titles?.let { searchEnabledSources(it) }
+                            outcome = reverse?.let { ReverseOutcome(it.directUrl, it.titles) }
                         } catch (cancel: CancellationException) {
                             throw cancel
                         } catch (_: Throwable) {
                             // Bad URI, provider response, or network failure: skip only this image.
                         } finally {
                             val done = completed.incrementAndGet()
-                            if (url != null) foundCount.incrementAndGet()
+                            if (outcome?.directUrl != null || !outcome?.titles.isNullOrEmpty()) foundCount.incrementAndGet()
                             val phase = "Reverse searched $done/${images.size} images"
                             val progress = workDataOf(
                                 KEY_PHASE to phase,
@@ -108,26 +100,34 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                             safeSetProgress(progress)
                             safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} matches", foundCount.get())
                         }
-                        url
+                        outcome
                     }
                 }
-            }.awaitAll().filterNotNull().distinct()
+            }.awaitAll().filterNotNull()
         }
 
         if (isStopped) return Result.failure()
-        if (found.isNotEmpty()) {
+        val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
+        val titles = outcomes.flatMap { it.titles }.distinct().take(MAX_TITLES)
+        if (directUrls.isNotEmpty()) {
             // Library insertion continues through the existing rate-limited batch importer.
-            runCatching { BatchImportJob.start(applicationContext, found) }
+            runCatching { BatchImportJob.start(applicationContext, directUrls) }
+        }
+        if (titles.isNotEmpty()) {
+            // Use the exact worker behind Batch Add's "Find titles from TXT in all enabled
+            // sources" action. It searches enabled sources and automatically queues its
+            // candidates through the normal title-match importer.
+            runCatching { BatchTitleSearchWorker.enqueueTitles(applicationContext, titles, autoImport = true) }
         }
 
         val result = workDataOf(
-            KEY_PHASE to "Reverse search complete · ${found.size} confident match(es)",
+            KEY_PHASE to "Reverse search complete · ${directUrls.size} direct match(es), ${titles.size} title(s) sent to Batch Add",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
-            KEY_FOUND to found.size,
+            KEY_FOUND to directUrls.size + titles.size,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${found.size} match(es) queued for library import", found.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} direct matches; ${titles.size} titles sent to Batch Add", directUrls.size + titles.size)
         return Result.success(result)
     }
 
@@ -178,68 +178,9 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         ReverseResult(best?.takeIf { it.first >= MIN_SCORE }?.second, titles)
     }
 
-    /** Mirrors Batch Add's enabled-source title search, but chooses only a close title match. */
-    private suspend fun searchEnabledSources(titles: List<String>): String? {
-        val languages = sourcePreferences.enabledLanguages().get()
-        val disabled = sourcePreferences.disabledSources().get()
-        val sources = sourceManager.getVisibleSources()
-            .filterIsInstance<HttpSource>()
-            .filter { it.lang in languages && it.id.toString() !in disabled }
-        if (sources.isEmpty()) return null
-        val queries = titles.map(::cleanSearchTitle).filter { it.length >= 4 }.distinct().take(MAX_TITLES)
-        val gate = Semaphore(SOURCE_PARALLEL)
-        return supervisorScope {
-            queries.flatMap { query ->
-                sources.map { source ->
-                    async(Dispatchers.IO) { searchSource(source, query, gate) }
-                }
-            }.awaitAll().mapNotNull { it }
-                .sortedByDescending { it.score }
-                .firstOrNull { it.score >= TITLE_MATCH_THRESHOLD }
-                ?.url
-        }
-    }
-
-    private suspend fun searchSource(source: HttpSource, query: String, gate: Semaphore): SourceMatch? {
-        return try {
-            val page = gate.withPermit {
-                withTimeoutOrNull(SOURCE_TIMEOUT_MS) { source.getSearchManga(1, query.sanitize(), source.getFilterList()) }
-            } ?: return null
-            page.mangas.mapNotNull { manga ->
-                val score = titleSimilarity(query, manga.title)
-                if (score < TITLE_MATCH_THRESHOLD) return@mapNotNull null
-                SourceMatch(score, absoluteUrl(source, manga.url))
-            }.maxByOrNull { it.score }
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    private fun titleSimilarity(query: String, candidate: String): Int {
-        val q = cleanSearchTitle(query)
-        val c = cleanSearchTitle(candidate)
-        if (q == c) return 100
-        if (c.contains(q) || q.contains(c)) return 88
-        val qWords = q.split(' ').filter { it.length > 2 }.toSet()
-        val cWords = c.split(' ').toSet()
-        if (qWords.isEmpty()) return 0
-        return ((qWords.intersect(cWords).size * 100) / qWords.size).coerceAtMost(84)
-    }
-
-    private fun cleanSearchTitle(value: String): String = value
-        .replace(Regex("<[^>]+>"), " ")
-        .replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ")
+    private fun stripHtml(value: String): String = value.replace(Regex("<[^>]+>"), " ")
         .replace(Regex("&(?:amp|quot|#39|lt|gt);"), " ")
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
-        .trim()
-        .lowercase()
-
-    private fun stripHtml(value: String): String = cleanSearchTitle(value)
-
-    private fun absoluteUrl(source: Source, value: String): String {
-        if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
-        return "${(source as? HttpSource)?.baseUrl?.trimEnd('/') ?: return value}/$value"
-    }
+        .replace(Regex("\\s+"), " ").trim()
 
     private fun discover(seeds: List<Uri>): List<Uri> {
         val result = mutableListOf<Uri>()
@@ -315,10 +256,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         const val TAG = "komikku_reverse_search"
         private const val MAX_IMAGES = 2_000
         private const val MAX_PARALLEL = 4
-        private const val SOURCE_PARALLEL = 12
-        private const val SOURCE_TIMEOUT_MS = 15_000L
         private const val MAX_TITLES = 4
-        private const val TITLE_MATCH_THRESHOLD = 70
         private const val MIN_SCORE = 60f
         private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val NHENTAI_REGEX = Regex("nhentai\\.net/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
@@ -349,5 +287,5 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
     }
 
     private data class ReverseResult(val directUrl: String?, val titles: List<String>)
-    private data class SourceMatch(val score: Int, val url: String)
+    private data class ReverseOutcome(val directUrl: String?, val titles: List<String>)
 }

@@ -183,12 +183,15 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
     override suspend fun doWork(): Result {
-        val uri = inputData.getString(KEY_URI)?.let(Uri::parse) ?: return Result.failure()
         val resultFile = File(applicationContext.filesDir, "batch-title-search-${id}.results")
         val titles = runCatching {
-            applicationContext.contentResolver.openInputStream(uri)?.bufferedReader()?.useLines { lines ->
-                lines.map(::cleanTitle).map(String::trim).filter(String::isNotBlank).distinct().toList()
-            }.orEmpty()
+            inputData.getString(KEY_TITLES_FILE)?.let { File(it).readLines() }
+                ?: inputData.getString(KEY_URI)?.let(Uri::parse)?.let { uri ->
+                    applicationContext.contentResolver.openInputStream(uri)?.bufferedReader()?.useLines { lines -> lines.toList() }.orEmpty()
+                }
+                ?: emptyList()
+        }.map { lines ->
+            lines.map(::cleanTitle).map(String::trim).filter(String::isNotBlank).distinct()
         }.getOrElse { xLogE("Title file read failed", it); return Result.failure() }
         val enabledLanguages = sourcePreferences.enabledLanguages().get()
         val disabled = sourcePreferences.disabledSources().get()
@@ -216,6 +219,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             } }.awaitAll()
         }
         updateNotification(titles.size, titles.size, "Search complete · review matches in the app")
+        if (inputData.getBoolean(KEY_AUTO_IMPORT, false)) {
+            val urls = readResults(applicationContext, resultFile.absolutePath).map { it.url }.distinct()
+            if (urls.isNotEmpty()) runCatching { BatchImportJob.startTitleMatches(applicationContext, urls) }
+        }
         return Result.success(workDataOf(KEY_RESULT_FILE to resultFile.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
     }
     private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
@@ -266,6 +273,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     }
     companion object {
         const val KEY_URI = "title_uri"
+        const val KEY_TITLES_FILE = "title_file"
+        const val KEY_AUTO_IMPORT = "auto_import"
         const val KEY_RESULT_FILE = "result_file"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
@@ -274,6 +283,18 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>().setInputData(workDataOf(KEY_URI to uri.toString())).addTag("batch_title_search").build()
             context.workManager.enqueue(request)
             return request.id
+        }
+        fun enqueueTitles(context: Context, titles: List<String>, autoImport: Boolean = false): UUID {
+            val id = UUID.randomUUID()
+            val file = File(context.filesDir, "batch-title-search-$id.txt")
+            file.writeText(titles.joinToString("\n"))
+            val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
+                .setId(id)
+                .setInputData(workDataOf(KEY_TITLES_FILE to file.absolutePath, KEY_AUTO_IMPORT to autoImport))
+                .addTag("batch_title_search")
+                .build()
+            context.workManager.enqueue(request)
+            return id
         }
         fun readResults(context: Context, path: String?): List<TitleSearchCandidate> = runCatching { path?.let(::File)?.readLines()?.mapNotNull(::decode).orEmpty() }.getOrDefault(emptyList())
         private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
