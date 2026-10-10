@@ -1,9 +1,13 @@
 package exh.ui.reverse
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,6 +51,9 @@ class ReverseSearchScreen : Screen() {
         var selected by remember { mutableStateOf<List<Uri>>(emptyList()) }
         var jobId by remember { mutableStateOf<UUID?>(null) }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
+        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { /* The worker starts regardless; permission controls shade visibility. */ }
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri != null) {
                 runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -68,7 +75,17 @@ class ReverseSearchScreen : Screen() {
                 Text("Select an album/folder. Each image is searched in parallel; only a high-confidence nhentai result is added to your library.", style = MaterialTheme.typography.bodyMedium)
                 Button(enabled = !running, onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Outlined.FolderOpen, null); Text(" Select album folder") }
                 if (selected.isNotEmpty()) Text("Folder selected. Subfolders are included.", style = MaterialTheme.typography.bodySmall)
-                Button(enabled = selected.isNotEmpty() && !running, onClick = { jobId = ReverseSearchWorker.enqueue(context.applicationContext, selected); info = null }, modifier = Modifier.fillMaxWidth()) { Text("Start Reverse Search") }
+                Button(
+                    enabled = selected.isNotEmpty() && !running,
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        jobId = ReverseSearchWorker.enqueue(context.applicationContext, selected)
+                        info = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Start Reverse Search") }
                 if (running || info?.state?.isFinished == true) {
                     Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (running) CircularProgressIndicator()

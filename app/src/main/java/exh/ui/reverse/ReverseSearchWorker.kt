@@ -21,7 +21,8 @@ import exh.ui.batchadd.BatchImportJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -49,27 +50,27 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         // Explicitly promote the worker. getForegroundInfo() alone does not keep it alive after
         // the screen closes or the app leaves the foreground.
         setForeground(getForegroundInfo())
-        updateNotification(0, 0, "Preparing selected images", 0)
+        safeUpdateNotification(0, 0, "Preparing selected images", 0)
 
         val selectionFile = inputData.getString(KEY_SELECTION)?.let(::File) ?: return Result.failure()
         val seeds = runCatching { selectionFile.readLines().map(Uri::parse) }.getOrElse {
-            updateNotification(0, 0, "Could not read the selected folder; retrying", 0)
+            safeUpdateNotification(0, 0, "Could not read the selected folder; retrying", 0)
             return Result.retry()
         }
         val images = runCatching { discover(seeds).distinct().take(MAX_IMAGES) }.getOrElse {
-            updateNotification(0, 0, "Could not scan the selected folder; retrying", 0)
+            safeUpdateNotification(0, 0, "Could not scan the selected folder; retrying", 0)
             return Result.retry()
         }
         if (images.isEmpty()) {
             val result = workDataOf(KEY_PHASE to "No images found", KEY_COMPLETED to 0, KEY_TOTAL to 0, KEY_FOUND to 0)
-            setProgress(result)
-            updateNotification(0, 0, "No images found", 0)
+            safeSetProgress(result)
+            safeUpdateNotification(0, 0, "No images found", 0)
             return Result.success(result)
         }
 
         val completed = AtomicInteger(0)
         val foundCount = AtomicInteger(0)
-        val found = coroutineScope {
+        val found = supervisorScope {
             val gate = Semaphore(MAX_PARALLEL)
             images.map { uri ->
                 async(Dispatchers.IO) {
@@ -77,20 +78,26 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                         if (isStopped) return@withPermit null
                         // A timeout, HTTP error, malformed response, or unreadable image only
                         // skips that image instead of cancelling the entire album job.
-                        val url = runCatching {
-                            withTimeoutOrNull(45_000L) { searchSauceNao(uri) }
-                        }.getOrNull()
-                        val done = completed.incrementAndGet()
-                        if (url != null) foundCount.incrementAndGet()
-                        val phase = "Reverse searched $done/${images.size} images"
-                        val progress = workDataOf(
-                            KEY_PHASE to phase,
-                            KEY_COMPLETED to done,
-                            KEY_TOTAL to images.size,
-                            KEY_FOUND to foundCount.get(),
-                        )
-                        setProgress(progress)
-                        updateNotification(done, images.size, "$phase · ${foundCount.get()} matches", foundCount.get())
+                        var url: String? = null
+                        try {
+                            url = withTimeoutOrNull(45_000L) { searchSauceNao(uri) }
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (_: Throwable) {
+                            // Bad URI, provider response, or network failure: skip only this image.
+                        } finally {
+                            val done = completed.incrementAndGet()
+                            if (url != null) foundCount.incrementAndGet()
+                            val phase = "Reverse searched $done/${images.size} images"
+                            val progress = workDataOf(
+                                KEY_PHASE to phase,
+                                KEY_COMPLETED to done,
+                                KEY_TOTAL to images.size,
+                                KEY_FOUND to foundCount.get(),
+                            )
+                            safeSetProgress(progress)
+                            safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} matches", foundCount.get())
+                        }
                         url
                     }
                 }
@@ -109,9 +116,21 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             KEY_TOTAL to images.size,
             KEY_FOUND to found.size,
         )
-        setProgress(result)
-        updateNotification(images.size, images.size, "Complete · ${found.size} match(es) queued for library import", found.size)
+        safeSetProgress(result)
+        safeUpdateNotification(images.size, images.size, "Complete · ${found.size} match(es) queued for library import", found.size)
         return Result.success(result)
+    }
+
+    private suspend fun safeSetProgress(data: androidx.work.Data) {
+        try {
+            setProgress(data)
+        } catch (_: Throwable) {
+            // WorkManager progress is diagnostic only; it must never abort the search.
+        }
+    }
+
+    private fun safeUpdateNotification(completed: Int, total: Int, detail: String, found: Int) {
+        runCatching { updateNotification(completed, total, detail, found) }
     }
 
     private suspend fun searchSauceNao(uri: Uri): String? = withContext(Dispatchers.IO) {
