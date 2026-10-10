@@ -2,6 +2,9 @@ package exh.ui.reverse
 
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
@@ -18,12 +21,12 @@ import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -32,26 +35,27 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Searches selected images in the background and imports only confident matches. */
+/** Yandex-only reverse search. Imports only a canonical nH/eH page whose returned
+ * source image passes a strict perceptual comparison against the selected image. */
 class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(45, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
     override suspend fun doWork(): Result {
-        // Explicitly promote the worker. getForegroundInfo() alone does not keep it alive after
-        // the screen closes or the app leaves the foreground.
         setForeground(getForegroundInfo())
         safeUpdateNotification(0, 0, "Preparing selected images", 0)
-
         val selectionFile = inputData.getString(KEY_SELECTION)?.let(::File) ?: return Result.failure()
         val seeds = runCatching { selectionFile.readLines().map(Uri::parse) }.getOrElse {
             safeUpdateNotification(0, 0, "Could not read the selected folder; retrying", 0)
@@ -61,12 +65,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             safeUpdateNotification(0, 0, "Could not scan the selected folder; retrying", 0)
             return Result.retry()
         }
-        if (images.isEmpty()) {
-            val result = workDataOf(KEY_PHASE to "No images found", KEY_COMPLETED to 0, KEY_TOTAL to 0, KEY_FOUND to 0)
-            safeSetProgress(result)
-            safeUpdateNotification(0, 0, "No images found", 0)
-            return Result.success(result)
-        }
+        if (images.isEmpty()) return Result.success(workDataOf(KEY_PHASE to "No images found", KEY_COMPLETED to 0, KEY_TOTAL to 0, KEY_FOUND to 0))
 
         val completed = AtomicInteger(0)
         val foundCount = AtomicInteger(0)
@@ -76,203 +75,166 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         if (isStopped) return@withPermit null
-                        // A timeout, HTTP error, malformed response, or unreadable image only
-                        // skips that image instead of cancelling the entire album job.
                         var outcome: ReverseOutcome? = null
                         try {
-                            val reverse = withTimeoutOrNull(45_000L) { searchSauceNao(uri) }
-                            outcome = reverse?.let { ReverseOutcome(it.directUrl) }
+                            outcome = withTimeoutOrNull(60_000L) { searchYandex(uri) }
                         } catch (cancel: CancellationException) {
                             throw cancel
                         } catch (_: Throwable) {
-                            // Bad URI, provider response, or network failure: skip only this image.
+                            // A Yandex block, timeout, malformed result, or unreadable image skips only this image.
                         } finally {
                             val done = completed.incrementAndGet()
                             if (outcome?.directUrl != null) foundCount.incrementAndGet()
-                            val phase = "Reverse searched $done/${images.size} images"
-                            val progress = workDataOf(
-                                KEY_PHASE to phase,
-                                KEY_COMPLETED to done,
-                                KEY_TOTAL to images.size,
-                                KEY_FOUND to foundCount.get(),
-                            )
+                            val phase = "Yandex searched $done/${images.size} images"
+                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get())
                             safeSetProgress(progress)
-                            safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} matches", foundCount.get())
+                            safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} verified matches", foundCount.get())
                         }
                         outcome
                     }
                 }
             }.awaitAll().filterNotNull()
         }
-
         if (isStopped) return Result.failure()
         val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
-        if (directUrls.isNotEmpty()) {
-            // Library insertion continues through the existing rate-limited batch importer.
-            runCatching { BatchImportJob.start(applicationContext, directUrls) }
-        }
-
+        if (directUrls.isNotEmpty()) runCatching { BatchImportJob.start(applicationContext, directUrls) }
         val result = workDataOf(
-            KEY_PHASE to "Reverse search complete · ${directUrls.size} verified nH/eH match(es) imported",
+            KEY_PHASE to "Yandex complete · ${directUrls.size} verified image/source match(es) imported",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
             KEY_FOUND to directUrls.size,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} verified nH/eH matches", directUrls.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} verified Yandex matches", directUrls.size)
         return Result.success(result)
     }
 
-    private suspend fun safeSetProgress(data: androidx.work.Data) {
-        try {
-            setProgress(data)
-        } catch (_: Throwable) {
-            // WorkManager progress is diagnostic only; it must never abort the search.
-        }
-    }
+    private suspend fun safeSetProgress(data: androidx.work.Data) { runCatching { setProgress(data) } }
+    private fun safeUpdateNotification(completed: Int, total: Int, detail: String, found: Int) { runCatching { updateNotification(completed, total, detail, found) } }
 
-    private fun safeUpdateNotification(completed: Int, total: Int, detail: String, found: Int) {
-        runCatching { updateNotification(completed, total, detail, found) }
-    }
-
-    private suspend fun searchSauceNao(uri: Uri): ReverseResult? = withContext(Dispatchers.IO) {
-        val bytes = applicationContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: return@withContext null
+    private suspend fun searchYandex(uri: Uri): ReverseOutcome? = withContext(Dispatchers.IO) {
+        val bytes = applicationContext.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
         if (bytes.isEmpty()) return@withContext null
-        val body = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", "image.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+        val requestJson = "{\"blocks\":[{\"block\":\"b-page_type_search-by-image__link\"}]}"
+        val uploadUrl = "https://yandex.com/images/search?rpt=imageview&format=json&request=${URLEncoder.encode(requestJson, "UTF-8")}"
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("upfile", "image.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .addFormDataPart("image_content", "")
             .build()
-        val request = Request.Builder()
-            .url("https://saucenao.com/search.php")
-            .post(body)
-            .header("User-Agent", USER_AGENT)
-            .build()
-        val html = client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return@withContext null
-            response.body.string()
+        val upload = Request.Builder().url(uploadUrl).post(body).header("User-Agent", USER_AGENT).build()
+        val uploadJson = client.newCall(upload).execute().use { response -> if (!response.isSuccessful) return@withContext null else response.body.string() }
+        val query = extractYandexQuery(uploadJson) ?: return@withContext null
+        val resultUrl = "https://yandex.com/images/search?$query"
+        val resultHtml = client.newCall(Request.Builder().url(resultUrl).header("User-Agent", USER_AGENT).build()).execute().use { response ->
+            if (!response.isSuccessful) return@withContext null else response.body.string()
         }
-        val best = GALLERY_REGEX.findAll(html).mapNotNull { match ->
-            val context = html.substring(
-                (match.range.first - 700).coerceAtLeast(0),
-                (match.range.last + 700).coerceAtMost(html.length),
-            )
-            // Only accept rows explicitly labelled nH/eH. A naked gallery link
-            // elsewhere in the response is not evidence of an image match.
-            if (!SOURCE_REGEX.containsMatchIn(context)) return@mapNotNull null
-            val score = SCORE_REGEX.find(context)?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: 0f
-            val id = match.groupValues[2]
-            val host = match.groupValues[1].lowercase()
-            score to if (host.contains("exhentai")) {
-                "https://exhentai.org/g/$id/"
-            } else {
-                "https://nhentai.net/g/$id/"
-            }
-        }.filter { it.first >= MIN_SCORE }.maxByOrNull { it.first }
-        if (best == null) return@withContext null
-        ReverseResult(best.second)
+        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
+        val candidates = parseYandexSites(resultHtml)
+        val match = candidates.asSequence().mapNotNull { candidate ->
+            val gallery = canonicalGallery(candidate.pageUrl) ?: return@mapNotNull null
+            val imageUrl = candidate.originalImage ?: return@mapNotNull null
+            val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
+            if (!sameImage(source, remote)) return@mapNotNull null
+            gallery to candidate.title
+        }.firstOrNull() ?: return@withContext null
+        ReverseOutcome(match.first)
     }
 
-    private fun discover(seeds: List<Uri>): List<Uri> {
-        val result = mutableListOf<Uri>()
-        val pending = ArrayDeque<Uri>()
-        seeds.forEach { uri ->
-            runCatching {
-                if (uri.scheme == "content" && DocumentsContract.isTreeUri(uri)) pending += uri
-                else if (applicationContext.contentResolver.getType(uri)?.startsWith("image/") == true) result += uri
-            }
+    private fun extractYandexQuery(json: String): String? = runCatching {
+        val root = JSONObject(json)
+        root.getJSONArray("blocks").getJSONObject(0).getJSONObject("params").getString("url")
+    }.getOrNull()
+
+    private data class YandexSite(val title: String, val pageUrl: String, val originalImage: String?)
+
+    private fun parseYandexSites(html: String): List<YandexSite> {
+        val result = mutableListOf<YandexSite>()
+        val attr = Regex("""data-state="([^"]{200,})""" ).findAll(html)
+        for (match in attr) {
+            val decoded = match.groupValues[1].replace("&quot;", "\"").replace("&amp;", "&").replace("&#39;", "'")
+            runCatching { collectSites(JSONObject(decoded), result) }
         }
-        while (pending.isNotEmpty() && result.size < MAX_IMAGES) {
-            val tree = pending.removeFirst()
-            val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: continue
-            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
-            runCatching {
-                applicationContext.contentResolver.query(
-                    children,
-                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_MIME_TYPE),
-                    null,
-                    null,
-                    null,
-                )?.use { cursor ->
-                    while (cursor.moveToNext() && result.size < MAX_IMAGES) {
-                        val childId = cursor.getString(0)
-                        val mime = cursor.getString(1).orEmpty()
-                        val child = DocumentsContract.buildDocumentUriUsingTree(tree, childId)
-                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) pending += child
-                        else if (mime.startsWith("image/")) result += child
+        return result.distinctBy { it.pageUrl }
+    }
+
+    private fun collectSites(value: Any?, result: MutableList<YandexSite>) {
+        when (value) {
+            is JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val child = value.opt(key)
+                    if (key == "sites" && child is JSONArray) {
+                        for (i in 0 until child.length()) {
+                            val site = child.optJSONObject(i) ?: continue
+                            val page = site.optString("url")
+                            val title = site.optString("title")
+                            val original = site.optJSONObject("originalImage")?.optString("url")
+                            if (page.isNotBlank() && title.isNotBlank()) result += YandexSite(title, page, original)
+                        }
                     }
+                    collectSites(child, result)
                 }
             }
+            is JSONArray -> for (i in 0 until value.length()) collectSites(value.opt(i), result)
         }
+    }
+
+    private fun canonicalGallery(url: String): String? {
+        val match = GALLERY_REGEX.find(url) ?: return null
+        val host = match.groupValues[1].lowercase()
+        val id = match.groupValues[2]
+        return if (host.contains("exhentai")) "https://exhentai.org/g/$id/" else "https://nhentai.net/g/$id/"
+    }
+
+    private fun downloadBitmap(url: String): Bitmap? = runCatching {
+        val safeUrl = if (url.startsWith("//")) "https:$url" else url
+        client.newCall(Request.Builder().url(safeUrl).header("User-Agent", USER_AGENT).build()).execute().use { response ->
+            if (!response.isSuccessful) null else response.body.bytes().let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        }
+    }.getOrNull()
+
+    /** Strict normalized pixel comparison: rejects visually similar but different pages. */
+    private fun sameImage(a: Bitmap, b: Bitmap): Boolean {
+        val size = 32
+        val aa = Bitmap.createScaledBitmap(a, size, size, true)
+        val bb = Bitmap.createScaledBitmap(b, size, size, true)
+        var error = 0.0
+        var hashDistance = 0
+        val av = IntArray(size * size)
+        val bv = IntArray(size * size)
+        aa.getPixels(av, 0, size, 0, 0, size, size)
+        bb.getPixels(bv, 0, size, 0, 0, size, size)
+        var meanA = 0.0
+        var meanB = 0.0
+        for (i in av.indices) { meanA += luminance(av[i]); meanB += luminance(bv[i]) }
+        meanA /= av.size; meanB /= bv.size
+        for (i in av.indices) {
+            val da = luminance(av[i]) - meanA
+            val db = luminance(bv[i]) - meanB
+            error += (da - db) * (da - db)
+            if ((luminance(av[i]) > meanA) != (luminance(bv[i]) > meanB)) hashDistance++
+        }
+        return error / av.size / (255.0 * 255.0) <= MAX_NORMALIZED_ERROR && hashDistance <= MAX_HASH_DISTANCE
+    }
+
+    private fun luminance(pixel: Int): Double = 0.299 * Color.red(pixel) + 0.587 * Color.green(pixel) + 0.114 * Color.blue(pixel)
+
+    private fun discover(seeds: List<Uri>): List<Uri> {
+        val result = mutableListOf<Uri>(); val pending = ArrayDeque<Uri>(); seeds.forEach { uri -> runCatching { if (uri.scheme == "content" && DocumentsContract.isTreeUri(uri)) pending += uri else if (applicationContext.contentResolver.getType(uri)?.startsWith("image/") == true) result += uri } }
+        while (pending.isNotEmpty() && result.size < MAX_IMAGES) { val tree = pending.removeFirst(); val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: continue; val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id); runCatching { applicationContext.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { cursor -> while (cursor.moveToNext() && result.size < MAX_IMAGES) { val child = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(0)); val mime = cursor.getString(1).orEmpty(); if (mime == DocumentsContract.Document.MIME_TYPE_DIR) pending += child else if (mime.startsWith("image/")) result += child } } } }
         return result
     }
 
-    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
-        NOTIFICATION_ID,
-        applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) {
-            setSmallIcon(R.drawable.ic_komikku)
-            setContentTitle("Reverse Search")
-            setContentText("Searching selected images")
-            setOngoing(true)
-            setOnlyAlertOnce(true)
-            setPriority(NotificationCompat.PRIORITY_LOW)
-        }.build(),
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
-    )
+    override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(NOTIFICATION_ID, applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) { setSmallIcon(R.drawable.ic_komikku); setContentTitle("Reverse Search"); setContentText("Searching selected images with Yandex"); setOngoing(true); setOnlyAlertOnce(true); setPriority(NotificationCompat.PRIORITY_LOW) }.build(), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
 
-    private fun updateNotification(completed: Int, total: Int, detail: String, found: Int) {
-        NotificationManagerCompat.from(applicationContext).notify(
-            NOTIFICATION_ID,
-            NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT)
-                .setSmallIcon(R.drawable.ic_komikku)
-                .setContentTitle("Reverse Search")
-                .setContentText(detail)
-                .setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total.coerceAtLeast(1)), false)
-                .setSubText(if (found > 0) "$found match(es)" else null)
-                .setOngoing(completed < total || total == 0)
-                .setOnlyAlertOnce(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id))
-                .build(),
-        )
-    }
+    private fun updateNotification(completed: Int, total: Int, detail: String, found: Int) { NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT).setSmallIcon(R.drawable.ic_komikku).setContentTitle("Reverse Search").setContentText(detail).setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total.coerceAtLeast(1)), false).setSubText(if (found > 0) "$found verified match(es)" else null).setOngoing(completed < total || total == 0).setOnlyAlertOnce(true).setPriority(NotificationCompat.PRIORITY_LOW).addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id)).build()) }
 
     companion object {
-        const val KEY_SELECTION = "selection"
-        const val KEY_PHASE = "phase"
-        const val KEY_COMPLETED = "completed"
-        const val KEY_TOTAL = "total"
-        const val KEY_FOUND = "found"
-        const val NOTIFICATION_ID = -1810
-        const val TAG = "komikku_reverse_search"
-        private const val MAX_IMAGES = 2_000
-        private const val MAX_PARALLEL = 4
-        private const val MIN_SCORE = 85f
-        private const val USER_AGENT = "Komikku Reverse Search/1.0"
+        const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
+        private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 2; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
-        private val SOURCE_REGEX = Regex("H-Misc\\s*\\((?:nH|eH)\\)", RegexOption.IGNORE_CASE)
-        private val SCORE_REGEX = Regex("(?:similarity|similar|match)[^%]{0,80}(\\d{1,3}(?:\\.\\d+)?)%", RegexOption.IGNORE_CASE)
-
-        fun enqueue(context: Context, selections: List<Uri>): UUID {
-            val id = UUID.randomUUID()
-            val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }
-            val file = File(dir, "$id.selection")
-            file.writeText(selections.joinToString("\n"))
-            val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>()
-                .setId(id)
-                .setInputData(workDataOf(KEY_SELECTION to file.absolutePath))
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .addTag(TAG)
-                .build()
-            context.workManager.enqueueUniqueWork(
-                "komikku_reverse_search",
-                androidx.work.ExistingWorkPolicy.REPLACE,
-                request,
-            )
-            return id
-        }
+        fun enqueue(context: Context, selections: List<Uri>): UUID { val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
-
-    private data class ReverseResult(val directUrl: String?)
     private data class ReverseOutcome(val directUrl: String?)
 }
