@@ -136,7 +136,7 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 96/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 97/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.0"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
@@ -146,7 +146,7 @@ jobs:
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 96' app/build.gradle.kts
+          grep -q 'versionCode = 97' app/build.gradle.kts
           grep -q 'versionName = "1.15.0' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml

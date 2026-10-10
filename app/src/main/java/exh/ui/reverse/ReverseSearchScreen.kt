@@ -72,7 +72,7 @@ class ReverseSearchScreen : Screen() {
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
         Scaffold(topBar = { TopAppBar(title = { Text("Reverse Search") }, navigationIcon = { TextButton(onClick = { navigator?.pop() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } }) }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Select an album/folder. Each image is searched in parallel; only a high-confidence nhentai result is added to your library.", style = MaterialTheme.typography.bodyMedium)
+                Text("Select an album/folder. Each image is searched in parallel against SauceNAO nH/eH only; Yandex Images remains available as a manual fallback. Only high-confidence gallery matches are added.", style = MaterialTheme.typography.bodyMedium)
                 Button(enabled = !running, onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Outlined.FolderOpen, null); Text(" Select album folder") }
                 if (selected.isNotEmpty()) Text("Folder selected. Subfolders are included.", style = MaterialTheme.typography.bodySmall)
                 Button(
@@ -89,13 +89,13 @@ class ReverseSearchScreen : Screen() {
                 if (running || info?.state?.isFinished == true) {
                     Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (running) CircularProgressIndicator()
-                        Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found confident match(es) queued for library import"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
+                        Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found verified nH/eH match(es) queued for library import"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
                         if (phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
                         if (running && total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
                         if (running) TextButton(onClick = { jobId?.let(manager::cancelWorkById) }) { Text("Cancel") }
                     } }
                 }
-                Text("Images are uploaded to the reverse-search provider. No image is added unless the provider reports a matching doujin URL above the confidence threshold.", style = MaterialTheme.typography.labelSmall)
+                Text("Images are uploaded to SauceNAO. The automatic importer accepts only nH/eH gallery rows at or above the confidence threshold; title-only results and unrelated databases are ignored. Use Yandex Images manually when SauceNAO has no match.", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

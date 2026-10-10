@@ -18,7 +18,6 @@ import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
-import exh.ui.batchadd.BatchTitleSearchWorker
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -82,14 +81,14 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                         var outcome: ReverseOutcome? = null
                         try {
                             val reverse = withTimeoutOrNull(45_000L) { searchSauceNao(uri) }
-                            outcome = reverse?.let { ReverseOutcome(it.directUrl, it.titles) }
+                            outcome = reverse?.let { ReverseOutcome(it.directUrl) }
                         } catch (cancel: CancellationException) {
                             throw cancel
                         } catch (_: Throwable) {
                             // Bad URI, provider response, or network failure: skip only this image.
                         } finally {
                             val done = completed.incrementAndGet()
-                            if (outcome?.directUrl != null || !outcome?.titles.isNullOrEmpty()) foundCount.incrementAndGet()
+                            if (outcome?.directUrl != null) foundCount.incrementAndGet()
                             val phase = "Reverse searched $done/${images.size} images"
                             val progress = workDataOf(
                                 KEY_PHASE to phase,
@@ -108,26 +107,19 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
 
         if (isStopped) return Result.failure()
         val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
-        val titles = outcomes.flatMap { it.titles }.distinct().take(MAX_TITLES)
         if (directUrls.isNotEmpty()) {
             // Library insertion continues through the existing rate-limited batch importer.
             runCatching { BatchImportJob.start(applicationContext, directUrls) }
         }
-        if (titles.isNotEmpty()) {
-            // Use the exact worker behind Batch Add's "Find titles from TXT in all enabled
-            // sources" action. It searches enabled sources and automatically queues its
-            // candidates through the normal title-match importer.
-            runCatching { BatchTitleSearchWorker.enqueueTitles(applicationContext, titles, autoImport = true) }
-        }
 
         val result = workDataOf(
-            KEY_PHASE to "Reverse search complete · ${directUrls.size} direct match(es), ${titles.size} title(s) sent to Batch Add",
+            KEY_PHASE to "Reverse search complete · ${directUrls.size} verified nH/eH match(es) imported",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
-            KEY_FOUND to directUrls.size + titles.size,
+            KEY_FOUND to directUrls.size,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} direct matches; ${titles.size} titles sent to Batch Add", directUrls.size + titles.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} verified nH/eH matches", directUrls.size)
         return Result.success(result)
     }
 
@@ -160,27 +152,26 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             if (!response.isSuccessful) return@withContext null
             response.body.string()
         }
-        val best = NHENTAI_REGEX.findAll(html).mapNotNull { match ->
+        val best = GALLERY_REGEX.findAll(html).mapNotNull { match ->
             val context = html.substring(
                 (match.range.first - 700).coerceAtLeast(0),
                 (match.range.last + 700).coerceAtMost(html.length),
             )
+            // Only accept rows explicitly labelled nH/eH. A naked gallery link
+            // elsewhere in the response is not evidence of an image match.
+            if (!SOURCE_REGEX.containsMatchIn(context)) return@mapNotNull null
             val score = SCORE_REGEX.find(context)?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: 0f
-            score to "https://nhentai.net/g/${match.groupValues[1]}/"
-        }.maxByOrNull { it.first }
-        val titles = TITLE_REGEX.findAll(html)
-            .map { stripHtml(it.groupValues[1]) }
-            .filter { it.length >= 4 }
-            .distinct()
-            .take(MAX_TITLES)
-            .toList()
-        if (best == null && titles.isEmpty()) return@withContext null
-        ReverseResult(best?.takeIf { it.first >= MIN_SCORE }?.second, titles)
+            val id = match.groupValues[2]
+            val host = match.groupValues[1].lowercase()
+            score to if (host.contains("exhentai")) {
+                "https://exhentai.org/g/$id/"
+            } else {
+                "https://nhentai.net/g/$id/"
+            }
+        }.filter { it.first >= MIN_SCORE }.maxByOrNull { it.first }
+        if (best == null) return@withContext null
+        ReverseResult(best.second)
     }
-
-    private fun stripHtml(value: String): String = value.replace(Regex("<[^>]+>"), " ")
-        .replace(Regex("&(?:amp|quot|#39|lt|gt);"), " ")
-        .replace(Regex("\\s+"), " ").trim()
 
     private fun discover(seeds: List<Uri>): List<Uri> {
         val result = mutableListOf<Uri>()
@@ -256,15 +247,11 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         const val TAG = "komikku_reverse_search"
         private const val MAX_IMAGES = 2_000
         private const val MAX_PARALLEL = 4
-        private const val MAX_TITLES = 4
-        private const val MIN_SCORE = 60f
+        private const val MIN_SCORE = 85f
         private const val USER_AGENT = "Komikku Reverse Search/1.0"
-        private val NHENTAI_REGEX = Regex("nhentai\\.net/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
+        private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
+        private val SOURCE_REGEX = Regex("H-Misc\\s*\\((?:nH|eH)\\)", RegexOption.IGNORE_CASE)
         private val SCORE_REGEX = Regex("(?:similarity|similar|match)[^%]{0,80}(\\d{1,3}(?:\\.\\d+)?)%", RegexOption.IGNORE_CASE)
-        private val TITLE_REGEX = Regex(
-            "class\\s*=\\s*[\\\"'](?:resulttitle|result-title)[\\\"'][^>]*>(.*?)</(?:div|a)>",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
-        )
 
         fun enqueue(context: Context, selections: List<Uri>): UUID {
             val id = UUID.randomUUID()
@@ -286,6 +273,6 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         }
     }
 
-    private data class ReverseResult(val directUrl: String?, val titles: List<String>)
-    private data class ReverseOutcome(val directUrl: String?, val titles: List<String>)
+    private data class ReverseResult(val directUrl: String?)
+    private data class ReverseOutcome(val directUrl: String?)
 }
