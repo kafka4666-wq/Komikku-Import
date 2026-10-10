@@ -220,10 +220,10 @@ jobs:
           grep -q 'eu.davidea:flexible-adapter:5.1.0' gradle/libs.versions.toml
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           # Force the generated APK to the stable-signed baseline identity.
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 94/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 95/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.0"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
-          grep -q 'versionCode = 94' app/build.gradle.kts
+          grep -q 'versionCode = 95' app/build.gradle.kts
           grep -q 'versionName = "1.15.0' app/build.gradle.kts
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
           # Date discovery and library insertion run as foreground WorkManager tasks.
@@ -310,7 +310,7 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='94' versionName='1.15.0'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='95' versionName='1.15.0'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
