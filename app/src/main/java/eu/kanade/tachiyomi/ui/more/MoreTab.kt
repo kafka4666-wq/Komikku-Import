@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.ui.more
 
+import android.content.Intent
 import androidx.compose.animation.graphics.res.animatedVectorResource
 import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
@@ -29,6 +30,7 @@ import eu.kanade.tachiyomi.data.connections.discord.DiscordScreen
 import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.ui.category.CategoryScreen
 import eu.kanade.tachiyomi.ui.download.DownloadQueueScreen
+import eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity
 import eu.kanade.tachiyomi.ui.history.HistoryTab
 import eu.kanade.tachiyomi.ui.library.LibraryTab
 import eu.kanade.tachiyomi.ui.libraryUpdateError.LibraryUpdateErrorScreen
@@ -37,6 +39,7 @@ import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
 import exh.ui.batchimage.BatchImageScreen
+import exh.ui.reverse.ReverseSearchScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
 import exh.ui.nhentaidate.NhentaiDateImportWorker
 import exh.ui.nhentaidate.NhentaiDailyReminderWorker
@@ -100,6 +103,8 @@ data object MoreTab : Tab {
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
             onClickBatchImage = { navigator.push(BatchImageScreen()) },
+            onClickReverseSearch = { navigator.push(ReverseSearchScreen()) },
+            onClickScreenLookup = { context.startActivity(Intent(context, ScreenLookupPermissionActivity::class.java)) },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },

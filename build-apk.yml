@@ -196,6 +196,20 @@ jobs:
           # The final archive is the authoritative, API-compatible overlay. Apply it last
           # so older piecemeal copies cannot replace newer source snapshots.
           unzip -oq ../komikku-final-overlay.zip -d .
+          mkdir -p app/src/main/java/exh/ui/reverse app/src/main/java/eu/kanade/tachiyomi/ui/dictionary
+          cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookup.kt app/src/main/java/eu/kanade/tachiyomi/ui/dictionary/ScreenLookup.kt
+          mkdir -p app/src/main/java/eu/kanade/presentation/components
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt
+          # These two legacy Treasury copies reference an older card-appearance API; keep the
+          # upstream implementations so the requested lookup/reverse-search additions compile.
+          git show HEAD:app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt > app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
+          git show HEAD:app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt > app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt
+          for f in app/src/main/java/eu/kanade/presentation/library/components/LibraryCompactGrid.kt app/src/main/java/eu/kanade/presentation/library/components/LibraryList.kt app/src/main/java/eu/kanade/presentation/manga/MangaScreen.kt; do git show HEAD:$f > $f; done
+          rm -f app/src/main/java/eu/kanade/presentation/library/components/LazyLibraryMasonry.kt
+          git show HEAD:app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt > app/src/main/java/eu/kanade/presentation/library/components/LibraryPager.kt
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
           grep -q 'class DailyOfflineCacheWorker' app/src/main/java/eu/kanade/tachiyomi/data/download/dailycache/DailyOfflineCache.kt
           grep -q 'PickVisualMedia' app/src/main/java/eu/kanade/presentation/more/settings/screen/TreasuryExtraControls.kt
@@ -214,6 +228,18 @@ jobs:
           sed -i 's/applicationIdSuffix = "\.dev"/applicationIdSuffix = ""/' app/build.gradle.kts
           # Date discovery and library insertion run as foreground WorkManager tasks.
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          if 'android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION' not in s:
+              s = s.replace('    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />', '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />')
+          marker = '        <activity\n            android:name=".ui.security.UnlockActivity"'
+          entries = '        <activity android:name=".ui.dictionary.ScreenLookupPermissionActivity" android:exported="false" />\n        <service android:name=".ui.dictionary.ScreenLookupService" android:exported="false" android:foregroundServiceType="mediaProjection" />\n'
+          if 'android:name=".ui.dictionary.ScreenLookupPermissionActivity"' not in s:
+              s = s.replace(marker, entries + marker)
+          p.write_text(s)
+          PY
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:

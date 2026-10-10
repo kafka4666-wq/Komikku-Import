@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.QueryStats
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.HorizontalDivider
@@ -85,6 +86,8 @@ fun MoreScreen(
     onClickBatchAdd: () -> Unit,
     onClickNhentaiDateImport: () -> Unit,
     onClickBatchImage: () -> Unit,
+    onClickReverseSearch: () -> Unit,
+    onClickScreenLookup: () -> Unit,
     onClickUpdates: () -> Unit,
     onClickHistory: () -> Unit,
     onClickLibrary: () -> Unit,
@@ -328,6 +331,22 @@ fun MoreScreen(
                     subtitle = "Scan screenshots for doujin titles, artists, nhentai codes, and links",
                     icon = Icons.Outlined.ImageSearch,
                     onPreferenceClick = onClickBatchImage,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Reverse Search",
+                    subtitle = "Reverse-search every image in an album and add confident doujin matches",
+                    icon = Icons.Outlined.ImageSearch,
+                    onPreferenceClick = onClickReverseSearch,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Screen Lookup",
+                    subtitle = "Capture another app and OCR its text with a floating button",
+                    icon = Icons.Outlined.Search,
+                    onPreferenceClick = onClickScreenLookup,
                 )
             }
 
