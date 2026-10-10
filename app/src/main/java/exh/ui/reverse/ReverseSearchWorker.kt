@@ -39,6 +39,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.URLEncoder
+import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -97,15 +98,16 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         }
         if (isStopped) return Result.failure()
         val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
+        val titles = outcomes.mapNotNull { it.title }.distinct()
         if (directUrls.isNotEmpty()) runCatching { BatchImportJob.start(applicationContext, directUrls) }
         val result = workDataOf(
-            KEY_PHASE to "Yandex complete · ${directUrls.size} verified image/source match(es) imported",
+            KEY_PHASE to "Yandex complete · ${titles.size} verified title(s); ${directUrls.size} canonical gallery import(s)",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
             KEY_FOUND to directUrls.size,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${directUrls.size} verified Yandex matches", directUrls.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified titles; ${directUrls.size} imports", directUrls.size)
         return Result.success(result)
     }
 
@@ -131,21 +133,23 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
         val candidates = parseYandexSites(resultHtml)
         val match = candidates.asSequence().mapNotNull { candidate ->
-            val gallery = canonicalGallery(candidate.pageUrl) ?: return@mapNotNull null
             val imageUrl = candidate.originalImage ?: return@mapNotNull null
             val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
             if (!sameImage(source, remote)) return@mapNotNull null
-            gallery to candidate.title
+            VerifiedYandexResult(canonicalGallery(candidate.pageUrl), candidate.title)
         }.firstOrNull() ?: return@withContext null
-        ReverseOutcome(match.first)
+        ReverseOutcome(match.galleryUrl, match.title)
     }
 
     private fun extractYandexQuery(json: String): String? = runCatching {
         val root = JSONObject(json)
-        root.getJSONArray("blocks").getJSONObject(0).getJSONObject("params").getString("url")
+        val params = root.getJSONArray("blocks").getJSONObject(0).getJSONObject("params")
+        val cbirId = params.optString("cbirId").takeIf { it.isNotBlank() } ?: return@runCatching null
+        "rpt=imageview&cbir_id=${URLEncoder.encode(cbirId, "UTF-8")}"
     }.getOrNull()
 
     private data class YandexSite(val title: String, val pageUrl: String, val originalImage: String?)
+    private data class VerifiedYandexResult(val galleryUrl: String?, val title: String)
 
     private fun parseYandexSites(html: String): List<YandexSite> {
         val result = mutableListOf<YandexSite>()
@@ -154,7 +158,13 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             val decoded = match.groupValues[1].replace("&quot;", "\"").replace("&amp;", "&").replace("&#39;", "'")
             runCatching { collectSites(JSONObject(decoded), result) }
         }
-        return result.distinctBy { it.pageUrl }
+        val pageTitles = result.filter { it.pageUrl.isNotBlank() && it.originalImage != null }
+            .associateBy { imageKey(it.originalImage) }
+        return result.map { candidate ->
+            if (candidate.pageUrl.isBlank()) {
+                pageTitles[imageKey(candidate.originalImage)]?.let { page -> candidate.copy(title = page.title) } ?: candidate
+            } else candidate
+        }.distinctBy { "${it.pageUrl}|${it.originalImage}|${it.title}" }
     }
 
     private fun collectSites(value: Any?, result: MutableList<YandexSite>) {
@@ -173,12 +183,28 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                             if (page.isNotBlank() && title.isNotBlank()) result += YandexSite(title, page, original)
                         }
                     }
+                    if (key == "small_dups" || key == "medium_dups" || key == "large_dups") {
+                        if (child is JSONArray) for (i in 0 until child.length()) {
+                            val item = child.optJSONObject(i) ?: continue
+                            val image = item.optString("url")
+                            val title = titleFromImageUrl(image)
+                            if (image.isNotBlank() && title.isNotBlank()) result += YandexSite(title, "", image)
+                        }
+                    }
                     collectSites(child, result)
                 }
             }
             is JSONArray -> for (i in 0 until value.length()) collectSites(value.opt(i), result)
         }
     }
+
+    private fun titleFromImageUrl(url: String): String = runCatching {
+        val path = URLDecoder.decode(url.substringBefore('?').substringBefore('#'), "UTF-8")
+        val file = path.substringAfterLast('/').substringBeforeLast('.', path.substringAfterLast('/'))
+        file.replace(Regex("[-_]+"), " ").replace(Regex("\\s+"), " ").trim()
+    }.getOrDefault("")
+
+    private fun imageKey(url: String?): String = url.orEmpty().substringBefore('?').substringBefore('#').substringAfterLast('/').lowercase()
 
     private fun canonicalGallery(url: String): String? {
         val match = GALLERY_REGEX.find(url) ?: return null
@@ -236,5 +262,5 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
         fun enqueue(context: Context, selections: List<Uri>): UUID { val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
-    private data class ReverseOutcome(val directUrl: String?)
+    private data class ReverseOutcome(val directUrl: String?, val title: String?)
 }
