@@ -71,11 +71,17 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         }
         if (images.isEmpty()) return Result.success(workDataOf(KEY_PHASE to "No images found", KEY_COMPLETED to 0, KEY_TOTAL to 0, KEY_FOUND to 0))
 
-        val completed = AtomicInteger(0)
-        val foundCount = AtomicInteger(0)
+        val journalFile = File(applicationContext.filesDir, "reverse-search/${id}.results.jsonl").apply { parentFile?.mkdirs() }
+        val previous = readJournal(journalFile)
+        val previousIds = previous.map { it.originalUri }.toHashSet()
+        val pendingImages = images.filterNot { it.toString() in previousIds }
+        val completed = AtomicInteger(previous.size)
+        val foundCount = AtomicInteger(previous.count { !it.title.isNullOrBlank() })
+        safeSetProgress(workDataOf(KEY_PHASE to "Resuming ${pendingImages.size} unfinished image(s)", KEY_COMPLETED to completed.get(), KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_REVIEW_FILE to journalFile.absolutePath))
+        if (pendingImages.isEmpty()) return finishReview(images, previous, journalFile)
         val outcomes = supervisorScope {
             val gate = Semaphore(MAX_PARALLEL)
-            images.map { uri ->
+            pendingImages.map { uri ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         if (isStopped) return@withPermit null
@@ -88,10 +94,11 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                         } catch (_: Throwable) {
                             // A Yandex block, timeout, malformed result, or unreadable image skips only this image.
                         } finally {
+                            appendJournal(journalFile, ReverseOutcome(uri.toString(), outcome?.directUrl, outcome?.title, outcome?.matchedImage))
                             val done = completed.incrementAndGet()
                             if (outcome?.title != null) foundCount.incrementAndGet()
                             val phase = "Yandex searched $done/${images.size} images"
-                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_PAUSED to isPaused(applicationContext))
+                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_PAUSED to isPaused(applicationContext), KEY_REVIEW_FILE to journalFile.absolutePath)
                             safeSetProgress(progress)
                             safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} verified matches", foundCount.get())
                         }
@@ -101,26 +108,29 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             }.awaitAll().filterNotNull()
         }
         if (isStopped) return Result.failure()
-        val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
-        val titles = outcomes.mapNotNull { it.title }.distinct()
-        val reviewedUris = outcomes.map { it.originalUri }.toSet()
-        val reviewRows = outcomes + images.filter { it.toString() !in reviewedUris }.map { uri ->
-            ReverseOutcome(uri.toString(), null, null, null)
-        }
+        return finishReview(images, readJournal(journalFile), journalFile)
+    }
+
+    private suspend fun finishReview(images: List<Uri>, completedRows: List<ReverseOutcome>, journalFile: File): Result {
+        val reviewedUris = completedRows.map { it.originalUri }.toSet()
+        val reviewRows = completedRows + images.filter { it.toString() !in reviewedUris }.map { ReverseOutcome(it.toString(), null, null, null) }
         val reviewFile = File(applicationContext.filesDir, "reverse-search/${id}.review.jsonl").apply {
             parentFile?.mkdirs()
-            writeText(reviewRows.joinToString("\n") { outcome -> outcome.toJson().toString() })
+            writeText(reviewRows.joinToString("\n") { it.toJson().toString() })
         }
-        val result = workDataOf(
-            KEY_PHASE to "Yandex complete · ${titles.size} verified result(s) ready for review",
-            KEY_COMPLETED to images.size,
-            KEY_TOTAL to images.size,
-            KEY_FOUND to titles.size,
-            KEY_REVIEW_FILE to reviewFile.absolutePath,
-        )
+        val titles = completedRows.mapNotNull { it.title }.distinct()
+        val result = workDataOf(KEY_PHASE to "Yandex complete · ${titles.size} verified result(s) ready for review", KEY_COMPLETED to images.size, KEY_TOTAL to images.size, KEY_FOUND to titles.size, KEY_REVIEW_FILE to reviewFile.absolutePath)
         safeSetProgress(result)
         safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified results ready for review", titles.size)
         return Result.success(result)
+    }
+
+    private fun readJournal(file: File): List<ReverseOutcome> = runCatching {
+        if (!file.exists()) emptyList() else file.readLines().mapNotNull { line -> runCatching { ReverseOutcome.fromJson(JSONObject(line)) }.getOrNull() }.distinctBy { it.originalUri }
+    }.getOrDefault(emptyList())
+
+    private fun appendJournal(file: File, outcome: ReverseOutcome) = synchronized(JOURNAL_LOCK) {
+        file.appendText(outcome.toJson().toString() + "\n")
     }
 
     private suspend fun safeSetProgress(data: androidx.work.Data) { runCatching { setProgress(data) } }
@@ -278,12 +288,14 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
 
     companion object {
         const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val KEY_REVIEW_FILE = "review_file"; const val KEY_PAUSED = "paused"; const val ACTION_OPEN_REVERSE_SEARCH = "com.manus.komikku.OPEN_REVERSE_SEARCH"; const val EXTRA_WORK_ID = "reverse_search_work_id"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
-        private const val PREFS = "reverse_search_controls"; private const val PAUSED = "paused"
+        private const val PREFS = "reverse_search_controls"; private const val PAUSED = "paused"; private const val ACTIVE_WORK_ID = "active_work_id"
+        private val JOURNAL_LOCK = Any()
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
+        fun activeWorkId(context: Context): UUID? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ACTIVE_WORK_ID, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
         private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 2; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
-        fun enqueue(context: Context, selections: List<Uri>): UUID { setPaused(context, false); val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
+        fun enqueue(context: Context, selections: List<Uri>): UUID { setPaused(context, false); val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_WORK_ID, id.toString()).apply(); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
     private data class ReverseOutcome(
         val originalUri: String,
@@ -297,5 +309,6 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             put("title", title ?: JSONObject.NULL)
             put("matchedImage", matchedImage ?: JSONObject.NULL)
         }
+        companion object { fun fromJson(json: JSONObject) = ReverseOutcome(json.getString("originalUri"), json.optString("galleryUrl").takeIf { it.isNotBlank() && it != "null" }, json.optString("title").takeIf { it.isNotBlank() && it != "null" }, json.optString("matchedImage").takeIf { it.isNotBlank() && it != "null" }) }
     }
 }

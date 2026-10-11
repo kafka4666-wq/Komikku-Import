@@ -63,8 +63,8 @@ class ReverseSearchScreen : Screen() {
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
-        var selected by remember { mutableStateOf<List<Uri>>(emptyList()) }
-        var jobId by remember { mutableStateOf<UUID?>(null) }
+        var selected by remember { mutableStateOf(loadPersistedSelection(context)) }
+        var jobId by remember { mutableStateOf(ReverseSearchWorker.activeWorkId(context)) }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var reviewRows by remember { mutableStateOf<List<ReviewRow>>(emptyList()) }
         val checked = remember { mutableStateListOf<String>() }
@@ -81,13 +81,16 @@ class ReverseSearchScreen : Screen() {
         }
         LaunchedEffect(jobId) {
             val id = jobId ?: return@LaunchedEffect
+            val journal = File(context.filesDir, "reverse-search/${id}.results.jsonl")
+            reviewRows = readReviewRows(journal.absolutePath)
             manager.getWorkInfoByIdFlow(id).collectLatest { workInfo ->
                 info = workInfo
-                if (workInfo?.state == WorkInfo.State.SUCCEEDED) {
-                    val path = workInfo.outputData.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
-                    reviewRows = readReviewRows(path)
-                    checked.clear()
-                }
+                val path = workInfo?.outputData?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
+                    ?: workInfo?.progress?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
+                    ?: journal.absolutePath
+                val rows = readReviewRows(path)
+                if (rows.isNotEmpty()) reviewRows = rows
+                if (workInfo?.state == WorkInfo.State.SUCCEEDED) checked.clear()
             }
         }
         val progress = info?.progress
@@ -112,7 +115,7 @@ class ReverseSearchScreen : Screen() {
                 item {
                     Text("Search first, then review every result before importing. Original image is on the left, Yandex title in the middle, and the matched source image on the right.", style = MaterialTheme.typography.bodyMedium)
                     Button(enabled = !running, onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Icon(Icons.Outlined.FolderOpen, null); Text(" Select album folder") }
-                    if (selected.isNotEmpty()) Text("Folder selected. Subfolders are included.", style = MaterialTheme.typography.bodySmall)
+                    if (selected.isNotEmpty()) Text("Folder restored. Subfolders are included; you can start or resume this search.", style = MaterialTheme.typography.bodySmall)
                     Button(enabled = selected.isNotEmpty() && !running, onClick = { startSearch(selected) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Start Reverse Search") }
                 }
                 if (running || info?.state?.isFinished == true) item {
@@ -159,6 +162,11 @@ class ReverseSearchScreen : Screen() {
     }
 
     private fun readReviewRows(path: String?): List<ReviewRow> = runCatching { path?.let(::File)?.readLines()?.mapNotNull { line -> JSONObject(line).let { ReviewRow(it.optString("originalUri"), it.optString("title").takeIf(String::isNotBlank), it.optString("galleryUrl").takeIf(String::isNotBlank), it.optString("matchedImage").takeIf(String::isNotBlank)) } }.orEmpty() }.getOrDefault(emptyList())
+
+    private fun loadPersistedSelection(context: android.content.Context): List<Uri> = runCatching {
+        val id = ReverseSearchWorker.activeWorkId(context) ?: return emptyList()
+        File(context.filesDir, "reverse-search/$id.selection").takeIf(File::exists)?.readLines()?.map(Uri::parse).orEmpty()
+    }.getOrDefault(emptyList())
 }
 
 data class ReviewRow(val originalUri: String, val title: String?, val galleryUrl: String?, val matchedImage: String?) { val id: String get() = "$originalUri|${title.orEmpty()}|${galleryUrl.orEmpty()}" }
