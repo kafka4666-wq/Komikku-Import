@@ -86,6 +86,8 @@ class NotificationReceiver : BroadcastReceiver() {
                 BatchImportJob.cancel(context)
                 NhentaiDateImportWorker.stop(context)
             }
+            ACTION_PAUSE_REVERSE_SEARCH -> exh.ui.reverse.ReverseSearchWorker.setPaused(context, true)
+            ACTION_RESUME_REVERSE_SEARCH -> exh.ui.reverse.ReverseSearchWorker.setPaused(context, false)
             NhentaiDailyImportSchedule.ACTION_DAILY_IMPORT_ALARM ->
                 NhentaiDailyImportSchedule.onAlarm(context)
             ACTION_DAILY_CACHE_CLEANUP_ALARM -> {
@@ -309,6 +311,8 @@ class NotificationReceiver : BroadcastReceiver() {
         private const val ACTION_PAUSE_BATCH_IMPORT = "$ID.$NAME.ACTION_PAUSE_BATCH_IMPORT"
         private const val ACTION_RESUME_BATCH_IMPORT = "$ID.$NAME.ACTION_RESUME_BATCH_IMPORT"
         private const val ACTION_CANCEL_BATCH_IMPORT = "$ID.$NAME.ACTION_CANCEL_BATCH_IMPORT"
+        private const val ACTION_PAUSE_REVERSE_SEARCH = "$ID.$NAME.ACTION_PAUSE_REVERSE_SEARCH"
+        private const val ACTION_RESUME_REVERSE_SEARCH = "$ID.$NAME.ACTION_RESUME_REVERSE_SEARCH"
         internal const val ACTION_DAILY_CACHE_CLEANUP_ALARM = "$ID.$NAME.ACTION_DAILY_CACHE_CLEANUP_ALARM"
 
         private const val ACTION_DISMISS_NOTIFICATION = "$ID.$NAME.ACTION_DISMISS_NOTIFICATION"
@@ -386,6 +390,20 @@ class NotificationReceiver : BroadcastReceiver() {
 
         internal fun cancelBatchImportPendingBroadcast(context: Context): PendingIntent =
             batchImportPendingBroadcast(context, ACTION_CANCEL_BATCH_IMPORT, 9003)
+
+        internal fun pauseReverseSearchPendingBroadcast(context: Context): PendingIntent =
+            reverseSearchPendingBroadcast(context, ACTION_PAUSE_REVERSE_SEARCH, 9011)
+
+        internal fun resumeReverseSearchPendingBroadcast(context: Context): PendingIntent =
+            reverseSearchPendingBroadcast(context, ACTION_RESUME_REVERSE_SEARCH, 9012)
+
+        private fun reverseSearchPendingBroadcast(context: Context, action: String, requestCode: Int): PendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                requestCode,
+                Intent(context, NotificationReceiver::class.java).setAction(action),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
 
 
         private fun batchImportPendingBroadcast(context: Context, action: String, requestCode: Int): PendingIntent {
