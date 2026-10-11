@@ -21,7 +21,6 @@ import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
-import exh.ui.batchadd.BatchTitleSearchWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -100,16 +99,23 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         if (isStopped) return Result.failure()
         val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
         val titles = outcomes.mapNotNull { it.title }.distinct()
-        if (directUrls.isNotEmpty()) runCatching { BatchImportJob.start(applicationContext, directUrls) }
-        if (titles.isNotEmpty()) runCatching { BatchTitleSearchWorker.enqueueTitles(applicationContext, titles, autoImport = true) }
+        val reviewedUris = outcomes.map { it.originalUri }.toSet()
+        val reviewRows = outcomes + images.filter { it.toString() !in reviewedUris }.map { uri ->
+            ReverseOutcome(uri.toString(), null, null, null)
+        }
+        val reviewFile = File(applicationContext.filesDir, "reverse-search/${id}.review.jsonl").apply {
+            parentFile?.mkdirs()
+            writeText(reviewRows.joinToString("\n") { outcome -> outcome.toJson().toString() })
+        }
         val result = workDataOf(
-            KEY_PHASE to "Yandex complete · ${titles.size} verified title(s) sent to Batch Add; ${directUrls.size} canonical gallery import(s)",
+            KEY_PHASE to "Yandex complete · ${titles.size} verified result(s) ready for review",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
             KEY_FOUND to titles.size,
+            KEY_REVIEW_FILE to reviewFile.absolutePath,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified titles sent to Batch Add; ${directUrls.size} direct imports", titles.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified results ready for review", titles.size)
         return Result.success(result)
     }
 
@@ -138,9 +144,9 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             val imageUrl = candidate.originalImage ?: return@mapNotNull null
             val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
             if (!sameImage(source, remote)) return@mapNotNull null
-            VerifiedYandexResult(canonicalGallery(candidate.pageUrl), candidate.title)
+            VerifiedYandexResult(uri.toString(), canonicalGallery(candidate.pageUrl), candidate.title, imageUrl)
         }.firstOrNull() ?: return@withContext null
-        ReverseOutcome(match.galleryUrl, match.title)
+        ReverseOutcome(match.originalUri, match.galleryUrl, match.title, match.matchedImage)
     }
 
     private fun extractYandexQuery(json: String): String? = runCatching {
@@ -151,7 +157,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
     }.getOrNull()
 
     private data class YandexSite(val title: String, val pageUrl: String, val originalImage: String?)
-    private data class VerifiedYandexResult(val galleryUrl: String?, val title: String)
+    private data class VerifiedYandexResult(val originalUri: String, val galleryUrl: String?, val title: String, val matchedImage: String)
 
     private fun parseYandexSites(html: String): List<YandexSite> {
         val result = mutableListOf<YandexSite>()
@@ -259,10 +265,22 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
     private fun updateNotification(completed: Int, total: Int, detail: String, found: Int) { NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT).setSmallIcon(R.drawable.ic_komikku).setContentTitle("Reverse Search").setContentText(detail).setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total.coerceAtLeast(1)), false).setSubText(if (found > 0) "$found verified match(es)" else null).setOngoing(completed < total || total == 0).setOnlyAlertOnce(true).setPriority(NotificationCompat.PRIORITY_LOW).addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id)).build()) }
 
     companion object {
-        const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
+        const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val KEY_REVIEW_FILE = "review_file"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
         private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 2; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
         fun enqueue(context: Context, selections: List<Uri>): UUID { val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
-    private data class ReverseOutcome(val directUrl: String?, val title: String?)
+    private data class ReverseOutcome(
+        val originalUri: String,
+        val directUrl: String?,
+        val title: String?,
+        val matchedImage: String?,
+    ) {
+        fun toJson(): JSONObject = JSONObject().apply {
+            put("originalUri", originalUri)
+            put("galleryUrl", directUrl ?: JSONObject.NULL)
+            put("title", title ?: JSONObject.NULL)
+            put("matchedImage", matchedImage ?: JSONObject.NULL)
+        }
+    }
 }
