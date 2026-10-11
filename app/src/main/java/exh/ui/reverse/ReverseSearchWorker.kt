@@ -1,12 +1,14 @@
 package exh.ui.reverse
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
+import android.app.PendingIntent
 import android.provider.DocumentsContract
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -30,6 +32,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -76,6 +79,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         if (isStopped) return@withPermit null
+                        awaitNotPaused()
                         var outcome: ReverseOutcome? = null
                         try {
                             outcome = withTimeoutOrNull(60_000L) { searchYandex(uri) }
@@ -87,7 +91,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                             val done = completed.incrementAndGet()
                             if (outcome?.title != null) foundCount.incrementAndGet()
                             val phase = "Yandex searched $done/${images.size} images"
-                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get())
+                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_PAUSED to isPaused(applicationContext))
                             safeSetProgress(progress)
                             safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} verified matches", foundCount.get())
                         }
@@ -121,6 +125,14 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
 
     private suspend fun safeSetProgress(data: androidx.work.Data) { runCatching { setProgress(data) } }
     private fun safeUpdateNotification(completed: Int, total: Int, detail: String, found: Int) { runCatching { updateNotification(completed, total, detail, found) } }
+    private suspend fun awaitNotPaused() {
+        while (isPaused(applicationContext) && !isStopped) {
+            safeSetProgress(workDataOf(KEY_PAUSED to true))
+            safeUpdateNotification(0, 0, "Paused · waiting to resume", 0)
+            delay(750)
+        }
+        if (!isStopped) safeSetProgress(workDataOf(KEY_PAUSED to false))
+    }
 
     private suspend fun searchYandex(uri: Uri): ReverseOutcome? = withContext(Dispatchers.IO) {
         val bytes = applicationContext.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
@@ -262,13 +274,16 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
 
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(NOTIFICATION_ID, applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) { setSmallIcon(R.drawable.ic_komikku); setContentTitle("Reverse Search"); setContentText("Searching selected images with Yandex"); setOngoing(true); setOnlyAlertOnce(true); setPriority(NotificationCompat.PRIORITY_LOW) }.build(), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
 
-    private fun updateNotification(completed: Int, total: Int, detail: String, found: Int) { NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT).setSmallIcon(R.drawable.ic_komikku).setContentTitle("Reverse Search").setContentText(detail).setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total.coerceAtLeast(1)), false).setSubText(if (found > 0) "$found verified match(es)" else null).setOngoing(completed < total || total == 0).setOnlyAlertOnce(true).setPriority(NotificationCompat.PRIORITY_LOW).addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id)).build()) }
+    private fun updateNotification(completed: Int, total: Int, detail: String, found: Int) { val openIntent = Intent(applicationContext, eu.kanade.tachiyomi.ui.main.MainActivity::class.java).apply { action = ACTION_OPEN_REVERSE_SEARCH; putExtra(EXTRA_WORK_ID, id.toString()); flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP }; val openPendingIntent = PendingIntent.getActivity(applicationContext, id.hashCode(), openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE); NotificationManagerCompat.from(applicationContext).notify(NOTIFICATION_ID, NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT).setSmallIcon(R.drawable.ic_komikku).setContentTitle("Reverse Search").setContentText(detail).setProgress(total.coerceAtLeast(1), completed.coerceIn(0, total.coerceAtLeast(1)), false).setSubText(if (found > 0) "$found verified match(es)" else null).setOngoing(completed < total || total == 0).setOnlyAlertOnce(true).setPriority(NotificationCompat.PRIORITY_LOW).setContentIntent(openPendingIntent).setAutoCancel(false).addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id)).build()) }
 
     companion object {
-        const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val KEY_REVIEW_FILE = "review_file"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
+        const val KEY_SELECTION = "selection"; const val KEY_PHASE = "phase"; const val KEY_COMPLETED = "completed"; const val KEY_TOTAL = "total"; const val KEY_FOUND = "found"; const val KEY_REVIEW_FILE = "review_file"; const val KEY_PAUSED = "paused"; const val ACTION_OPEN_REVERSE_SEARCH = "com.manus.komikku.OPEN_REVERSE_SEARCH"; const val EXTRA_WORK_ID = "reverse_search_work_id"; const val NOTIFICATION_ID = -1810; const val TAG = "komikku_reverse_search"
+        private const val PREFS = "reverse_search_controls"; private const val PAUSED = "paused"
+        fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
+        fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 2; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
-        fun enqueue(context: Context, selections: List<Uri>): UUID { val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
+        fun enqueue(context: Context, selections: List<Uri>): UUID { setPaused(context, false); val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
     private data class ReverseOutcome(
         val originalUri: String,

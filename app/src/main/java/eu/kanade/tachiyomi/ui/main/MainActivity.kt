@@ -95,6 +95,8 @@ import eu.kanade.tachiyomi.ui.browse.source.feed.SourceFeedScreen
 import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
 import exh.ui.batchadd.BatchTitleSearchScreen
 import exh.ui.batchadd.BatchTitleSearchWorker
+import exh.ui.reverse.ReverseSearchScreen
+import exh.ui.reverse.ReverseSearchWorker
 import eu.kanade.tachiyomi.ui.deeplink.DeepLinkScreen
 import eu.kanade.tachiyomi.ui.home.HomeScreen
 import eu.kanade.tachiyomi.ui.manga.MangaScreen
@@ -692,6 +694,11 @@ class MainActivity : BaseActivity() {
             val workId = intent.getStringExtra(BatchTitleSearchWorker.EXTRA_WORK_ID)
             navigator.popUntilRoot()
             if (!workId.isNullOrBlank()) navigator.push(BatchTitleSearchScreen("", workId))
+            return true
+        }
+        if (intent.action == ReverseSearchWorker.ACTION_OPEN_REVERSE_SEARCH) {
+            navigator.popUntilRoot()
+            navigator.push(ReverseSearchScreen())
             return true
         }
         val notificationId = intent.getIntExtra("notificationId", -1)

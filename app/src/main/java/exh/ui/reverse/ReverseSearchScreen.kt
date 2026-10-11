@@ -94,6 +94,7 @@ class ReverseSearchScreen : Screen() {
         val done = progress?.getInt(ReverseSearchWorker.KEY_COMPLETED, 0) ?: 0
         val total = progress?.getInt(ReverseSearchWorker.KEY_TOTAL, 0) ?: 0
         val found = progress?.getInt(ReverseSearchWorker.KEY_FOUND, 0) ?: 0
+        val paused = progress?.getBoolean(ReverseSearchWorker.KEY_PAUSED, false) ?: ReverseSearchWorker.isPaused(context)
         val phase = progress?.getString(ReverseSearchWorker.KEY_PHASE).orEmpty()
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
         val selectedRows = reviewRows.filter { it.id in checked }
@@ -120,7 +121,14 @@ class ReverseSearchScreen : Screen() {
                         Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found result(s) ready for review"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
                         if (phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
                         if (running && total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
-                        if (running) TextButton(onClick = { jobId?.let(manager::cancelWorkById) }) { Text("Cancel") }
+                        if (running) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { ReverseSearchWorker.setPaused(context, true) }) { Text("Pause") }
+                                Button(onClick = { ReverseSearchWorker.setPaused(context, false) }) { Text("Resume") }
+                                TextButton(onClick = { jobId?.let(manager::cancelWorkById) }) { Text("Cancel") }
+                            }
+                            if (paused) Text("Paused · no new images will be searched", style = MaterialTheme.typography.bodySmall)
+                        }
                     } }
                 }
                 if (!running && reviewRows.isNotEmpty()) item {
