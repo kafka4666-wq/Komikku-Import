@@ -89,13 +89,13 @@ class ReverseSearchScreen : Screen() {
                 if (running || info?.state?.isFinished == true) {
                     Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (running) CircularProgressIndicator()
-                        Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found verified Yandex match(es) queued for library import"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
+                        Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found verified title(s) sent to Batch Add"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
                         if (phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
                         if (running && total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
                         if (running) TextButton(onClick = { jobId?.let(manager::cancelWorkById) }) { Text("Cancel") }
                     } }
                 }
-                Text("Images are uploaded to Yandex Images. The importer requires a canonical nH/eH gallery URL, a non-empty Yandex title, and a strict pixel/perceptual match against Yandex's returned source image. Unverified or visually similar results are skipped.", style = MaterialTheme.typography.labelSmall)
+                Text("Images are uploaded to Yandex Images. Only a non-empty Yandex title with a strict pixel/perceptual match is accepted. Verified titles are forwarded to Batch Add, which searches enabled sources and imports the resulting galleries. Unverified or visually similar results are skipped.", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

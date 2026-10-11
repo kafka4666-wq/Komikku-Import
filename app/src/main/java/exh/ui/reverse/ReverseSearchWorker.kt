@@ -21,6 +21,7 @@ import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
+import exh.ui.batchadd.BatchTitleSearchWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -85,7 +86,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                             // A Yandex block, timeout, malformed result, or unreadable image skips only this image.
                         } finally {
                             val done = completed.incrementAndGet()
-                            if (outcome?.directUrl != null) foundCount.incrementAndGet()
+                            if (outcome?.title != null) foundCount.incrementAndGet()
                             val phase = "Yandex searched $done/${images.size} images"
                             val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get())
                             safeSetProgress(progress)
@@ -100,14 +101,15 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         val directUrls = outcomes.mapNotNull { it.directUrl }.distinct()
         val titles = outcomes.mapNotNull { it.title }.distinct()
         if (directUrls.isNotEmpty()) runCatching { BatchImportJob.start(applicationContext, directUrls) }
+        if (titles.isNotEmpty()) runCatching { BatchTitleSearchWorker.enqueueTitles(applicationContext, titles, autoImport = true) }
         val result = workDataOf(
-            KEY_PHASE to "Yandex complete · ${titles.size} verified title(s); ${directUrls.size} canonical gallery import(s)",
+            KEY_PHASE to "Yandex complete · ${titles.size} verified title(s) sent to Batch Add; ${directUrls.size} canonical gallery import(s)",
             KEY_COMPLETED to images.size,
             KEY_TOTAL to images.size,
-            KEY_FOUND to directUrls.size,
+            KEY_FOUND to titles.size,
         )
         safeSetProgress(result)
-        safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified titles; ${directUrls.size} imports", directUrls.size)
+        safeUpdateNotification(images.size, images.size, "Complete · ${titles.size} verified titles sent to Batch Add; ${directUrls.size} direct imports", titles.size)
         return Result.success(result)
     }
 
