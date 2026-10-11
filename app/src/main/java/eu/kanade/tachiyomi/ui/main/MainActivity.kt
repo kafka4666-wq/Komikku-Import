@@ -93,6 +93,8 @@ import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
 import eu.kanade.tachiyomi.ui.browse.source.browse.BrowseSourceScreen
 import eu.kanade.tachiyomi.ui.browse.source.feed.SourceFeedScreen
 import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
+import exh.ui.batchadd.BatchTitleSearchScreen
+import exh.ui.batchadd.BatchTitleSearchWorker
 import eu.kanade.tachiyomi.ui.deeplink.DeepLinkScreen
 import eu.kanade.tachiyomi.ui.home.HomeScreen
 import eu.kanade.tachiyomi.ui.manga.MangaScreen
@@ -686,6 +688,12 @@ class MainActivity : BaseActivity() {
     }
 
     private fun handleIntentAction(intent: Intent, navigator: Navigator): Boolean {
+        if (intent.action == BatchTitleSearchWorker.ACTION_OPEN_BATCH_TITLE_SEARCH) {
+            val workId = intent.getStringExtra(BatchTitleSearchWorker.EXTRA_WORK_ID)
+            navigator.popUntilRoot()
+            if (!workId.isNullOrBlank()) navigator.push(BatchTitleSearchScreen("", workId))
+            return true
+        }
         val notificationId = intent.getIntExtra("notificationId", -1)
         if (notificationId > -1) {
             NotificationReceiver.dismissNotification(

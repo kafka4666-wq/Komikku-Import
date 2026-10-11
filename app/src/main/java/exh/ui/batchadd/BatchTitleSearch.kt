@@ -2,6 +2,7 @@ package exh.ui.batchadd
 
 import android.content.Context
 import android.content.Intent
+import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
 import android.content.pm.ServiceInfo
@@ -64,6 +65,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
 import tachiyomi.core.common.util.QuerySanitizer.sanitize
 import mihon.domain.manga.model.toDomainManga
 import tachiyomi.domain.source.service.SourceManager
@@ -77,7 +79,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import android.util.Base64
 import coil3.compose.AsyncImage
 
-class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
+class BatchTitleSearchScreen(private val inputUriString: String, private val existingJobId: String? = null) : Screen() {
     @Composable
     override fun Content() {
         val context = LocalContext.current
@@ -90,9 +92,12 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
         LaunchedEffect(inputUri) {
-            runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val id = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri)
-            jobId = id.toString()
+            if (existingJobId != null) jobId = existingJobId
+            else {
+                runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                val id = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri)
+                jobId = id.toString()
+            }
         }
         LaunchedEffect(jobId) {
             val id = jobId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
@@ -107,6 +112,7 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
         val progress = info?.progress
         val completed = progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, 0) ?: 0
         val total = progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, 0) ?: 0
+        val paused = progress?.getBoolean(BatchTitleSearchWorker.KEY_PAUSED, false) ?: BatchTitleSearchWorker.isPaused(context)
         val selectedUrls = results.filter { it.id in selected }.map { it.url }.distinct()
 
         Scaffold(topBar = { scroll ->
@@ -126,7 +132,12 @@ class BatchTitleSearchScreen(private val inputUriString: String) : Screen() {
                         Text(if (total > 0) "Searching $completed/$total titles…" else "Searching enabled sources…")
                     }
                     if (total > 0) LinearProgressIndicator(progress = { completed.toFloat() / total }, modifier = Modifier.fillMaxWidth())
-                    TextButton(onClick = { jobId?.let { manager.cancelWorkById(UUID.fromString(it)) } }) { Text("Cancel") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { jobId?.let { BatchTitleSearchWorker.setPaused(context, true) } }) { Text("Pause") }
+                        Button(onClick = { BatchTitleSearchWorker.setPaused(context, false) }) { Text("Resume") }
+                        TextButton(onClick = { jobId?.let { manager.cancelWorkById(UUID.fromString(it)) } }) { Text("Cancel") }
+                    }
+                    if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
                 }
                 if (!running && results.isNotEmpty()) item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -207,6 +218,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         updateNotification(0, titles.size, "Searching ${sources.size} enabled sources")
         coroutineScope {
             titles.map { title -> async(Dispatchers.IO) {
+                awaitNotPaused()
                 val candidates = coroutineScope {
                     sources.map { source -> async { searchSource(source, title, semaphore) } }.awaitAll().flatten()
                 }
@@ -214,7 +226,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                     candidates.distinctBy { it.url }.take(8).forEach { candidate -> resultFile.appendText(encode(candidate) + "\n") }
                 }
                 val done = completed.incrementAndGet()
-                setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size))
+                setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
                 updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
             } }.awaitAll()
         }
@@ -227,6 +239,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     }
     private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
         return try {
+            awaitNotPaused()
             val page = semaphore.withPermit { withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) } }
                 ?: return emptyList()
             page.mangas.map { manga ->
@@ -244,6 +257,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             emptyList()
         }
     }
+    private suspend fun awaitNotPaused() {
+        while (isPaused(applicationContext) && !isStopped) {
+            setProgress(workDataOf(KEY_PAUSED to true))
+            updateNotification(0, 0, "Paused · waiting to resume")
+            delay(750)
+        }
+        if (!isStopped) setProgress(workDataOf(KEY_PAUSED to false))
+    }
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
         NOTIFICATION_ID,
         applicationContext.notificationBuilder(Notifications.CHANNEL_KOMIKKU_IMPORT) {
@@ -257,6 +278,12 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
     )
     private fun updateNotification(completed: Int, total: Int, detail: String) {
+        val openIntent = Intent(applicationContext, eu.kanade.tachiyomi.ui.main.MainActivity::class.java).apply {
+            action = ACTION_OPEN_BATCH_TITLE_SEARCH
+            putExtra(EXTRA_WORK_ID, id.toString())
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(applicationContext, id.hashCode(), openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         NotificationManagerCompat.from(applicationContext).notify(
             NOTIFICATION_ID,
             NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_KOMIKKU_IMPORT)
@@ -267,6 +294,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 .setOngoing(completed < total)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setContentIntent(openPendingIntent)
+                .setAutoCancel(false)
                 .addAction(R.drawable.ic_close_24dp, "Cancel", applicationContext.workManager.createCancelPendingIntent(id))
                 .build(),
         )
@@ -278,13 +307,22 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_RESULT_FILE = "result_file"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
+        const val KEY_PAUSED = "paused"
         const val NOTIFICATION_ID = -1810
+        const val ACTION_OPEN_BATCH_TITLE_SEARCH = "com.manus.komikku.OPEN_BATCH_TITLE_SEARCH"
+        const val EXTRA_WORK_ID = "batch_title_search_work_id"
+        private const val PREFS = "batch_title_search_controls"
+        private const val PAUSED = "paused"
+        fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
+        fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         fun enqueue(context: Context, uri: Uri): UUID {
+            setPaused(context, false)
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>().setInputData(workDataOf(KEY_URI to uri.toString())).addTag("batch_title_search").build()
             context.workManager.enqueue(request)
             return request.id
         }
         fun enqueueTitles(context: Context, titles: List<String>, autoImport: Boolean = false): UUID {
+            setPaused(context, false)
             val id = UUID.randomUUID()
             val file = File(context.filesDir, "batch-title-search-$id.txt")
             file.writeText(titles.joinToString("\n"))
