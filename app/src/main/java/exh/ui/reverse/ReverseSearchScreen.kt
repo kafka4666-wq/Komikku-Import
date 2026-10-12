@@ -52,8 +52,9 @@ import coil3.compose.AsyncImage
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -83,31 +84,32 @@ class ReverseSearchScreen : Screen() {
         LaunchedEffect(Unit) {
             var trackedId = jobId
             while (true) {
-                var workInfo = trackedId?.let { runCatching { manager.getWorkInfoById(it).get() }.getOrNull() }
-                if (workInfo == null || workInfo.state.isFinished) {
-                    val tagged = runCatching { manager.getWorkInfosByTag(ReverseSearchWorker.TAG).get() }
-                        .getOrNull()
-                        ?.filter { it.state != WorkInfo.State.CANCELLED }
-                        .orEmpty()
-                    workInfo = tagged.firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
-                        ?: tagged.maxByOrNull { it.id.toString() }
-                    if (workInfo != null) {
-                        trackedId = workInfo.id
-                        jobId = workInfo.id
-                        selected = loadPersistedSelection(context)
+                val snapshot = withContext(Dispatchers.IO) {
+                    var currentId = trackedId
+                    var currentInfo = currentId?.let { runCatching { manager.getWorkInfoById(it).get() }.getOrNull() }
+                    if (currentInfo == null || currentInfo.state.isFinished) {
+                        val tagged = runCatching { manager.getWorkInfosByTag(ReverseSearchWorker.TAG).get() }
+                            .getOrNull()
+                            ?.filter { it.state != WorkInfo.State.CANCELLED }
+                            .orEmpty()
+                        currentInfo = tagged.firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+                            ?: tagged.maxByOrNull { it.id.toString() }
+                        if (currentInfo != null) currentId = currentInfo.id
                     }
+                    val journal = currentId?.let { File(context.filesDir, "reverse-search/${it}.results.jsonl") }
+                    val path = currentInfo?.outputData?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
+                        ?: currentInfo?.progress?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
+                        ?: journal?.absolutePath
+                    Triple(currentId, currentInfo, readReviewRows(path))
                 }
-                info = workInfo
-                val id = trackedId
-                if (id != null) {
-                    val journal = File(context.filesDir, "reverse-search/${id}.results.jsonl")
-                    val path = workInfo?.outputData?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
-                        ?: workInfo?.progress?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
-                        ?: journal.absolutePath
-                    val rows = readReviewRows(path)
-                    if (rows.isNotEmpty()) reviewRows = rows
-                    if (workInfo?.state == WorkInfo.State.SUCCEEDED) checked.clear()
+                trackedId = snapshot.first
+                if (snapshot.first != null && snapshot.first != jobId) {
+                    jobId = snapshot.first
+                    selected = loadPersistedSelection(context)
                 }
+                info = snapshot.second
+                if (snapshot.third.isNotEmpty()) reviewRows = snapshot.third
+                if (snapshot.second?.state == WorkInfo.State.SUCCEEDED) checked.clear()
                 delay(1000)
             }
         }
