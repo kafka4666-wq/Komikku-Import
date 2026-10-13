@@ -175,11 +175,11 @@ jobs:
           declarations = '''        <activity
             android:name="eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity"
             android:exported="false" />
-        <service
+          <service
             android:name="eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
-'''
+          '''
           if marker not in text:
               raise SystemExit("manifest insertion marker missing")
           text = text.replace(marker, declarations + marker, 1)
