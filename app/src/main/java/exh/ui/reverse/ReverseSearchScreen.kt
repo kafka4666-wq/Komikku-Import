@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,6 +67,8 @@ class ReverseSearchScreen : Screen() {
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
+        val powerManager = remember { context.getSystemService(PowerManager::class.java) }
+        var batteryOptimizationExempt by remember { mutableStateOf(powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true) }
         var selected by remember { mutableStateOf(loadPersistedSelection(context)) }
         var jobId by remember { mutableStateOf(ReverseSearchWorker.activeWorkId(context)) }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
@@ -82,6 +86,7 @@ class ReverseSearchScreen : Screen() {
             if (uri != null) notFoundText?.let { text -> runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } } }
         }
         LaunchedEffect(Unit) {
+            batteryOptimizationExempt = powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
             var trackedId = jobId
             while (true) {
                 val snapshot = withContext(Dispatchers.IO) {
@@ -134,6 +139,16 @@ class ReverseSearchScreen : Screen() {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
                     Text("Search first, then review every result before importing. Original image is on the left, Yandex title in the middle, and the matched source image on the right.", style = MaterialTheme.typography.bodyMedium)
+                    if (!batteryOptimizationExempt) {
+                        Text("For long background searches, allow unrestricted battery usage for Komikku so Android or Xiaomi battery saver does not pause the worker.", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
+                            }.onFailure {
+                                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            }
+                        }) { Text("Allow unrestricted background work") }
+                    }
                     Button(enabled = !running, onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Icon(Icons.Outlined.FolderOpen, null); Text(" Select album folder") }
                     if (selected.isNotEmpty()) Text("Folder restored. Subfolders are included; you can start or resume this search.", style = MaterialTheme.typography.bodySmall)
                     Button(enabled = selected.isNotEmpty() && !running, onClick = { startSearch(selected) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Start Reverse Search") }
