@@ -193,18 +193,23 @@ jobs:
               if "</application>" not in text:
                   raise SystemExit("manifest application closing tag missing")
               text = text.replace("</application>", declarations + "</application>", 1)
-          service_marker = '''            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"'''
-          service_replacement = '''            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="specialUse"'''
-          if service_marker in text:
-              text = text.replace(service_marker, service_replacement, 1)
-          if 'android:name="androidx.work.impl.foreground.SystemForegroundService"' in text and 'android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"' not in text:
-              text = text.replace(
-                  '            android:foregroundServiceType="specialUse"\n            tools:node="merge" />',
-                  '            android:foregroundServiceType="specialUse"\n            tools:node="merge">\n            <property\n                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n                android:value="Long-running Yandex reverse image search" />\n        </service>',
-                  1,
+          text, service_count = re.subn(
+              r'(android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"\s+android:foregroundServiceType=")[^"]+("?)',
+              r'\1specialUse\2',
+              text,
+              count=1,
+          )
+          if service_count != 1:
+              raise SystemExit("WorkManager foreground service declaration missing")
+          if 'android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"' not in text:
+              text, property_count = re.subn(
+                  r'(android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"[\s\S]*?android:foregroundServiceType="specialUse"\s+tools:node="merge")\s*/>',
+                  r'\1>\n            <property\n                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n                android:value="Long-running Yandex reverse image search" />\n        </service>',
+                  text,
+                  count=1,
               )
+              if property_count != 1:
+                  raise SystemExit("WorkManager special-use subtype property insertion failed")
           path.write_text(text)
           PY
           grep -q 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' app/src/main/AndroidManifest.xml
