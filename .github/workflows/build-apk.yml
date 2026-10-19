@@ -181,7 +181,6 @@ jobs:
           # earlier overlay, then add exactly one canonical declaration pair.
           text = re.sub(r'\s*<activity\s+android:name="(?:\.ui\.dictionary|eu\.kanade\.tachiyomi\.ui\.dictionary)\.ScreenLookupPermissionActivity"[^>]*/>', '', text)
           text = re.sub(r'\s*<service\s+android:name="(?:\.ui\.dictionary|eu\.kanade\.tachiyomi\.ui\.dictionary)\.ScreenLookupService"[^>]*/>', '', text)
-          marker = '        <activity\n            android:name="com.journeyapps.barcodescanner.CaptureActivity"'
           declarations = '''        <activity
             android:name="eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity"
             android:exported="false" />
@@ -190,9 +189,10 @@ jobs:
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
           '''
-          if marker not in text:
-              raise SystemExit("manifest insertion marker missing")
-          text = text.replace(marker, declarations + marker, 1)
+          if "ScreenLookupPermissionActivity" not in text:
+              if "</application>" not in text:
+                  raise SystemExit("manifest application closing tag missing")
+              text = text.replace("</application>", declarations + "</application>", 1)
           service_marker = '''            android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"'''
           service_replacement = '''            android:name="androidx.work.impl.foreground.SystemForegroundService"
