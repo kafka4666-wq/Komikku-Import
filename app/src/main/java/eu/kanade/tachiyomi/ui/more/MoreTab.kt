@@ -104,7 +104,18 @@ data object MoreTab : Tab {
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
             onClickBatchImage = { navigator.push(BatchImageScreen()) },
             onClickReverseSearch = { navigator.push(ReverseSearchScreen()) },
-            onClickScreenLookup = { context.startActivity(Intent(context, ScreenLookupPermissionActivity::class.java)) },
+            onClickScreenLookup = {
+                val intent = Intent(context, ScreenLookupPermissionActivity::class.java)
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    runCatching { context.startActivity(intent) }
+                } else {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Screen Lookup is unavailable in this installed build. Please install the latest APK.",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
             onClickUpdates = { navigator.push(UpdatesTab) },
             onClickHistory = { navigator.push(HistoryTab) },
             onClickLibrary = { tabNavigator.current = LibraryTab },
