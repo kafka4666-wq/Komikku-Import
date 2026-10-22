@@ -364,7 +364,7 @@ class BatchImportJob(
             val input = File(context.cacheDir, "batch-import-${System.currentTimeMillis()}.txt")
             input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
-            return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.REPLACE, saveJobId = true)
+            return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE, saveJobId = true)
         }
 
         fun startTitleMatches(context: Context, urls: List<String>): UUID {
@@ -375,7 +375,7 @@ class BatchImportJob(
                 context,
                 input,
                 "$TAG-title-matches",
-                androidx.work.ExistingWorkPolicy.REPLACE,
+                androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE,
                 saveJobId = true,
                 fastTitleImport = true,
             )

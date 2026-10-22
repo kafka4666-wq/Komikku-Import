@@ -106,9 +106,15 @@ data object MoreTab : Tab {
             onClickReverseSearch = { navigator.push(ReverseSearchScreen()) },
             onClickScreenLookup = {
                 val intent = Intent(context, ScreenLookupPermissionActivity::class.java)
-                if (intent.resolveActivity(context.packageManager) != null) {
-                    runCatching { context.startActivity(intent) }
-                } else {
+                val launched = runCatching {
+                    if (intent.resolveActivity(context.packageManager) == null) {
+                        false
+                    } else {
+                        context.startActivity(intent)
+                        true
+                    }
+                }.getOrDefault(false)
+                if (!launched) {
                     android.widget.Toast.makeText(
                         context,
                         "Screen Lookup is unavailable in this installed build. Please install the latest APK.",

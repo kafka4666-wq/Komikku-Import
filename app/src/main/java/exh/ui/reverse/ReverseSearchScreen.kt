@@ -12,11 +12,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -54,12 +53,13 @@ import coil3.compose.AsyncImage
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.ui.batchadd.BatchImportJob
-import kotlinx.coroutines.delay
+import exh.ui.batchadd.BatchTitleSearchScreen
+import exh.ui.batchadd.BatchTitleSearchWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
-import java.util.UUID
 
 class ReverseSearchScreen : Screen() {
     @Composable
@@ -104,6 +104,7 @@ class ReverseSearchScreen : Screen() {
                     val journal = currentId?.let { File(context.filesDir, "reverse-search/${it}.results.jsonl") }
                     val path = currentInfo?.outputData?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
                         ?: currentInfo?.progress?.getString(ReverseSearchWorker.KEY_REVIEW_FILE)
+                        ?: currentId?.let { File(context.filesDir, "reverse-search/${it}.review.jsonl") }?.takeIf(File::exists)?.absolutePath
                         ?: journal?.absolutePath
                     Triple(currentId, currentInfo, readReviewRows(path))
                 }
@@ -111,55 +112,148 @@ class ReverseSearchScreen : Screen() {
                 if (snapshot.first != null && snapshot.first != jobId) {
                     jobId = snapshot.first
                     selected = loadPersistedSelection(context)
+                    checked.clear()
+                    reviewRows = snapshot.third
+                } else if (snapshot.third.isNotEmpty() || snapshot.second?.state == WorkInfo.State.SUCCEEDED) {
+                    reviewRows = snapshot.third
                 }
                 info = snapshot.second
-                if (snapshot.third.isNotEmpty()) reviewRows = snapshot.third
-                if (snapshot.second?.state == WorkInfo.State.SUCCEEDED) checked.clear()
+                if (snapshot.second?.state == WorkInfo.State.SUCCEEDED) checked.removeAll { id -> reviewRows.none { it.id == id } }
                 delay(1000)
             }
         }
+
         val progress = info?.progress
-        val done = progress?.getInt(ReverseSearchWorker.KEY_COMPLETED, 0) ?: 0
-        val total = progress?.getInt(ReverseSearchWorker.KEY_TOTAL, 0) ?: 0
-        val found = progress?.getInt(ReverseSearchWorker.KEY_FOUND, 0) ?: 0
+        val completed = info?.state == WorkInfo.State.SUCCEEDED
+        val done = progress?.getInt(ReverseSearchWorker.KEY_COMPLETED, 0)
+            ?: info?.outputData?.getInt(ReverseSearchWorker.KEY_COMPLETED, 0)
+            ?: 0
+        val total = maxOf(
+            progress?.getInt(ReverseSearchWorker.KEY_TOTAL, 0) ?: 0,
+            info?.outputData?.getInt(ReverseSearchWorker.KEY_TOTAL, 0) ?: 0,
+            reviewRows.size,
+        )
+        val visibleFound = reviewRows.count { it.title != null }
+        val found = if (completed && reviewRows.isNotEmpty()) visibleFound else maxOf(
+            progress?.getInt(ReverseSearchWorker.KEY_FOUND, 0) ?: 0,
+            info?.outputData?.getInt(ReverseSearchWorker.KEY_FOUND, 0) ?: 0,
+        )
         val paused = progress?.getBoolean(ReverseSearchWorker.KEY_PAUSED, false) ?: ReverseSearchWorker.isPaused(context)
         val phase = progress?.getString(ReverseSearchWorker.KEY_PHASE).orEmpty()
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
+        val reviewReady = completed && reviewRows.isNotEmpty()
         val selectedRows = reviewRows.filter { it.id in checked }
-        val directSelected = selectedRows.mapNotNull { it.galleryUrl }.distinct()
-        val notFoundRows = reviewRows.filter { it.title.isNullOrBlank() }
+        val actionableRows = selectedRows.filter { it.galleryUrl != null || it.title != null }
+        val directSelected = actionableRows.mapNotNull { it.galleryUrl }.distinct()
+        val titleOnlyRows = actionableRows.filter { it.galleryUrl == null }
+        val titleOnlySelected = titleOnlyRows.mapNotNull { it.title }.distinct()
+        val notFoundRows = reviewRows.filter { it.title == null }
+        val allRowsSelected = reviewRows.isNotEmpty() && reviewRows.all { it.id in checked }
+        val addSelectionKey = selectedRows.map { it.id }.sorted().joinToString("\u0000")
+        var addSubmitted by remember(jobId, addSelectionKey) { mutableStateOf(false) }
         val startSearch: (List<Uri>) -> Unit = { uris ->
-            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
             jobId = ReverseSearchWorker.enqueue(context.applicationContext, uris)
             info = null
             reviewRows = emptyList()
             checked.clear()
         }
-        Scaffold(topBar = { TopAppBar(title = { Text("Reverse Search Review") }, navigationIcon = { TextButton(onClick = { navigator?.pop() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } }) }) { padding ->
-            LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item {
-                    Text("Search first, then review every result before importing. Original image is on the left, Yandex title in the middle, and the matched source image on the right.", style = MaterialTheme.typography.bodyMedium)
-                    if (!batteryOptimizationExempt) {
-                        Text("For long background searches, allow unrestricted battery usage for Komikku so Android or Xiaomi battery saver does not pause the worker.", style = MaterialTheme.typography.bodySmall)
+        val addSelected = {
+            if (!addSubmitted && actionableRows.isNotEmpty()) {
+                addSubmitted = true
+                if (directSelected.isNotEmpty()) BatchImportJob.start(context.applicationContext, directSelected)
+                if (titleOnlySelected.isNotEmpty()) {
+                    val titleJob = BatchTitleSearchWorker.enqueueTitles(context.applicationContext, titleOnlySelected, autoImport = false)
+                    navigator?.push(BatchTitleSearchScreen("about:blank", titleJob.toString()))
+                }
+                Toast.makeText(
+                    context,
+                    buildString {
+                        if (directSelected.isNotEmpty()) append("Queued ${directSelected.size} verified gallery link(s).")
+                        if (titleOnlySelected.isNotEmpty()) {
+                            if (isNotEmpty()) append(' ')
+                            append("Finding source galleries for ${titleOnlySelected.size} selected title(s) to review.")
+                        }
+                    },
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Reverse Search Review") },
+                    navigationIcon = {
+                        TextButton(onClick = { navigator?.pop() }) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back")
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            LazyColumn(
+                Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (!reviewReady) item {
+                    Text(
+                        "Search first, then review each result before importing. Verified gallery links can be added directly; title-only matches can be checked against enabled sources.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (!batteryOptimizationExempt && !running) {
+                        Text(
+                            "For long background searches, allow unrestricted battery usage for Komikku so Android or Xiaomi battery saver does not pause the worker.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         TextButton(onClick = {
                             runCatching {
                                 context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
                             }.onFailure {
-                                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                             }
                         }) { Text("Allow unrestricted background work") }
                     }
-                    Button(enabled = !running, onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Icon(Icons.Outlined.FolderOpen, null); Text(" Select album folder") }
-                    if (selected.isNotEmpty()) Text("Folder restored. Subfolders are included; you can start or resume this search.", style = MaterialTheme.typography.bodySmall)
-                    Button(enabled = selected.isNotEmpty() && !running, onClick = { startSearch(selected) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Start Reverse Search") }
+                    Button(
+                        enabled = !running,
+                        onClick = { picker.launch(null) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    ) {
+                        Icon(Icons.Outlined.FolderOpen, null)
+                        Text(if (selected.isEmpty()) " Select album folder" else " Change album folder")
+                    }
+                    if (selected.isNotEmpty()) Text("Folder restored. Subfolders are included.", style = MaterialTheme.typography.bodySmall)
+                    Button(
+                        enabled = selected.isNotEmpty() && !running,
+                        onClick = { startSearch(selected) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    ) { Text(if (running) "Searching…" else "Start Reverse Search") }
+                } else item {
+                    Text("Complete · $visibleFound result(s) ready for review", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { picker.launch(null) }) { Text("Choose another folder") }
+                        TextButton(onClick = { if (selected.isNotEmpty()) startSearch(selected) else picker.launch(null) }) {
+                            Text("Search again")
+                        }
+                    }
                 }
-                if (running || info?.state?.isFinished == true) item {
-                    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (running) CircularProgressIndicator()
-                        Text(when { running && total > 0 -> "Searching $done/$total images"; running -> "Discovering images…"; info?.state == WorkInfo.State.SUCCEEDED -> "Complete · $found result(s) ready for review"; info?.state == WorkInfo.State.FAILED -> "Reverse search failed"; else -> "Reverse search" }, style = MaterialTheme.typography.titleMedium)
-                        if (phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
-                        if (running && total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
-                        if (running) {
+
+                if (running) item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CircularProgressIndicator()
+                            Text(
+                                when {
+                                    total > 0 -> "Searching $done/$total images · $found match(es)"
+                                    else -> "Discovering images…"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            if (phase.isNotBlank()) Text(phase, style = MaterialTheme.typography.bodySmall)
+                            if (total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { ReverseSearchWorker.setPaused(context, true) }) { Text("Pause") }
                                 Button(onClick = { ReverseSearchWorker.setPaused(context, false) }) { Text("Resume") }
@@ -167,28 +261,111 @@ class ReverseSearchScreen : Screen() {
                             }
                             if (paused) Text("Paused · no new images will be searched", style = MaterialTheme.typography.bodySmall)
                         }
-                    } }
-                }
-                if (!running && reviewRows.isNotEmpty()) item {
-                    Text("${reviewRows.count { it.title != null }} found · ${notFoundRows.size} not found · ${checked.size} selected", style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { if (checked.size == reviewRows.size) checked.clear() else { checked.clear(); checked.addAll(reviewRows.map { it.id }) } }) { Text("Select all") }
-                        TextButton(enabled = checked.isNotEmpty(), onClick = { val uris = selectedRows.map { Uri.parse(it.originalUri) }; if (uris.isNotEmpty()) startSearch(uris) }) { Text("Research selected") }
                     }
-                    Button(enabled = directSelected.isNotEmpty(), onClick = { BatchImportJob.start(context.applicationContext, directSelected); Toast.makeText(context, "Approved galleries sent to library import", Toast.LENGTH_SHORT).show() }, modifier = Modifier.fillMaxWidth()) { Text("Add approved galleries (${directSelected.size})") }
-                    Button(enabled = notFoundRows.isNotEmpty(), onClick = { notFoundText = notFoundRows.joinToString("\n") { it.originalUri }; notFoundLauncher.launch("not found.txt") }, modifier = Modifier.fillMaxWidth()) { Text("Save not found (${notFoundRows.size})") }
-                    Text("Select wrong or duplicate rows and use Research selected. Nothing is imported automatically.", style = MaterialTheme.typography.labelSmall)
                 }
-                items(reviewRows, key = { it.id }) { row ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = row.id in checked, onCheckedChange = { if (it) checked.add(row.id) else checked.remove(row.id) })
-                                AsyncImage(model = Uri.parse(row.originalUri), contentDescription = "Original image", contentScale = ContentScale.Crop, modifier = Modifier.size(82.dp))
-                                Column(Modifier.weight(1f).padding(horizontal = 8.dp)) { Text(row.title ?: "Not found", style = MaterialTheme.typography.titleSmall); Text(if (row.galleryUrl != null) "Gallery candidate available" else "Title/image match only · research to find enabled-source gallery", style = MaterialTheme.typography.bodySmall) }
-                                if (row.matchedImage != null) AsyncImage(model = row.matchedImage, contentDescription = "Yandex matched image", contentScale = ContentScale.Crop, modifier = Modifier.size(82.dp))
+
+                if (info?.state == WorkInfo.State.FAILED) item {
+                    Text("Reverse search failed. You can retry it using the selected folder.", style = MaterialTheme.typography.bodyMedium)
+                }
+
+                if (!running && reviewRows.isNotEmpty()) item {
+                    Text(
+                        "$visibleFound found · ${notFoundRows.size} not found · ${selectedRows.size} selected",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = {
+                            if (allRowsSelected) checked.clear() else {
+                                checked.clear()
+                                checked.addAll(reviewRows.map { it.id })
                             }
-                            if (row.galleryUrl != null) Text(row.galleryUrl, style = MaterialTheme.typography.labelSmall)
+                        }) { Text(if (allRowsSelected) "Deselect all" else "Select all") }
+                        TextButton(
+                            enabled = selectedRows.isNotEmpty() && !running,
+                            onClick = {
+                                val uris = selectedRows.mapNotNull { it.originalUri.takeIf(String::isNotBlank) }.map(Uri::parse)
+                                if (uris.isNotEmpty()) startSearch(uris)
+                            },
+                        ) { Text("Research selected") }
+                    }
+                    Button(
+                        enabled = actionableRows.isNotEmpty() && !running && !addSubmitted,
+                        onClick = addSelected,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            when {
+                                addSubmitted -> "Added / review queued"
+                                directSelected.isNotEmpty() && titleOnlySelected.isNotEmpty() -> "Add ${directSelected.size} · find ${titleOnlySelected.size} more"
+                                directSelected.isNotEmpty() -> "Add approved galleries (${directSelected.size})"
+                                titleOnlySelected.isNotEmpty() -> "Find galleries for selected titles (${titleOnlySelected.size})"
+                                else -> "Select matches to add"
+                            },
+                        )
+                    }
+                    Button(
+                        enabled = notFoundRows.isNotEmpty(),
+                        onClick = {
+                            notFoundText = notFoundRows.joinToString("\n") { it.originalUri }
+                            notFoundLauncher.launch("not found.txt")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Save not found (${notFoundRows.size})") }
+                    Text(
+                        "Only exact verified gallery matches are added directly. Title-only matches open a source-review step; nothing ambiguous is imported automatically.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+
+                items(reviewRows, key = { it.id }) { row ->
+                    val filename = displayFilename(row.originalUri)
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                Checkbox(
+                                    checked = row.id in checked,
+                                    onCheckedChange = { isChecked ->
+                                        if (isChecked) {
+                                            if (row.id !in checked) checked.add(row.id)
+                                        } else checked.remove(row.id)
+                                    },
+                                )
+                                AsyncImage(
+                                    model = Uri.parse(row.originalUri),
+                                    contentDescription = "Original image: $filename",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(82.dp),
+                                )
+                                Column(
+                                    Modifier.weight(1f).padding(start = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Text(row.title ?: filename, style = MaterialTheme.typography.titleSmall)
+                                    if (row.title != null) Text(filename, style = MaterialTheme.typography.labelSmall)
+                                    Text(
+                                        when {
+                                            row.galleryUrl != null -> "Verified gallery · ready to add"
+                                            row.title != null -> "Title match · find a gallery in enabled sources"
+                                            else -> "No match found"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                            if (row.matchedImage != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    AsyncImage(
+                                        model = row.matchedImage,
+                                        contentDescription = "Verified matching source image",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.size(72.dp),
+                                    )
+                                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                        Text("Matched source image", style = MaterialTheme.typography.labelMedium)
+                                        row.galleryUrl?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -196,12 +373,47 @@ class ReverseSearchScreen : Screen() {
         }
     }
 
-    private fun readReviewRows(path: String?): List<ReviewRow> = runCatching { path?.let(::File)?.readLines()?.mapNotNull { line -> JSONObject(line).let { ReviewRow(it.optString("originalUri"), it.optString("title").takeIf(String::isNotBlank), it.optString("galleryUrl").takeIf(String::isNotBlank), it.optString("matchedImage").takeIf(String::isNotBlank)) } }.orEmpty() }.getOrDefault(emptyList())
+    private fun readReviewRows(path: String?): List<ReviewRow> = runCatching {
+        path?.let(::File)?.takeIf(File::exists)?.readLines()?.mapNotNull { line ->
+            runCatching {
+                val json = JSONObject(line)
+                val originalUri = json.optNullableString("originalUri") ?: return@runCatching null
+                ReviewRow(
+                    originalUri = originalUri,
+                    title = json.optNullableString("title"),
+                    galleryUrl = json.optNullableString("galleryUrl"),
+                    matchedImage = json.optNullableString("matchedImage"),
+                )
+            }.getOrNull()
+        }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    private fun JSONObject.optNullableString(key: String): String? = optString(key)
+        .trim()
+        .takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+
+    private fun displayFilename(value: String): String = runCatching {
+        Uri.parse(value).lastPathSegment
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            ?: "Image"
+    }.getOrDefault("Image")
 
     private fun loadPersistedSelection(context: android.content.Context): List<Uri> = runCatching {
         val id = ReverseSearchWorker.activeWorkId(context) ?: return emptyList()
-        File(context.filesDir, "reverse-search/$id.selection").takeIf(File::exists)?.readLines()?.map(Uri::parse).orEmpty()
+        File(context.filesDir, "reverse-search/$id.selection")
+            .takeIf(File::exists)
+            ?.readLines()
+            ?.mapNotNull { it.trim().takeIf(String::isNotBlank)?.let(Uri::parse) }
+            .orEmpty()
     }.getOrDefault(emptyList())
 }
 
-data class ReviewRow(val originalUri: String, val title: String?, val galleryUrl: String?, val matchedImage: String?) { val id: String get() = "$originalUri|${title.orEmpty()}|${galleryUrl.orEmpty()}" }
+data class ReviewRow(
+    val originalUri: String,
+    val title: String?,
+    val galleryUrl: String?,
+    val matchedImage: String?,
+) {
+    val id: String get() = "$originalUri|${title.orEmpty()}|${galleryUrl.orEmpty()}"
+}

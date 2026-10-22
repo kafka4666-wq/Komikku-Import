@@ -48,9 +48,17 @@ jobs:
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           grep -q 'withContext(Dispatchers.IO)' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           grep -q 'appendJournal' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          grep -q 'NOTIFICATION_ID = -1812' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          grep -q 'allRowsSelected' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
+          grep -q 'optNullableString' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
+          grep -q 'BatchTitleSearchWorker.enqueueTitles' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           grep -q 'pauseReverseSearchPendingBroadcast' app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
+          grep -q 'ExistingWorkPolicy.APPEND_OR_REPLACE' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          grep -q 'val launched = runCatching' app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           # Manga-only Treasury visuals are copied last so the final overlay cannot
           # overwrite them. They are presentation-only and never achievement-gated.
           mkdir -p app/src/main/java/eu/kanade/presentation/components
@@ -304,6 +312,9 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump xmltree "$APK" --file AndroidManifest.xml | tee /tmp/komikku-apk-manifest.txt
+          grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' /tmp/komikku-apk-manifest.txt
+          grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' /tmp/komikku-apk-manifest.txt
           grep -E "package: name='com.manus.komikku' versionCode='111' versionName='1.15.0'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
