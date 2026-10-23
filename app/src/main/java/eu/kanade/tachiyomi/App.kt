@@ -334,7 +334,9 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
                     .build(),
             )
 
-            crossfade((300 * this@App.animatorDurationScale * runtimeAnimationScale).toInt())
+            // Keep cover fade-ins short so a burst of newly visible library covers
+            // does not animate dozens of images at once while the grid is scrolling.
+            crossfade((100 * this@App.animatorDurationScale * runtimeAnimationScale).toInt())
             allowRgb565(DeviceUtil.isLowRamDevice(this@App))
             // KMK -->
             if (EHLogLevel.isExtraLogging()) logger(DebugLogger())

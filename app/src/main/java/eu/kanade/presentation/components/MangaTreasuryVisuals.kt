@@ -9,8 +9,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -97,8 +99,41 @@ object MangaTreasuryVisuals {
         cornerRadius: Dp,
         animated: Boolean,
     ): Modifier {
-        val phase by treasuryPhase(animated)
-        return drawBehind { drawTreasuryFrame(effect, intensity, cornerRadius.toPx(), phase) }
+        if (effect == NONE || intensity <= 0) return this
+        val phase by if (animated) treasuryPhase(animated) else remember { androidx.compose.runtime.mutableStateOf(0f) }
+        return drawWithCache {
+            val (base, accent, secondary) = palette(effect)
+            val amount = intensity.coerceIn(0, 100) / 100f
+            val backgroundBrush = Brush.linearGradient(
+                colors = listOf(
+                    base.copy(alpha = 0.34f * amount),
+                    accent.copy(alpha = 0.11f * amount),
+                    secondary.copy(alpha = 0.18f * amount),
+                    base.copy(alpha = 0.30f * amount),
+                ),
+                start = Offset(size.width * (phase * 0.55f + 0.15f), 0f),
+                end = Offset(size.width * (phase * 0.55f + 0.85f), size.height),
+            )
+            val frameBrush = Brush.linearGradient(
+                colors = listOf(
+                    accent.copy(alpha = 0.62f * amount),
+                    secondary.copy(alpha = 0.5f * amount),
+                    accent.copy(alpha = 0.62f * amount),
+                ),
+                start = Offset(0f, phase * size.height * 0.35f),
+                end = Offset(size.width, size.height),
+            )
+            onDrawBehind {
+                drawTreasuryFrame(
+                    effect = effect,
+                    intensity = intensity,
+                    radius = cornerRadius.toPx(),
+                    phase = phase,
+                    cachedBackgroundBrush = backgroundBrush,
+                    cachedFrameBrush = frameBrush,
+                )
+            }
+        }
     }
 
     @Composable
@@ -139,6 +174,8 @@ object MangaTreasuryVisuals {
         phase: Float,
         overrideAccent: Color? = null,
         overrideSecondary: Color? = null,
+        cachedBackgroundBrush: Brush? = null,
+        cachedFrameBrush: Brush? = null,
     ) {
         if (effect == NONE) return
         val (base, paletteAccent, paletteSecondary) = palette(effect)
@@ -147,7 +184,7 @@ object MangaTreasuryVisuals {
         val amount = intensity.coerceIn(0, 100) / 100f
         val atmosphere = if (phase == 0f) 0f else 1f
         drawRoundRect(
-            brush = Brush.linearGradient(
+            brush = cachedBackgroundBrush ?: Brush.linearGradient(
                 colors = listOf(
                     base.copy(alpha = 0.34f * amount),
                     accent.copy(alpha = 0.11f * amount),
@@ -184,7 +221,7 @@ object MangaTreasuryVisuals {
             }
         }
         drawRoundRect(
-            brush = Brush.linearGradient(
+            brush = cachedFrameBrush ?: Brush.linearGradient(
                 colors = listOf(accent.copy(alpha = 0.62f * amount), secondary.copy(alpha = 0.5f * amount), accent.copy(alpha = 0.62f * amount)),
                 start = Offset(0f, phase * size.height * 0.35f),
                 end = Offset(size.width, size.height),

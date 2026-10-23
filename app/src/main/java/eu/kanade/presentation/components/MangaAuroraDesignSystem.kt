@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -85,19 +86,25 @@ object MangaAuroraDesignSystem {
         glassAlpha: Float = 0.72f,
     ): Modifier {
         val primary = MaterialTheme.colorScheme.primary
-        return drawBehind {
-        val resolvedAccent = if (accent == Color.Unspecified) primary else accent
-        drawRoundRect(
-            brush = Brush.verticalGradient(
+        return drawWithCache {
+            val resolvedAccent = if (accent == Color.Unspecified) primary else accent
+            val radiusPx = radius.toPx()
+            val gradient = Brush.verticalGradient(
                 listOf(Color.White.copy(alpha = 0.045f), Color.Transparent),
-            ),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius.toPx()),
-        )
-        drawRoundRect(
-            color = resolvedAccent.copy(alpha = 0.18f * glassAlpha),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius.toPx()),
-        )
+            )
+            val borderColor = resolvedAccent.copy(alpha = 0.18f * glassAlpha)
+            val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx())
+            onDrawBehind {
+                drawRoundRect(
+                    brush = gradient,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(radiusPx),
+                )
+                drawRoundRect(
+                    color = borderColor,
+                    style = stroke,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(radiusPx),
+                )
+            }
         }
     }
 

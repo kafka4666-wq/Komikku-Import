@@ -140,6 +140,9 @@ jobs:
           assert_source "OOM-safe cached library sorting" "lowercaseTitleCache.getOrPut(item.id)" app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           assert_source "persistent long-background sync guard" "last_backgrounded_ms" app/src/main/java/eu/kanade/tachiyomi/App.kt
           assert_source "12-hour restore sync cooldown" "AUTO_SYNC_AFTER_BACKGROUND_COOLDOWN_MS" app/src/main/java/eu/kanade/tachiyomi/App.kt
+          assert_source "short cover crossfade" "crossfade((100 *" app/src/main/java/eu/kanade/tachiyomi/App.kt
+          assert_source "no-op treasury card fast path" "if (effect == NONE || intensity <= 0) return this" app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt
+          assert_source "cached aurora card drawing" "return drawWithCache" app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt
           assert_source "Batch Image direct-code progress" "KEY_FAILED to failed" app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
           assert_source "Batch Image URL record codec" "record.links.joinToString" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
           assert_source "Batch Image multi-title extraction" "fun extractLines(rawLines: List<String>, imageUri: String): List<BatchImageRecord>" app/src/main/java/exh/ui/batchimage/BatchImageWorker.kt
@@ -155,8 +158,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 114/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.3"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 115/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.4"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -165,8 +168,8 @@ jobs:
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 114' app/build.gradle.kts
-          grep -q 'versionName = "1.15.3' app/build.gradle.kts
+          grep -q 'versionCode = 115' app/build.gradle.kts
+          grep -q 'versionName = "1.15.4' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -319,14 +322,14 @@ jobs:
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' /tmp/komikku-apk-manifest.txt
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' /tmp/komikku-apk-manifest.txt
           grep -Eq 'android:foregroundServiceType\([^)]*\)=0x40000001' /tmp/komikku-apk-manifest.txt
-          grep -E "package: name='com.manus.komikku' versionCode='114' versionName='1.15.3'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='115' versionName='1.15.4'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.3-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.4-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
