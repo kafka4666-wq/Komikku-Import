@@ -153,8 +153,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 112/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.1"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 113/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.2"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -163,8 +163,8 @@ jobs:
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 112' app/build.gradle.kts
-          grep -q 'versionName = "1.15.1' app/build.gradle.kts
+          grep -q 'versionCode = 113' app/build.gradle.kts
+          grep -q 'versionName = "1.15.2' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -203,7 +203,7 @@ jobs:
               text = text.replace("</application>", declarations + "</application>", 1)
           text, service_count = re.subn(
               r'(android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"\s+android:foregroundServiceType=")[^"]+("?)',
-              r'\1specialUse\2',
+              r'\1dataSync|specialUse\2',
               text,
               count=1,
           )
@@ -211,7 +211,7 @@ jobs:
               raise SystemExit("WorkManager foreground service declaration missing")
           if 'android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"' not in text:
               text, property_count = re.subn(
-                  r'(android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"[\s\S]*?android:foregroundServiceType="specialUse"\s+tools:node="merge")\s*/>',
+                  r'(android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"[\s\S]*?android:foregroundServiceType="dataSync\|specialUse"\s+tools:node="merge")\s*/>',
                   r'\1>\n            <property\n                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n                android:value="Long-running Yandex reverse image search" />\n        </service>',
                   text,
                   count=1,
@@ -224,7 +224,8 @@ jobs:
           grep -q 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' app/src/main/AndroidManifest.xml
           grep -q 'android:foregroundServiceType="mediaProjection"' app/src/main/AndroidManifest.xml
           grep -q 'android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"' app/src/main/AndroidManifest.xml
-          grep -q 'android:foregroundServiceType="specialUse"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:foregroundServiceType="dataSync|specialUse"' app/src/main/AndroidManifest.xml
+          grep -q 'android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"' app/src/main/AndroidManifest.xml
           grep -q 'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE' app/src/main/AndroidManifest.xml
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -315,14 +316,15 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump xmltree "$APK" --file AndroidManifest.xml | tee /tmp/komikku-apk-manifest.txt
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' /tmp/komikku-apk-manifest.txt
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' /tmp/komikku-apk-manifest.txt
-          grep -E "package: name='com.manus.komikku' versionCode='112' versionName='1.15.1'" /tmp/komikku-badging.txt
+          grep -Eq 'android:foregroundServiceType\([^)]*\)=0x40000001' /tmp/komikku-apk-manifest.txt
+          grep -E "package: name='com.manus.komikku' versionCode='113' versionName='1.15.2'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.1-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.2-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
