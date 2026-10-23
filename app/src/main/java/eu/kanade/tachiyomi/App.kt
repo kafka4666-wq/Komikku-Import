@@ -352,6 +352,11 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
         val guard = getSharedPreferences("sync_start_guard", Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val lastAttempt = guard.getLong("last_attempt_ms", 0L)
+        val lastBackgrounded = guard.getLong("last_backgrounded_ms", 0L)
+        // After Android recreates the process from the background, don't immediately
+        // run a full sync and rebuild a large library the user was just viewing.
+        // Manual sync and scheduled WorkManager syncs are unaffected.
+        if (lastBackgrounded > 0L && now - lastBackgrounded < AUTO_SYNC_AFTER_BACKGROUND_COOLDOWN_MS) return
         // A process recreated under memory pressure should not immediately launch the
         // same heavy sync again on both cold start and resume.
         if (now - lastAttempt < 15 * 60 * 1000L) return
@@ -381,6 +386,11 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 
     override fun onStop(owner: LifecycleOwner) {
         SecureActivityDelegate.onApplicationStopped()
+
+        getSharedPreferences("sync_start_guard", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("last_backgrounded_ms", System.currentTimeMillis())
+            .apply()
 
         // AM (DISCORD) -->
         DiscordRPCService.stop(applicationContext)
@@ -508,3 +518,4 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
 }
 
 private const val ACTION_DISABLE_INCOGNITO_MODE = "tachi.action.DISABLE_INCOGNITO_MODE"
+private const val AUTO_SYNC_AFTER_BACKGROUND_COOLDOWN_MS = 12 * 60 * 60 * 1000L
