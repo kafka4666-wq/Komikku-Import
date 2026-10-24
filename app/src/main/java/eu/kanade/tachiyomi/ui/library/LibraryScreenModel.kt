@@ -68,6 +68,7 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
@@ -189,11 +190,27 @@ class LibraryScreenModel(
     val recommendationSearch = RecommendationSearchHelper(preferences.context)
 
     private var recommendationSearchJob: Job? = null
+    private var librarySnapshotSaveJob: Job? = null
+    @Volatile
+    private var hasReceivedLiveLibraryData = false
     // SY <--
 
     init {
         screenModelScope.launchIO {
             DailyOfflineCacheManager(preferences.context).expireIfNeeded()
+        }
+        if (LibraryStateCache.lastLoadedState == null) {
+            screenModelScope.launchIO {
+                LibraryStateSnapshot.read(preferences.context)?.let { cachedState ->
+                    mutableState.update { currentState ->
+                        if (currentState.isLoading && !currentState.libraryData.isInitialized) {
+                            cachedState
+                        } else {
+                            currentState
+                        }
+                    }
+                }
+            }
         }
         mutableState.update { state ->
             state.copy(activeCategoryIndex = libraryPreferences.lastUsedCategory().get())
@@ -250,6 +267,7 @@ class LibraryScreenModel(
             }
                 .distinctUntilChanged()
                 .collectLatest { libraryData ->
+                    hasReceivedLiveLibraryData = true
                     mutableState.update { state ->
                         state.copy(libraryData = libraryData)
                     }
@@ -327,13 +345,18 @@ class LibraryScreenModel(
                     }
                 // KMK <--
             }
-                .collectLatest {
-                    mutableState.update { state ->
+                .collectLatest { groupedFavorites ->
+                    val loadedState = mutableState.updateAndGet { state ->
                         state.copy(
                             isLoading = false,
-                            groupedFavorites = it,
-                        ).also { loadedState ->
-                            LibraryStateCache.lastLoadedState = loadedState
+                            groupedFavorites = groupedFavorites,
+                        )
+                    }
+                    LibraryStateCache.lastLoadedState = loadedState
+                    if (hasReceivedLiveLibraryData && librarySnapshotSaveJob?.isActive != true) {
+                        librarySnapshotSaveJob = screenModelScope.launchIO {
+                            delay(1_000)
+                            LibraryStateSnapshot.write(preferences.context, loadedState)
                         }
                     }
                 }
@@ -1946,6 +1969,10 @@ class LibraryScreenModel(
 
         fun getItemsForCategory(category: Category): List<LibraryItem> {
             return groupedFavorites[category].orEmpty().fastMapNotNull { libraryData.favoritesById[it] }
+        }
+
+        internal fun getItemIdsForCategory(category: Category): List<Long> {
+            return groupedFavorites[category].orEmpty()
         }
 
         fun getItemCountForCategory(category: Category): Int? {
