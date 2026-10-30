@@ -1217,7 +1217,7 @@ class ReaderViewModel @JvmOverloads constructor(
     fun appendQueuedPagesToChapter() {
         val dialog = state.value.dialog as? Dialog.PageActions ?: return
         val readerChapter = dialog.page.chapter
-        val mangaId = readerChapter.chapter.manga_id
+        val mangaId = readerChapter.chapter.manga_id ?: return
         val chapterId = readerChapter.chapter.id ?: return
 
         viewModelScope.launchIO {
@@ -1259,8 +1259,9 @@ class ReaderViewModel @JvmOverloads constructor(
         val existingMergedPages = loadedPages
             .filter { it.url.startsWith(ReaderPageMergeStore.PAGE_URL_PREFIX) }
             .associateBy { it.url }
+        val mangaId = readerChapter.chapter.manga_id ?: return
         val chapterId = readerChapter.chapter.id ?: return
-        val mergedFiles = pageMergeStore.pagesForChapter(readerChapter.chapter.manga_id, chapterId)
+        val mergedFiles = pageMergeStore.pagesForChapter(mangaId, chapterId)
         if (mergedFiles.isEmpty() && sourcePages.size == loadedPages.size) return
 
         val mergedPages = mergedFiles.mapIndexed { index, file ->
