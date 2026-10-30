@@ -334,6 +334,15 @@ class ReaderActivity : BaseActivity() {
                     is ReaderViewModel.Event.SetCoverResult -> {
                         onSetAsCoverResult(event.result)
                     }
+                    is ReaderViewModel.Event.PageMergeQueueUpdated -> {
+                        toast(if (event.count == 0) "Page merge queue cleared." else "Page queued for cross-source merge (${event.count} total).")
+                    }
+                    is ReaderViewModel.Event.PageMergeCompleted -> {
+                        toast(if (event.count == 0) "No queued pages were added." else "Added ${event.count} page(s) to this chapter.")
+                    }
+                    is ReaderViewModel.Event.PageMergeError -> {
+                        toast(event.message)
+                    }
                 }
             }
             .launchIn(lifecycleScope)
@@ -521,6 +530,10 @@ class ReaderActivity : BaseActivity() {
                             }
                         },
                         onShareCombined = viewModel::shareImages,
+                        pendingMergePageCount = state.pendingMergePageCount,
+                        onQueuePageForMerge = viewModel::queuePageForMerge,
+                        onAppendQueuedPages = viewModel::appendQueuedPagesToChapter,
+                        onClearQueuedPages = viewModel::clearQueuedMergePages,
                         onSaveCombined = {
                             // KMK -->
                             if (externalStoragePermissionNotGranted) {

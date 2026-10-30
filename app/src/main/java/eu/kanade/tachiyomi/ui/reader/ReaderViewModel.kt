@@ -241,6 +241,8 @@ class ReaderViewModel @JvmOverloads constructor(
      */
     private var loader: ChapterLoader? = null
 
+    private val pageMergeStore = ReaderPageMergeStore(Injekt.get<Application>())
+
     /**
      * The time the chapter was started reading
      */
@@ -349,6 +351,9 @@ class ReaderViewModel @JvmOverloads constructor(
     private val downloadAheadAmount = downloadPreferences.autoDownloadWhileReading().get()
 
     init {
+        viewModelScope.launchIO {
+            mutableState.update { it.copy(pendingMergePageCount = pageMergeStore.pendingCount()) }
+        }
         // To save state
         state.map { it.viewerChapters?.currChapter }
             .distinctUntilChanged()
@@ -536,6 +541,7 @@ class ReaderViewModel @JvmOverloads constructor(
         // SY <--
     ): ViewerChapters {
         loader.loadChapter(chapter /* SY --> */, page/* SY <-- */)
+        appendMergedPages(chapter)
 
         val chapterPos = chapterList.indexOf(chapter)
         val newChapters = ViewerChapters(
@@ -653,6 +659,7 @@ class ReaderViewModel @JvmOverloads constructor(
         try {
             logcat { "Preloading ${chapter.chapter.url}" }
             loader.loadChapter(chapter)
+            appendMergedPages(chapter)
         } catch (e: Throwable) {
             if (e is CancellationException) {
                 throw e
@@ -1182,6 +1189,95 @@ class ReaderViewModel @JvmOverloads constructor(
         mutableState.update { it.copy(dialog = Dialog.PageActions(page, extraPage)) }
     }
 
+    fun queuePageForMerge(useExtraPage: Boolean) {
+        val dialog = state.value.dialog as? Dialog.PageActions ?: return
+        val page = (if (useExtraPage) dialog.extraPage else dialog.page)
+        if (page == null || page.status != Page.State.Ready || page.stream == null) {
+            viewModelScope.launch {
+                eventChannel.send(Event.PageMergeError("Wait until the page finishes loading, then try again."))
+            }
+            return
+        }
+        val stream = page.stream ?: return
+
+        viewModelScope.launchIO {
+            try {
+                val count = pageMergeStore.queuePage(stream())
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = count) }
+                }
+                eventChannel.send(Event.PageMergeQueueUpdated(count))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                eventChannel.send(Event.PageMergeError(error.message ?: "Could not queue this page."))
+            }
+        }
+    }
+
+    fun appendQueuedPagesToChapter() {
+        val dialog = state.value.dialog as? Dialog.PageActions ?: return
+        val readerChapter = dialog.page.chapter
+        val mangaId = readerChapter.chapter.manga_id
+        val chapterId = readerChapter.chapter.id ?: return
+
+        viewModelScope.launchIO {
+            try {
+                val appended = pageMergeStore.appendPendingPages(mangaId, chapterId)
+                appendMergedPages(readerChapter)
+                val pendingCount = pageMergeStore.pendingCount()
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                eventChannel.send(Event.PageMergeCompleted(appended.size))
+                eventChannel.send(Event.ReloadViewerChapters)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                appendMergedPages(readerChapter)
+                val pendingCount = pageMergeStore.pendingCount()
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                eventChannel.send(Event.PageMergeError(error.message ?: "Could not merge the queued pages."))
+                eventChannel.send(Event.ReloadViewerChapters)
+            }
+        }
+    }
+
+    fun clearQueuedMergePages() {
+        viewModelScope.launchIO {
+            pageMergeStore.clearPending()
+            withUIContext {
+                mutableState.update { it.copy(pendingMergePageCount = 0) }
+            }
+            eventChannel.send(Event.PageMergeQueueUpdated(0))
+        }
+    }
+
+    private fun appendMergedPages(readerChapter: ReaderChapter) {
+        val loadedPages = readerChapter.pages ?: return
+        val sourcePages = loadedPages.filterNot { it.url.startsWith(ReaderPageMergeStore.PAGE_URL_PREFIX) }
+        val existingMergedPages = loadedPages
+            .filter { it.url.startsWith(ReaderPageMergeStore.PAGE_URL_PREFIX) }
+            .associateBy { it.url }
+        val chapterId = readerChapter.chapter.id ?: return
+        val mergedFiles = pageMergeStore.pagesForChapter(readerChapter.chapter.manga_id, chapterId)
+        if (mergedFiles.isEmpty() && sourcePages.size == loadedPages.size) return
+
+        val mergedPages = mergedFiles.mapIndexed { index, file ->
+            val url = ReaderPageMergeStore.PAGE_URL_PREFIX + file.name
+            existingMergedPages[url] ?: ReaderPage(
+                    index = sourcePages.size + index,
+                    url = url,
+                    imageUrl = null,
+                    stream = { file.inputStream() },
+                ).apply {
+                    chapter = readerChapter
+                    status = Page.State.Ready
+            }
+        }
+        readerChapter.state = ReaderChapter.State.Loaded(sourcePages + mergedPages)
+    }
+
     fun openSettingsDialog() {
         mutableState.update { it.copy(dialog = Dialog.Settings) }
     }
@@ -1485,6 +1581,7 @@ class ReaderViewModel @JvmOverloads constructor(
         val bookmarked: Boolean = false,
         val isLoadingAdjacentChapter: Boolean = false,
         val currentPage: Int = -1,
+        val pendingMergePageCount: Int = 0,
 
         /**
          * Viewer used to display the pages (pager, webtoon, ...).
@@ -1556,5 +1653,8 @@ class ReaderViewModel @JvmOverloads constructor(
             // SY <--
         ) : Event
         data class CopyImage(val uri: Uri) : Event
+        data class PageMergeQueueUpdated(val count: Int) : Event
+        data class PageMergeCompleted(val count: Int) : Event
+        data class PageMergeError(val message: String) : Event
     }
 }
