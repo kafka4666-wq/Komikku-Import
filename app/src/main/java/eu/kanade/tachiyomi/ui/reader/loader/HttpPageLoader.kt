@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -140,6 +141,30 @@ internal class HttpPageLoader(
                     }
                 }
             }
+        }
+    }
+
+    /** Loads one page for chapter merging without scheduling the viewer's usual page preloads. */
+    suspend fun loadPageForMerge(page: ReaderPage): Page.State = withIOContext {
+        val imageUrl = page.imageUrl
+        if (page.status == Page.State.Ready && imageUrl != null && !chapterCache.isImageInCache(imageUrl)) {
+            page.status = Page.State.Queue
+        }
+        if (page.status is Page.State.Error) {
+            page.status = Page.State.Queue
+        }
+
+        val queuedPage = if (page.status == Page.State.Queue) {
+            PriorityPage(page, 1).also { queue.offer(it) }
+        } else {
+            null
+        }
+        try {
+            page.statusFlow.first {
+                it == Page.State.Ready || it is Page.State.Error
+            }
+        } finally {
+            queuedPage?.let { queue.remove(it) }
         }
     }
 

@@ -40,12 +40,18 @@ fun ReaderPageActionsDialog(
     hasExtraPage: Boolean,
     // SY <--
     pendingMergePageCount: Int,
+    chapterPageCount: Int,
+    isQueueingChapter: Boolean,
+    queueingChapterProgress: Int,
+    queueingChapterTotal: Int,
     onQueuePageForMerge: (useExtraPage: Boolean) -> Unit,
+    onQueueEntireChapterForMerge: () -> Unit,
     onAppendQueuedPages: () -> Unit,
     onClearQueuedPages: () -> Unit,
 ) {
     var showSetCoverDialog by remember { mutableStateOf(false) }
     var showMergeConfirmation by remember { mutableStateOf(false) }
+    var showQueueChapterConfirmation by remember { mutableStateOf(false) }
     // SY -->
     var useExtraPage by remember { mutableStateOf(false) }
     // SY <--
@@ -200,7 +206,7 @@ fun ReaderPageActionsDialog(
                 }
             }
             Text(
-                "To merge pages across books or sources: queue pages here, open the destination chapter, then append the queue. Page images are copied; the original books are unchanged.",
+                "To merge chapters across books or sources: queue one page or the entire chapter here, open the destination chapter, then append the queue. Page images are copied; the original books are unchanged.",
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -208,17 +214,39 @@ fun ReaderPageActionsDialog(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
                 ) {
-                    TextButton(onClick = { onQueuePageForMerge(false); onDismissRequest() }) {
+                    TextButton(
+                        enabled = !isQueueingChapter,
+                        onClick = { onQueuePageForMerge(false); onDismissRequest() },
+                    ) {
                         Text("Queue first page")
                     }
-                    TextButton(onClick = { onQueuePageForMerge(true); onDismissRequest() }) {
+                    TextButton(
+                        enabled = !isQueueingChapter,
+                        onClick = { onQueuePageForMerge(true); onDismissRequest() },
+                    ) {
                         Text("Queue second page")
                     }
                 }
             } else {
-                TextButton(onClick = { onQueuePageForMerge(false); onDismissRequest() }) {
+                TextButton(
+                    enabled = !isQueueingChapter,
+                    onClick = { onQueuePageForMerge(false); onDismissRequest() },
+                ) {
                     Text("Queue this page for merge")
                 }
+            }
+            TextButton(
+                enabled = chapterPageCount > 0 && !isQueueingChapter,
+                onClick = { showQueueChapterConfirmation = true },
+            ) {
+                Text("Queue entire chapter ($chapterPageCount pages)")
+            }
+            if (isQueueingChapter) {
+                Text(
+                    "Copying chapter pages: $queueingChapterProgress / $queueingChapterTotal. Keep this chapter open until it finishes.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             if (pendingMergePageCount > 0) {
                 Text(
@@ -229,10 +257,16 @@ fun ReaderPageActionsDialog(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
                 ) {
-                    TextButton(onClick = { showMergeConfirmation = true }) {
+                    TextButton(
+                        enabled = !isQueueingChapter,
+                        onClick = { showMergeConfirmation = true },
+                    ) {
                         Text("Append queued pages here")
                     }
-                    TextButton(onClick = { onClearQueuedPages(); onDismissRequest() }) {
+                    TextButton(
+                        enabled = !isQueueingChapter,
+                        onClick = { onClearQueuedPages(); onDismissRequest() },
+                    ) {
                         Text("Clear queue")
                     }
                 }
@@ -261,6 +295,29 @@ fun ReaderPageActionsDialog(
                 }
             },
             onDismissRequest = { showMergeConfirmation = false },
+        )
+    }
+
+    if (showQueueChapterConfirmation) {
+        AlertDialog(
+            title = { Text("Queue the whole chapter?") },
+            text = {
+                Text("Copy all $chapterPageCount page images into the local merge queue? This can use significant storage and may take a while. Keep the reader open until the copy finishes.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showQueueChapterConfirmation = false
+                    onQueueEntireChapterForMerge()
+                }) {
+                    Text("Queue all pages")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQueueChapterConfirmation = false }) {
+                    Text("Cancel")
+                }
+            },
+            onDismissRequest = { showQueueChapterConfirmation = false },
         )
     }
 

@@ -34,6 +34,7 @@ import eu.kanade.tachiyomi.source.online.all.MergedSource
 import eu.kanade.tachiyomi.ui.reader.chapter.ReaderChapterItem
 import eu.kanade.tachiyomi.ui.reader.loader.ChapterLoader
 import eu.kanade.tachiyomi.ui.reader.loader.DownloadPageLoader
+import eu.kanade.tachiyomi.ui.reader.loader.HttpPageLoader
 import eu.kanade.tachiyomi.ui.reader.model.InsertPage
 import eu.kanade.tachiyomi.ui.reader.model.ReaderChapter
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
@@ -74,6 +75,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import logcat.LogPriority
 import tachiyomi.core.common.preference.toggle
 import tachiyomi.core.common.storage.UniFileTempFileManager
@@ -104,6 +106,8 @@ import tachiyomi.domain.source.service.SourceManager
 import tachiyomi.source.local.isLocal
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.Date
 
@@ -1190,6 +1194,7 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun queuePageForMerge(useExtraPage: Boolean) {
+        if (state.value.isQueueingChapter) return
         val dialog = state.value.dialog as? Dialog.PageActions ?: return
         val page = (if (useExtraPage) dialog.extraPage else dialog.page)
         if (page == null || page.status != Page.State.Ready || page.stream == null) {
@@ -1214,7 +1219,101 @@ class ReaderViewModel @JvmOverloads constructor(
         }
     }
 
+    fun queueChapterForMerge() {
+        val dialog = state.value.dialog as? Dialog.PageActions ?: return
+        val readerChapter = dialog.page.chapter
+        val pages = readerChapter.pages.orEmpty()
+        val pageLoader = readerChapter.pageLoader
+        if (pages.isEmpty() || pageLoader == null) {
+            viewModelScope.launch {
+                eventChannel.send(Event.PageMergeError("This chapter's page list is not ready yet."))
+            }
+            return
+        }
+        if (state.value.isQueueingChapter) return
+
+        mutableState.update {
+            it.copy(
+                isQueueingChapter = true,
+                queueingChapterProgress = 0,
+                queueingChapterTotal = pages.size,
+            )
+        }
+
+        viewModelScope.launchIO {
+            var queuedCount = 0
+            var currentPageNumber = 0
+            var stagingBatch: File? = null
+            try {
+                val chapterBatch = pageMergeStore.beginChapterBatch()
+                stagingBatch = chapterBatch
+                pages.forEachIndexed { pageIndex, page ->
+                    currentPageNumber = pageIndex + 1
+                    val ready = if (pageLoader is HttpPageLoader) {
+                        withTimeoutOrNull(180_000L) {
+                            pageLoader.loadPageForMerge(page) == Page.State.Ready
+                        } ?: false
+                    } else if (page.status == Page.State.Ready) {
+                        true
+                    } else {
+                        val loadJob = launch {
+                            try {
+                                pageLoader.loadPage(page)
+                            } catch (error: Throwable) {
+                                if (error is CancellationException) throw error
+                            }
+                        }
+                        try {
+                            withTimeoutOrNull(180_000L) {
+                                page.statusFlow.first {
+                                    it == Page.State.Ready || it is Page.State.Error
+                                } == Page.State.Ready
+                            } ?: false
+                        } finally {
+                            loadJob.cancel()
+                        }
+                    }
+                    if (!ready || page.status != Page.State.Ready) {
+                        throw IOException("Could not load chapter page $currentPageNumber.")
+                    }
+                    val stream = page.stream
+                        ?: throw IOException("Chapter page $currentPageNumber has no image stream.")
+                    queuedCount = pageMergeStore.queuePageInChapterBatch(chapterBatch, stream())
+                    withUIContext {
+                        mutableState.update { it.copy(queueingChapterProgress = queuedCount) }
+                    }
+                }
+                val pendingCount = pageMergeStore.commitChapterBatch(chapterBatch)
+                stagingBatch = null
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                eventChannel.send(Event.PageMergeChapterQueued(queuedCount))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val pendingCount = pageMergeStore.pendingCount()
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                val message = "Could not queue chapter page $currentPageNumber of ${pages.size}. No pages from this chapter were added; your previously queued pages were left unchanged. ${error.message ?: "Please try again."}"
+                eventChannel.send(Event.PageMergeError(message))
+            } finally {
+                stagingBatch?.let { batch -> runCatching { pageMergeStore.discardChapterBatch(batch) } }
+                withUIContext {
+                    mutableState.update {
+                        it.copy(
+                            isQueueingChapter = false,
+                            queueingChapterProgress = 0,
+                            queueingChapterTotal = 0,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun appendQueuedPagesToChapter() {
+        if (state.value.isQueueingChapter) return
         val dialog = state.value.dialog as? Dialog.PageActions ?: return
         val readerChapter = dialog.page.chapter
         val mangaId = readerChapter.chapter.manga_id ?: return
@@ -1244,12 +1343,23 @@ class ReaderViewModel @JvmOverloads constructor(
     }
 
     fun clearQueuedMergePages() {
+        if (state.value.isQueueingChapter) return
         viewModelScope.launchIO {
-            pageMergeStore.clearPending()
-            withUIContext {
-                mutableState.update { it.copy(pendingMergePageCount = 0) }
+            try {
+                val pendingCount = pageMergeStore.clearPending()
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                eventChannel.send(Event.PageMergeQueueUpdated(pendingCount))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val pendingCount = runCatching { pageMergeStore.pendingCount() }
+                    .getOrDefault(state.value.pendingMergePageCount)
+                withUIContext {
+                    mutableState.update { it.copy(pendingMergePageCount = pendingCount) }
+                }
+                eventChannel.send(Event.PageMergeError(error.message ?: "Could not clear the page merge queue."))
             }
-            eventChannel.send(Event.PageMergeQueueUpdated(0))
         }
     }
 
@@ -1583,6 +1693,9 @@ class ReaderViewModel @JvmOverloads constructor(
         val isLoadingAdjacentChapter: Boolean = false,
         val currentPage: Int = -1,
         val pendingMergePageCount: Int = 0,
+        val isQueueingChapter: Boolean = false,
+        val queueingChapterProgress: Int = 0,
+        val queueingChapterTotal: Int = 0,
 
         /**
          * Viewer used to display the pages (pager, webtoon, ...).
@@ -1656,6 +1769,7 @@ class ReaderViewModel @JvmOverloads constructor(
         data class CopyImage(val uri: Uri) : Event
         data class PageMergeQueueUpdated(val count: Int) : Event
         data class PageMergeCompleted(val count: Int) : Event
+        data class PageMergeChapterQueued(val count: Int) : Event
         data class PageMergeError(val message: String) : Event
     }
 }

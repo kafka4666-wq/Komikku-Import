@@ -340,6 +340,9 @@ class ReaderActivity : BaseActivity() {
                     is ReaderViewModel.Event.PageMergeCompleted -> {
                         toast(if (event.count == 0) "No queued pages were added." else "Added ${event.count} page(s) to this chapter.")
                     }
+                    is ReaderViewModel.Event.PageMergeChapterQueued -> {
+                        toast("Queued ${event.count} page(s) from the chapter for merging.")
+                    }
                     is ReaderViewModel.Event.PageMergeError -> {
                         toast(event.message)
                     }
@@ -515,6 +518,7 @@ class ReaderActivity : BaseActivity() {
                 }
 
                 is ReaderViewModel.Dialog.PageActions -> {
+                    val pageActions = state.dialog as ReaderViewModel.Dialog.PageActions
                     ReaderPageActionsDialog(
                         onDismissRequest = onDismissRequest,
                         onSetAsCover = viewModel::setAsCover,
@@ -531,7 +535,12 @@ class ReaderActivity : BaseActivity() {
                         },
                         onShareCombined = viewModel::shareImages,
                         pendingMergePageCount = state.pendingMergePageCount,
+                        chapterPageCount = pageActions.page.chapter.pages?.size ?: 0,
+                        isQueueingChapter = state.isQueueingChapter,
+                        queueingChapterProgress = state.queueingChapterProgress,
+                        queueingChapterTotal = state.queueingChapterTotal,
                         onQueuePageForMerge = viewModel::queuePageForMerge,
+                        onQueueEntireChapterForMerge = viewModel::queueChapterForMerge,
                         onAppendQueuedPages = viewModel::appendQueuedPagesToChapter,
                         onClearQueuedPages = viewModel::clearQueuedMergePages,
                         onSaveCombined = {
@@ -543,7 +552,7 @@ class ReaderActivity : BaseActivity() {
                                 viewModel.saveImages()
                             }
                         },
-                        hasExtraPage = (state.dialog as? ReaderViewModel.Dialog.PageActions)?.extraPage != null,
+                        hasExtraPage = pageActions.extraPage != null,
                     )
                 }
 

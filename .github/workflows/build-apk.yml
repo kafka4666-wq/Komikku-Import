@@ -61,6 +61,7 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
           cp ../app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt
           grep -q 'filterNot { it.url.startsWith(ReaderPageMergeStore.PAGE_URL_PREFIX) }' app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
+          grep -q 'loadPageForMerge' app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
           grep -q 'withContext(Dispatchers.IO)' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           grep -q 'appendJournal' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           grep -q 'NOTIFICATION_ID = -1812' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
@@ -173,13 +174,25 @@ jobs:
           assert_source "persistent cross-source page merge store" "reader-page-merges" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
           assert_source "page merge queue action" "queuePageForMerge" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
           assert_source "chapter-specific page merge persistence" "appendPendingPages" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          assert_source "whole-chapter page queue" "fun queueChapterForMerge()" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          assert_source "whole-chapter page loader cache recovery" "pageLoader is HttpPageLoader" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          assert_source "no-preload page merge loader" "loadPageForMerge" app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
+          assert_source "atomic chapter batch staging" "fun commitChapterBatch" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          assert_source "chapter batch cancellation cleanup" "discardChapterBatch" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          assert_source "atomic destination chapter append" "Atomically appends all pending pages" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          assert_source "stale merge staging cleanup" "STALE_STAGING_AGE_MS" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          assert_source "cross-reader merge queue serialization" "STORE_LOCK" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          assert_source "atomic page merge queue clear" "pendingDirectory.renameTo(retiredDirectory)" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          assert_source "abandoned page temp cleanup" 'endsWith(".page.tmp")' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
           assert_source "merged page marker filtering" "PAGE_URL_PREFIX" app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
           assert_source "cross-source merge instructions" "different sources" app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt
+          assert_source "whole-chapter merge confirmation" "Queue entire chapter" app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt
+          assert_source "visible whole-chapter copy progress" "Copying chapter pages" app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 117/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.6"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 118/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.7"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -188,8 +201,8 @@ jobs:
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 117' app/build.gradle.kts
-          grep -q 'versionName = "1.15.6' app/build.gradle.kts
+          grep -q 'versionCode = 118' app/build.gradle.kts
+          grep -q 'versionName = "1.15.7' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -342,14 +355,14 @@ jobs:
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' /tmp/komikku-apk-manifest.txt
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' /tmp/komikku-apk-manifest.txt
           grep -Eq 'android:foregroundServiceType\([^)]*\)=0x40000001' /tmp/komikku-apk-manifest.txt
-          grep -E "package: name='com.manus.komikku' versionCode='117' versionName='1.15.6'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='118' versionName='1.15.7'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.6-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.7-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
