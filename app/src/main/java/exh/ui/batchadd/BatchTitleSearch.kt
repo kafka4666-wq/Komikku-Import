@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.layout.ContentScale
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -74,6 +76,9 @@ import tachiyomi.presentation.core.util.plus
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.Base64
@@ -85,19 +90,20 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
-        var jobId by remember { mutableStateOf<String?>(null) }
+        var jobId by rememberSaveable(inputUriString, existingJobId) { mutableStateOf(existingJobId) }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
         val selected = remember { mutableStateListOf<String>() }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
-        LaunchedEffect(inputUri) {
-            if (existingJobId != null) jobId = existingJobId
-            else {
-                runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                val id = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri)
-                jobId = id.toString()
+        LaunchedEffect(inputUriString, existingJobId) {
+            if (jobId != null) return@LaunchedEffect
+            if (existingJobId != null) {
+                jobId = existingJobId
+                return@LaunchedEffect
             }
+            runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            jobId = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri).toString()
         }
         LaunchedEffect(jobId) {
             val id = jobId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
@@ -194,7 +200,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
     override suspend fun doWork(): Result {
-        val resultFile = File(applicationContext.filesDir, "batch-title-search-${id}.results")
+        val resultDirectory = File(applicationContext.filesDir, "batch-title-search-${id}.result-rows")
         val titles = runCatching {
             inputData.getString(KEY_TITLES_FILE)?.let { File(it).readLines() }
                 ?: inputData.getString(KEY_URI)?.let(Uri::parse)?.let { uri ->
@@ -209,33 +215,49 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val sources = sourceManager.getVisibleSources()
             .filterIsInstance<HttpSource>()
             .filter { it.lang in enabledLanguages && it.id.toString() !in disabled }
-        resultFile.writeText("")
-        val completed = AtomicInteger(0)
+        if (!resultDirectory.exists() && !resultDirectory.mkdirs()) return Result.failure()
+        resultDirectory.listFiles().orEmpty()
+            .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
+            .forEach { it.delete() }
+        fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
+        val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
         val semaphore = Semaphore(12)
-        val writeLock = Any()
         setForeground(getForegroundInfo())
-        setProgress(workDataOf(KEY_COMPLETED to 0, KEY_TOTAL to titles.size))
-        updateNotification(0, titles.size, "Searching ${sources.size} enabled sources")
+        setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))
+        updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources")
         coroutineScope {
-            titles.map { title -> async(Dispatchers.IO) {
-                awaitNotPaused()
-                val candidates = coroutineScope {
-                    sources.map { source -> async { searchSource(source, title, semaphore) } }.awaitAll().flatten()
+            titles.mapIndexedNotNull { index, title ->
+                if (rowFile(index).isFile) return@mapIndexedNotNull null
+                async(Dispatchers.IO) {
+                    awaitNotPaused()
+                    val candidates = coroutineScope {
+                        sources.map { source -> async { searchSource(source, title, semaphore) } }.awaitAll().flatten()
+                    }
+                    val outputFile = rowFile(index)
+                    val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
+                    val rows = candidates.distinctBy { it.url }.take(8).joinToString("\n") { encode(it) }
+                    try {
+                        FileOutputStream(tempFile).use { stream ->
+                            if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
+                            stream.fd.sync()
+                        }
+                        if (!tempFile.renameTo(outputFile)) throw IOException("Unable to commit title-search checkpoint ${outputFile.name}")
+                    } catch (error: Throwable) {
+                        tempFile.delete()
+                        throw error
+                    }
+                    val done = completed.incrementAndGet()
+                    setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
+                    updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
                 }
-                synchronized(writeLock) {
-                    candidates.distinctBy { it.url }.take(8).forEach { candidate -> resultFile.appendText(encode(candidate) + "\n") }
-                }
-                val done = completed.incrementAndGet()
-                setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
-                updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
-            } }.awaitAll()
+            }.awaitAll()
         }
         updateNotification(titles.size, titles.size, "Search complete · review matches in the app")
         if (inputData.getBoolean(KEY_AUTO_IMPORT, false)) {
-            val urls = readResults(applicationContext, resultFile.absolutePath).map { it.url }.distinct()
+            val urls = readResults(applicationContext, resultDirectory.absolutePath).map { it.url }.distinct()
             if (urls.isNotEmpty()) runCatching { BatchImportJob.startTitleMatches(applicationContext, urls) }
         }
-        return Result.success(workDataOf(KEY_RESULT_FILE to resultFile.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
+        return Result.success(workDataOf(KEY_RESULT_FILE to resultDirectory.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
     }
     private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
         return try {
@@ -315,11 +337,23 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private const val PAUSED = "paused"
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
-        fun enqueue(context: Context, uri: Uri): UUID {
+        suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
+            val workManager = context.workManager
+            val uniqueName = uniqueUriWorkName(uri)
+            val activeWork = runCatching {
+                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }
+            }.getOrNull()
+            if (activeWork != null) return@withContext activeWork.id
+
             setPaused(context, false)
-            val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>().setInputData(workDataOf(KEY_URI to uri.toString())).addTag("batch_title_search").build()
-            context.workManager.enqueue(request)
-            return request.id
+            val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
+                .setInputData(workDataOf(KEY_URI to uri.toString()))
+                .addTag("batch_title_search")
+                .build()
+            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request).result.get()
+            runCatching {
+                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }?.id
+            }.getOrNull() ?: request.id
         }
         fun enqueueTitles(context: Context, titles: List<String>, autoImport: Boolean = false): UUID {
             setPaused(context, false)
@@ -334,7 +368,25 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             context.workManager.enqueue(request)
             return id
         }
-        fun readResults(context: Context, path: String?): List<TitleSearchCandidate> = runCatching { path?.let(::File)?.readLines()?.mapNotNull(::decode).orEmpty() }.getOrDefault(emptyList())
+        fun readResults(context: Context, path: String?): List<TitleSearchCandidate> = runCatching {
+            val result = path?.let(::File) ?: return@runCatching emptyList()
+            val lines = if (result.isDirectory) {
+                result.listFiles().orEmpty()
+                    .filter { it.isFile && it.name.endsWith(".row") }
+                    .sortedBy { it.name }
+                    .flatMap { it.readLines() }
+            } else if (result.isFile) {
+                result.readLines()
+            } else {
+                emptyList()
+            }
+            lines.mapNotNull(::decode).distinctBy { it.id }
+        }.getOrDefault(emptyList())
+        private fun uniqueUriWorkName(uri: Uri): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(uri.toString().toByteArray())
+            val key = digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            return "batch_title_search_uri_$key"
+        }
         private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
         private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4], v.getOrNull(5)?.ifBlank { null }) }.getOrNull()
         private fun cleanTitle(value: String): String = value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ").replace(Regex("\\s+"), " ").trim()
