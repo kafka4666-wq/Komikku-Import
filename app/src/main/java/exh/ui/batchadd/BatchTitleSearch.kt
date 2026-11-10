@@ -79,6 +79,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
+import java.text.Normalizer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.Base64
@@ -130,7 +131,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    Text("Titles are cleaned by removing parenthesized and bracketed notes before searching. Review the source and title, then select only the correct matches.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Titles are cleaned before searching. Matches with the same title across sources are grouped and shown once; review the representative source and title before selecting.", style = MaterialTheme.typography.bodyMedium)
                 }
                 if (running) item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -195,6 +196,36 @@ data class TitleSearchCandidate(
     val url: String,
     val thumbnailUrl: String?,
 )
+
+internal object TitleSearchCandidateDeduplicator {
+    fun collapse(candidates: List<TitleSearchCandidate>): List<TitleSearchCandidate> {
+        val byTitle = linkedMapOf<String, TitleSearchCandidate>()
+        candidates.forEach { candidate ->
+            val titleKey = normalize(candidate.matchedTitle)
+            val key = titleKey.ifEmpty { "url:${candidate.url}" }
+            val previous = byTitle[key]
+            if (previous == null || isPreferred(candidate, previous)) {
+                byTitle[key] = candidate
+            }
+        }
+        return byTitle.values.toList()
+    }
+
+    private fun isPreferred(candidate: TitleSearchCandidate, current: TitleSearchCandidate): Boolean {
+        val candidateIsExact = candidate.matchedTitle.trim().equals(candidate.inputTitle.trim(), ignoreCase = true)
+        val currentIsExact = current.matchedTitle.trim().equals(current.inputTitle.trim(), ignoreCase = true)
+        if (candidateIsExact != currentIsExact) return candidateIsExact
+
+        val sourceOrder = candidate.sourceName.compareTo(current.sourceName, ignoreCase = true)
+        if (sourceOrder != 0) return sourceOrder < 0
+        return candidate.url.compareTo(current.url, ignoreCase = true) < 0
+    }
+
+    private fun normalize(value: String): String = Normalizer
+        .normalize(value, Normalizer.Form.NFKD)
+        .lowercase()
+        .filter { it.isLetterOrDigit() }
+}
 
 class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val sourceManager: SourceManager = Injekt.get()
@@ -380,7 +411,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             } else {
                 emptyList()
             }
-            lines.mapNotNull(::decode).distinctBy { it.id }
+            TitleSearchCandidateDeduplicator.collapse(lines.mapNotNull(::decode).distinctBy { it.id })
         }.getOrDefault(emptyList())
         private fun uniqueUriWorkName(uri: Uri): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(uri.toString().toByteArray())
