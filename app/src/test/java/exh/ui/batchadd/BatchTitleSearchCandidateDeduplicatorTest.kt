@@ -5,12 +5,12 @@ import org.junit.jupiter.api.Test
 
 class BatchTitleSearchCandidateDeduplicatorTest {
     @Test
-    fun `same title across sources appears once and prefers the exact title match`() {
+    fun `one result is kept per normalized input title even when sources name it differently`() {
         val candidates = listOf(
             candidate(
                 id = "first-source",
-                inputTitle = "Cafe Girl",
-                matchedTitle = "Café-Girl!",
+                inputTitle = "Café-Girl! [English]",
+                matchedTitle = "Café Girl — Official English Release",
                 sourceName = "A Source",
                 url = "https://a.example/cafe-girl",
             ),
@@ -35,6 +35,41 @@ class BatchTitleSearchCandidateDeduplicatorTest {
         assertEquals(2, result.size)
         assertEquals(
             listOf("https://z.example/cafe-girl", "https://a.example/cafe-girl-2"),
+            result.map { it.url },
+        )
+    }
+
+    @Test
+    fun `same matched title from different input rows is kept once`() {
+        val candidates = listOf(
+            candidate(
+                id = "alias-search",
+                inputTitle = "Cafe Girl English",
+                matchedTitle = "Cafe Girl",
+                sourceName = "A Source",
+                url = "https://a.example/cafe-girl",
+            ),
+            candidate(
+                id = "exact-search",
+                inputTitle = "Cafe Girl",
+                matchedTitle = "Cafe Girl",
+                sourceName = "Z Source",
+                url = "https://z.example/cafe-girl",
+            ),
+            candidate(
+                id = "other-title",
+                inputTitle = "Another Book",
+                matchedTitle = "Another Book",
+                sourceName = "A Source",
+                url = "https://a.example/another-book",
+            ),
+        )
+
+        val result = TitleSearchCandidateDeduplicator.collapse(candidates)
+
+        assertEquals(2, result.size)
+        assertEquals(
+            listOf("https://z.example/cafe-girl", "https://a.example/another-book"),
             result.map { it.url },
         )
     }

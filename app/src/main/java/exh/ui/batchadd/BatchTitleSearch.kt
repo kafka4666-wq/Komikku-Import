@@ -82,6 +82,7 @@ import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import android.util.AtomicFile
 import android.util.Base64
 import coil3.compose.AsyncImage
 
@@ -131,7 +132,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    Text("Titles are cleaned before searching. Matches with the same title across sources are grouped and shown once; review the representative source and title before selecting.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Each input title shows at most one result across all sources. Exact title matches are preferred; review the selected representative before adding.", style = MaterialTheme.typography.bodyMedium)
                 }
                 if (running) item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -199,16 +200,50 @@ data class TitleSearchCandidate(
 
 internal object TitleSearchCandidateDeduplicator {
     fun collapse(candidates: List<TitleSearchCandidate>): List<TitleSearchCandidate> {
-        val byTitle = linkedMapOf<String, TitleSearchCandidate>()
-        candidates.forEach { candidate ->
-            val titleKey = normalize(candidate.matchedTitle)
-            val key = titleKey.ifEmpty { "url:${candidate.url}" }
-            val previous = byTitle[key]
-            if (previous == null || isPreferred(candidate, previous)) {
-                byTitle[key] = candidate
+        val parent = mutableMapOf<String, String>()
+        fun find(key: String): String {
+            val current = parent[key] ?: run {
+                parent[key] = key
+                return key
+            }
+            if (current == key) return key
+            val root = find(current)
+            parent[key] = root
+            return root
+        }
+        fun union(left: String, right: String) {
+            val leftRoot = find(left)
+            val rightRoot = find(right)
+            if (leftRoot != rightRoot) {
+                val root = minOf(leftRoot, rightRoot)
+                val child = maxOf(leftRoot, rightRoot)
+                parent[child] = root
             }
         }
-        return byTitle.values.toList()
+
+        val keysByCandidate = candidates.map { candidate ->
+            buildList {
+                normalize(candidate.inputTitle).takeIf(String::isNotEmpty)?.let { add("title:$it") }
+                normalize(candidate.matchedTitle).takeIf(String::isNotEmpty)?.let { add("title:$it") }
+                candidate.url.trim().trimEnd('/').takeIf(String::isNotEmpty)?.let { add("url:$it") }
+                if (isEmpty()) add("candidate:${candidate.id}")
+            }.distinct()
+        }
+        keysByCandidate.forEach { keys ->
+            val first = keys.first()
+            find(first)
+            keys.drop(1).forEach { union(first, it) }
+        }
+
+        val groups = linkedMapOf<String, MutableList<TitleSearchCandidate>>()
+        candidates.forEachIndexed { index, candidate ->
+            groups.getOrPut(find(keysByCandidate[index].first())) { mutableListOf() } += candidate
+        }
+        return groups.values.map { group ->
+            group.reduce { preferred, candidate ->
+                if (isPreferred(candidate, preferred)) candidate else preferred
+            }
+        }
     }
 
     private fun isPreferred(candidate: TitleSearchCandidate, current: TitleSearchCandidate): Boolean {
@@ -222,7 +257,7 @@ internal object TitleSearchCandidateDeduplicator {
     }
 
     private fun normalize(value: String): String = Normalizer
-        .normalize(value, Normalizer.Form.NFKD)
+        .normalize(value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " "), Normalizer.Form.NFKD)
         .lowercase()
         .filter { it.isLetterOrDigit() }
 }
@@ -232,6 +267,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
     override suspend fun doWork(): Result {
         val resultDirectory = File(applicationContext.filesDir, "batch-title-search-${id}.result-rows")
+        val finalResultFile = File(applicationContext.filesDir, "batch-title-search-${id}.final-results")
         val titles = runCatching {
             inputData.getString(KEY_TITLES_FILE)?.let { File(it).readLines() }
                 ?: inputData.getString(KEY_URI)?.let(Uri::parse)?.let { uri ->
@@ -283,12 +319,37 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 }
             }.awaitAll()
         }
-        updateNotification(titles.size, titles.size, "Search complete · review matches in the app")
+        // Run once after every title task has finished and committed its checkpoint.
+        // Only this consolidated file is exposed to the screen and auto-import flow.
+        val uniqueTitleCount = writeConsolidatedResults(resultDirectory, finalResultFile)
+        updateNotification(titles.size, titles.size, "Search complete · $uniqueTitleCount unique title matches")
         if (inputData.getBoolean(KEY_AUTO_IMPORT, false)) {
-            val urls = readResults(applicationContext, resultDirectory.absolutePath).map { it.url }.distinct()
+            val urls = readResults(applicationContext, finalResultFile.absolutePath).map { it.url }.distinct()
             if (urls.isNotEmpty()) runCatching { BatchImportJob.startTitleMatches(applicationContext, urls) }
         }
-        return Result.success(workDataOf(KEY_RESULT_FILE to resultDirectory.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
+        return Result.success(workDataOf(KEY_RESULT_FILE to finalResultFile.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
+    }
+
+    private fun writeConsolidatedResults(resultDirectory: File, finalResultFile: File): Int {
+        val candidates = resultDirectory.listFiles().orEmpty()
+            .filter { it.isFile && it.name.endsWith(".row") }
+            .sortedBy { it.name }
+            .flatMap { it.readLines() }
+            .mapNotNull(::decode)
+            .distinctBy { it.id }
+        val uniqueCandidates = TitleSearchCandidateDeduplicator.collapse(candidates)
+        val atomicFile = AtomicFile(finalResultFile)
+        val output = atomicFile.startWrite()
+        try {
+            val payload = uniqueCandidates.joinToString("\n") { encode(it) }
+            if (payload.isNotEmpty()) output.write(payload.toByteArray(Charsets.UTF_8))
+            output.fd.sync()
+            atomicFile.finishWrite(output)
+        } catch (error: Throwable) {
+            atomicFile.failWrite(output)
+            throw error
+        }
+        return uniqueCandidates.size
     }
     private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
         return try {
