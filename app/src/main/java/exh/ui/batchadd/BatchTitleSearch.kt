@@ -63,15 +63,14 @@ import eu.kanade.tachiyomi.util.system.workManager
 import exh.log.xLogE
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.selects.select
-import kotlinx.coroutines.selects.onAwait
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
@@ -397,26 +396,22 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     ): List<TitleSearchCandidate> {
         for (sourceBatch in sources.chunked(sourcesPerBatch)) {
             val batchMatch = supervisorScope {
+                val results = Channel<List<TitleSearchCandidate>>(capacity = sourceBatch.size)
                 val pending = sourceBatch.map { source ->
-                    async {
-                        searchSource(
+                    launch {
+                        results.send(searchSource(
                             source,
                             title,
                             globalSemaphore,
                             backgroundSemaphore,
                             perSourceSemaphores.getValue(source.id),
                             backgroundPerSourceSemaphores.getValue(source.id),
-                        )
+                        ))
                     }
                 }.toMutableList()
                 try {
-                    while (pending.isNotEmpty()) {
-                        val (finished, candidates) = select<Pair<Deferred<List<TitleSearchCandidate>>, List<TitleSearchCandidate>>> {
-                            pending.forEach { request ->
-                                request.onAwait { result -> request to result }
-                            }
-                        }
-                        pending.remove(finished)
+                    repeat(sourceBatch.size) {
+                        val candidates = results.receive()
                         if (candidates.isNotEmpty()) {
                             pending.forEach { it.cancel() }
                             return@supervisorScope candidates
@@ -425,6 +420,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                     emptyList()
                 } finally {
                     pending.forEach { it.cancel() }
+                    results.close()
                 }
             }
             if (batchMatch.isNotEmpty()) return batchMatch
