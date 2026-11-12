@@ -288,7 +288,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .forEach { it.delete() }
         fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
         val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
-        val semaphore = Semaphore(12)
+        val titleSemaphore = Semaphore(MAX_PARALLEL_TITLES)
+        val sourceSearchSemaphore = Semaphore(MAX_PARALLEL_SOURCE_SEARCHES)
+        val perSourceSemaphores = sources.associate { it.id to Semaphore(MAX_PARALLEL_PER_SOURCE) }
         setForeground(getForegroundInfo())
         setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))
         updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources")
@@ -296,26 +298,32 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             titles.mapIndexedNotNull { index, title ->
                 if (rowFile(index).isFile) return@mapIndexedNotNull null
                 async(Dispatchers.IO) {
-                    awaitNotPaused()
-                    val candidates = coroutineScope {
-                        sources.map { source -> async { searchSource(source, title, semaphore) } }.awaitAll().flatten()
-                    }
-                    val outputFile = rowFile(index)
-                    val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
-                    val rows = candidates.distinctBy { it.url }.take(8).joinToString("\n") { encode(it) }
-                    try {
-                        FileOutputStream(tempFile).use { stream ->
-                            if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
-                            stream.fd.sync()
+                    titleSemaphore.withPermit {
+                        awaitNotPaused()
+                        val candidates = coroutineScope {
+                            sources.map { source ->
+                                async {
+                                    searchSource(source, title, sourceSearchSemaphore, perSourceSemaphores.getValue(source.id))
+                                }
+                            }.awaitAll().flatten()
                         }
-                        if (!tempFile.renameTo(outputFile)) throw IOException("Unable to commit title-search checkpoint ${outputFile.name}")
-                    } catch (error: Throwable) {
-                        tempFile.delete()
-                        throw error
+                        val outputFile = rowFile(index)
+                        val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
+                        val rows = candidates.distinctBy { it.url }.take(8).joinToString("\n") { encode(it) }
+                        try {
+                            FileOutputStream(tempFile).use { stream ->
+                                if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
+                                stream.fd.sync()
+                            }
+                            if (!tempFile.renameTo(outputFile)) throw IOException("Unable to commit title-search checkpoint ${outputFile.name}")
+                        } catch (error: Throwable) {
+                            tempFile.delete()
+                            throw error
+                        }
+                        val done = completed.incrementAndGet()
+                        setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
+                        updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)} · up to $MAX_PARALLEL_SOURCE_SEARCHES source requests")
                     }
-                    val done = completed.incrementAndGet()
-                    setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
-                    updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
                 }
             }.awaitAll()
         }
@@ -351,10 +359,19 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }
         return uniqueCandidates.size
     }
-    private suspend fun searchSource(source: Source, title: String, semaphore: Semaphore): List<TitleSearchCandidate> {
+    private suspend fun searchSource(
+        source: Source,
+        title: String,
+        globalSemaphore: Semaphore,
+        sourceSemaphore: Semaphore,
+    ): List<TitleSearchCandidate> {
         return try {
             awaitNotPaused()
-            val page = semaphore.withPermit { withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) } }
+            val page = sourceSemaphore.withPermit {
+                globalSemaphore.withPermit {
+                    withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
+                }
+            }
                 ?: return emptyList()
             page.mangas.map { manga ->
                 val local = manga.toDomainManga(source.id)
@@ -427,6 +444,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
+        private const val MAX_PARALLEL_TITLES = 12
+        private const val MAX_PARALLEL_SOURCE_SEARCHES = 24
+        private const val MAX_PARALLEL_PER_SOURCE = 2
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
