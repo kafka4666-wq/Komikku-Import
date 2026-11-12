@@ -2,9 +2,11 @@ package exh.ui.batchadd
 
 import android.content.Context
 import android.content.Intent
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.content.pm.ServiceInfo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -60,11 +62,16 @@ import eu.kanade.tachiyomi.util.system.notificationBuilder
 import eu.kanade.tachiyomi.util.system.workManager
 import exh.log.xLogE
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.selects.onAwait
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
@@ -132,7 +139,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    Text("Each input title shows at most one result across all sources. Exact title matches are preferred; review the selected representative before adding.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Only exact title matches after case, accent, punctuation, and bracket-note normalization are accepted. Search stops at the first matching source; review it before adding.", style = MaterialTheme.typography.bodyMedium)
                 }
                 if (running) item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -262,6 +269,20 @@ internal object TitleSearchCandidateDeduplicator {
         .filter { it.isLetterOrDigit() }
 }
 
+internal object TitleSearchMatchQuality {
+    fun isConfidentMatch(query: String, resultTitle: String): Boolean {
+        val queryKey = normalize(query)
+        val resultKey = normalize(resultTitle)
+        return queryKey.isNotEmpty() && queryKey == resultKey
+    }
+
+    private fun normalize(value: String): String = Normalizer
+        .normalize(value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " "), Normalizer.Form.NFKD)
+        .lowercase()
+        .filter(Char::isLetterOrDigit)
+
+}
+
 class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
@@ -288,25 +309,30 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .forEach { it.delete() }
         fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
         val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
-        val titleSemaphore = Semaphore(MAX_PARALLEL_TITLES)
-        val sourceSearchSemaphore = Semaphore(MAX_PARALLEL_SOURCE_SEARCHES)
-        val perSourceSemaphores = sources.associate { it.id to Semaphore(MAX_PARALLEL_PER_SOURCE) }
+        val limits = searchConcurrencyLimits()
+        val titleSemaphore = Semaphore(limits.parallelTitles)
+        val sourceSearchSemaphore = Semaphore(FOREGROUND_GLOBAL_SOURCE_SEARCHES)
+        val backgroundSourceSearchSemaphore = Semaphore(BACKGROUND_GLOBAL_SOURCE_SEARCHES)
+        val perSourceSemaphores = sources.associate { it.id to Semaphore(FOREGROUND_PER_SOURCE) }
+        val backgroundPerSourceSemaphores = sources.associate { it.id to Semaphore(BACKGROUND_PER_SOURCE) }
         setForeground(getForegroundInfo())
         setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))
-        updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources")
+        updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources · ${limits.globalSourceSearches} concurrent requests")
         coroutineScope {
             titles.mapIndexedNotNull { index, title ->
                 if (rowFile(index).isFile) return@mapIndexedNotNull null
                 async(Dispatchers.IO) {
                     titleSemaphore.withPermit {
                         awaitNotPaused()
-                        val candidates = coroutineScope {
-                            sources.map { source ->
-                                async {
-                                    searchSource(source, title, sourceSearchSemaphore, perSourceSemaphores.getValue(source.id))
-                                }
-                            }.awaitAll().flatten()
-                        }
+                        val candidates = searchTitleUntilFirstSourceMatch(
+                            title,
+                            sources,
+                            sourceSearchSemaphore,
+                            backgroundSourceSearchSemaphore,
+                            perSourceSemaphores,
+                            backgroundPerSourceSemaphores,
+                            searchConcurrencyLimits().sourcesPerTitleBatch,
+                        )
                         val outputFile = rowFile(index)
                         val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
                         val rows = candidates.distinctBy { it.url }.take(8).joinToString("\n") { encode(it) }
@@ -322,7 +348,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                         }
                         val done = completed.incrementAndGet()
                         setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
-                        updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)} · up to $MAX_PARALLEL_SOURCE_SEARCHES source requests")
+                        updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
                     }
                 }
             }.awaitAll()
@@ -359,21 +385,111 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }
         return uniqueCandidates.size
     }
+
+    private suspend fun searchTitleUntilFirstSourceMatch(
+        title: String,
+        sources: List<HttpSource>,
+        globalSemaphore: Semaphore,
+        backgroundSemaphore: Semaphore,
+        perSourceSemaphores: Map<Long, Semaphore>,
+        backgroundPerSourceSemaphores: Map<Long, Semaphore>,
+        sourcesPerBatch: Int,
+    ): List<TitleSearchCandidate> {
+        for (sourceBatch in sources.chunked(sourcesPerBatch)) {
+            val batchMatch = supervisorScope {
+                val pending = sourceBatch.map { source ->
+                    async {
+                        searchSource(
+                            source,
+                            title,
+                            globalSemaphore,
+                            backgroundSemaphore,
+                            perSourceSemaphores.getValue(source.id),
+                            backgroundPerSourceSemaphores.getValue(source.id),
+                        )
+                    }
+                }.toMutableList()
+                try {
+                    while (pending.isNotEmpty()) {
+                        val (finished, candidates) = select<Pair<Deferred<List<TitleSearchCandidate>>, List<TitleSearchCandidate>>> {
+                            pending.forEach { request ->
+                                request.onAwait { result -> request to result }
+                            }
+                        }
+                        pending.remove(finished)
+                        if (candidates.isNotEmpty()) {
+                            pending.forEach { it.cancel() }
+                            return@supervisorScope candidates
+                        }
+                    }
+                    emptyList()
+                } finally {
+                    pending.forEach { it.cancel() }
+                }
+            }
+            if (batchMatch.isNotEmpty()) return batchMatch
+        }
+        return emptyList()
+    }
+
+    private data class SearchConcurrencyLimits(
+        val parallelTitles: Int,
+        val globalSourceSearches: Int,
+        val sourcesPerTitleBatch: Int,
+    )
+
+    /** Use a lighter profile while another app is foregrounded, battery saver is on,
+     * or Android reports moderate-or-higher thermal pressure. */
+    private fun searchConcurrencyLimits(): SearchConcurrencyLimits {
+        val processImportance = runCatching {
+            ActivityManager.RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
+        }.getOrDefault(ActivityManager.RunningAppProcessInfo.IMPORTANCE_BACKGROUND)
+        val appIsForeground = processImportance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        val powerManager = applicationContext.getSystemService(PowerManager::class.java)
+        val powerSave = powerManager?.isPowerSaveMode == true
+        val thermallyConstrained = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && runCatching {
+            (powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE) >= PowerManager.THERMAL_STATUS_MODERATE
+        }.getOrDefault(true)
+        return if (!appIsForeground || powerSave || thermallyConstrained) {
+            SearchConcurrencyLimits(
+                parallelTitles = BACKGROUND_PARALLEL_TITLES,
+                globalSourceSearches = BACKGROUND_GLOBAL_SOURCE_SEARCHES,
+                sourcesPerTitleBatch = BACKGROUND_SOURCES_PER_TITLE_BATCH,
+            )
+        } else {
+            SearchConcurrencyLimits(
+                parallelTitles = FOREGROUND_PARALLEL_TITLES,
+                globalSourceSearches = FOREGROUND_GLOBAL_SOURCE_SEARCHES,
+                sourcesPerTitleBatch = FOREGROUND_SOURCES_PER_TITLE_BATCH,
+            )
+        }
+    }
+
     private suspend fun searchSource(
         source: Source,
         title: String,
         globalSemaphore: Semaphore,
+        backgroundSemaphore: Semaphore,
         sourceSemaphore: Semaphore,
+        backgroundSourceSemaphore: Semaphore,
     ): List<TitleSearchCandidate> {
         return try {
             awaitNotPaused()
-            val page = sourceSemaphore.withPermit {
-                globalSemaphore.withPermit {
-                    withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
+            suspend fun query() =
+                sourceSemaphore.withPermit {
+                    globalSemaphore.withPermit {
+                        withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
+                    }
                 }
+            val page = if (searchConcurrencyLimits().globalSourceSearches == BACKGROUND_GLOBAL_SOURCE_SEARCHES) {
+                backgroundSourceSemaphore.withPermit {
+                    backgroundSemaphore.withPermit { query() }
+                }
+            } else {
+                query()
             }
                 ?: return emptyList()
-            page.mangas.map { manga ->
+            page.mangas.filter { manga -> TitleSearchMatchQuality.isConfidentMatch(title, manga.title) }.map { manga ->
                 val local = manga.toDomainManga(source.id)
                 TitleSearchCandidate(
                     id = "${title.hashCode()}-${source.id}-${manga.url.hashCode()}",
@@ -384,6 +500,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                     thumbnailUrl = local.thumbnailUrl?.let { absoluteUrl(source, it) },
                 )
             }
+        } catch (cancel: CancellationException) {
+            throw cancel
         } catch (_: Exception) {
             emptyList()
         }
@@ -444,9 +562,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
-        private const val MAX_PARALLEL_TITLES = 12
-        private const val MAX_PARALLEL_SOURCE_SEARCHES = 24
-        private const val MAX_PARALLEL_PER_SOURCE = 2
+        private const val BACKGROUND_PARALLEL_TITLES = 4
+        private const val BACKGROUND_GLOBAL_SOURCE_SEARCHES = 6
+        private const val BACKGROUND_PER_SOURCE = 1
+        private const val BACKGROUND_SOURCES_PER_TITLE_BATCH = 2
+        private const val FOREGROUND_PARALLEL_TITLES = 8
+        private const val FOREGROUND_GLOBAL_SOURCE_SEARCHES = 16
+        private const val FOREGROUND_PER_SOURCE = 2
+        private const val FOREGROUND_SOURCES_PER_TITLE_BATCH = 4
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
