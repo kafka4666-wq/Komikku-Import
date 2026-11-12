@@ -31,8 +31,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -42,6 +45,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.URLEncoder
 import java.net.URLDecoder
 import java.util.UUID
@@ -88,20 +92,27 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
                         if (isStopped) return@withPermit null
                         awaitNotPaused()
                         var outcome: ReverseOutcome? = null
+                        var safeToJournal = false
                         try {
-                            outcome = withTimeoutOrNull(60_000L) { searchYandex(uri) }
+                            outcome = searchYandexWithTransientRetry(uri)
+                            safeToJournal = true
                         } catch (cancel: CancellationException) {
                             throw cancel
                         } catch (_: Throwable) {
                             // A Yandex block, timeout, malformed result, or unreadable image skips only this image.
+                            safeToJournal = true
                         } finally {
-                            appendJournal(journalFile, ReverseOutcome(uri.toString(), outcome?.directUrl, outcome?.title, outcome?.matchedImage))
-                            val done = completed.incrementAndGet()
-                            if (outcome?.title != null) foundCount.incrementAndGet()
-                            val phase = "Yandex searched $done/${images.size} images"
-                            val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_PAUSED to isPaused(applicationContext), KEY_REVIEW_FILE to journalFile.absolutePath)
-                            safeSetProgress(progress)
-                            safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} verified matches", foundCount.get())
+                            // WorkManager cancellation is not a search result. Leave this URI
+                            // absent from the journal so a resumed worker will try it again.
+                            if (safeToJournal && !isStopped) {
+                                appendJournal(journalFile, ReverseOutcome(uri.toString(), outcome?.directUrl, outcome?.title, outcome?.matchedImage))
+                                val done = completed.incrementAndGet()
+                                if (outcome?.title != null) foundCount.incrementAndGet()
+                                val phase = "Yandex searched $done/${images.size} images"
+                                val progress = workDataOf(KEY_PHASE to phase, KEY_COMPLETED to done, KEY_TOTAL to images.size, KEY_FOUND to foundCount.get(), KEY_PAUSED to isPaused(applicationContext), KEY_REVIEW_FILE to journalFile.absolutePath)
+                                safeSetProgress(progress)
+                                safeUpdateNotification(done, images.size, "$phase · ${foundCount.get()} verified matches", foundCount.get())
+                            }
                         }
                         outcome
                     }
@@ -134,6 +145,24 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         file.appendText(outcome.toJson().toString() + "\n")
     }
 
+    /** A genuine no-match is final; only timeouts and transport/server failures retry. */
+    private suspend fun searchYandexWithTransientRetry(uri: Uri): ReverseOutcome? {
+        repeat(MAX_ATTEMPTS_PER_IMAGE) { attempt ->
+            try {
+                return withTimeout(SEARCH_ATTEMPT_TIMEOUT_MS) { searchYandex(uri) }
+            } catch (timeout: TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (attempt == MAX_ATTEMPTS_PER_IMAGE - 1) return null
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: IOException) {
+                if (attempt == MAX_ATTEMPTS_PER_IMAGE - 1) return null
+            }
+            delay(TRANSIENT_RETRY_DELAY_MS)
+        }
+        return null
+    }
+
     private suspend fun safeSetProgress(data: androidx.work.Data) { runCatching { setProgress(data) } }
     private fun safeUpdateNotification(completed: Int, total: Int, detail: String, found: Int) { runCatching { updateNotification(completed, total, detail, found) } }
     private suspend fun awaitNotPaused() {
@@ -146,8 +175,45 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
     }
 
     private suspend fun searchYandex(uri: Uri): ReverseOutcome? = withContext(Dispatchers.IO) {
-        val bytes = applicationContext.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+        var bytes = applicationContext.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
         if (bytes.isEmpty()) return@withContext null
+        val source = decodeForComparison(bytes) ?: return@withContext null
+        val sourceSignature = try {
+            imageSignature(source)
+        } finally {
+            source.recycle()
+        }
+        val uploadJson = uploadImageToYandex(bytes) ?: return@withContext null
+        // The multipart body is out of scope now; don't retain a full-resolution photo
+        // while waiting for Yandex's result page and remote candidate downloads.
+        bytes = ByteArray(0)
+        val query = extractYandexQuery(uploadJson) ?: return@withContext null
+        val resultUrl = "https://yandex.com/images/search?$query"
+        val resultHtml = client.newCall(Request.Builder().url(resultUrl).header("User-Agent", USER_AGENT).build()).execute().use { response ->
+            if (response.isSuccessful) response.body.string()
+            else if (response.code == HTTP_TOO_MANY_REQUESTS || response.code >= 500) throw IOException("Transient Yandex result response ${response.code}")
+            else return@withContext null
+        }
+        // Yandex can repeat one image under several site/title records. Fetch each
+        // unique source image only once, while preserving the full candidate list.
+        val candidates = parseYandexSites(resultHtml).distinctBy { candidate ->
+            candidate.originalImage?.let(::normalizedImageUrl) ?: "${candidate.pageUrl}|${candidate.title}"
+        }
+        val match = candidates.asSequence().mapNotNull { candidate ->
+            val imageUrl = candidate.originalImage ?: return@mapNotNull null
+            val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
+            val matches = try {
+                sameImage(sourceSignature, remote)
+            } finally {
+                remote.recycle()
+            }
+            if (!matches) return@mapNotNull null
+            VerifiedYandexResult(uri.toString(), canonicalGallery(candidate.pageUrl), candidate.title, imageUrl)
+        }.firstOrNull() ?: return@withContext null
+        ReverseOutcome(match.originalUri, match.galleryUrl, match.title, match.matchedImage)
+    }
+
+    private fun uploadImageToYandex(bytes: ByteArray): String? {
         val requestJson = "{\"blocks\":[{\"block\":\"b-page_type_search-by-image__link\"}]}"
         val uploadUrl = "https://yandex.com/images/search?rpt=imageview&format=json&request=${URLEncoder.encode(requestJson, "UTF-8")}"
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -155,21 +221,11 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
             .addFormDataPart("image_content", "")
             .build()
         val upload = Request.Builder().url(uploadUrl).post(body).header("User-Agent", USER_AGENT).build()
-        val uploadJson = client.newCall(upload).execute().use { response -> if (!response.isSuccessful) return@withContext null else response.body.string() }
-        val query = extractYandexQuery(uploadJson) ?: return@withContext null
-        val resultUrl = "https://yandex.com/images/search?$query"
-        val resultHtml = client.newCall(Request.Builder().url(resultUrl).header("User-Agent", USER_AGENT).build()).execute().use { response ->
-            if (!response.isSuccessful) return@withContext null else response.body.string()
+        return client.newCall(upload).execute().use { response ->
+            if (response.isSuccessful) response.body.string()
+            else if (response.code == HTTP_TOO_MANY_REQUESTS || response.code >= 500) throw IOException("Transient Yandex upload response ${response.code}")
+            else null
         }
-        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
-        val candidates = parseYandexSites(resultHtml)
-        val match = candidates.asSequence().mapNotNull { candidate ->
-            val imageUrl = candidate.originalImage ?: return@mapNotNull null
-            val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
-            if (!sameImage(source, remote)) return@mapNotNull null
-            VerifiedYandexResult(uri.toString(), canonicalGallery(candidate.pageUrl), candidate.title, imageUrl)
-        }.firstOrNull() ?: return@withContext null
-        ReverseOutcome(match.originalUri, match.galleryUrl, match.title, match.matchedImage)
     }
 
     private fun extractYandexQuery(json: String): String? = runCatching {
@@ -244,35 +300,60 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         return if (host.contains("exhentai")) "https://exhentai.org/g/$id/" else "https://nhentai.net/g/$id/"
     }
 
-    private fun downloadBitmap(url: String): Bitmap? = runCatching {
+    private fun downloadBitmap(url: String): Bitmap? {
         val safeUrl = if (url.startsWith("//")) "https:$url" else url
-        client.newCall(Request.Builder().url(safeUrl).header("User-Agent", USER_AGENT).build()).execute().use { response ->
-            if (!response.isSuccessful) null else response.body.bytes().let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        val request = runCatching { Request.Builder().url(safeUrl).header("User-Agent", USER_AGENT).build() }.getOrNull() ?: return null
+        return client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) response.body.bytes().let(::decodeForComparison)
+            else if (response.code == HTTP_TOO_MANY_REQUESTS || response.code >= 500) throw IOException("Transient Yandex image response ${response.code}")
+            else null
         }
-    }.getOrNull()
+    }
+
+    /** Decode only enough pixels for the 32x32 perceptual check; huge phone images
+     * otherwise waste CPU and memory despite being immediately scaled down. */
+    private fun decodeForComparison(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sampleSize > COMPARISON_DECODE_MAX_DIMENSION) {
+            sampleSize *= 2
+        }
+        return BitmapFactory.decodeByteArray(
+            bytes,
+            0,
+            bytes.size,
+            BitmapFactory.Options().apply { inSampleSize = sampleSize },
+        )
+    }
 
     /** Strict normalized pixel comparison: rejects visually similar but different pages. */
-    private fun sameImage(a: Bitmap, b: Bitmap): Boolean {
+    private data class ImageSignature(val luminance: DoubleArray, val mean: Double, val bits: BooleanArray)
+
+    private fun imageSignature(bitmap: Bitmap): ImageSignature {
         val size = 32
-        val aa = Bitmap.createScaledBitmap(a, size, size, true)
-        val bb = Bitmap.createScaledBitmap(b, size, size, true)
+        val scaled = Bitmap.createScaledBitmap(bitmap, size, size, true)
+        val pixels = IntArray(size * size)
+        scaled.getPixels(pixels, 0, size, 0, 0, size, size)
+        if (scaled !== bitmap) scaled.recycle()
+        val values = DoubleArray(pixels.size) { luminance(pixels[it]) }
+        val mean = values.average()
+        val bits = BooleanArray(values.size) { values[it] > mean }
+        return ImageSignature(values, mean, bits)
+    }
+
+    private fun sameImage(source: ImageSignature, candidate: Bitmap): Boolean {
+        val other = imageSignature(candidate)
         var error = 0.0
         var hashDistance = 0
-        val av = IntArray(size * size)
-        val bv = IntArray(size * size)
-        aa.getPixels(av, 0, size, 0, 0, size, size)
-        bb.getPixels(bv, 0, size, 0, 0, size, size)
-        var meanA = 0.0
-        var meanB = 0.0
-        for (i in av.indices) { meanA += luminance(av[i]); meanB += luminance(bv[i]) }
-        meanA /= av.size; meanB /= bv.size
-        for (i in av.indices) {
-            val da = luminance(av[i]) - meanA
-            val db = luminance(bv[i]) - meanB
+        for (i in source.luminance.indices) {
+            val da = source.luminance[i] - source.mean
+            val db = other.luminance[i] - other.mean
             error += (da - db) * (da - db)
-            if ((luminance(av[i]) > meanA) != (luminance(bv[i]) > meanB)) hashDistance++
+            if (source.bits[i] != other.bits[i]) hashDistance++
         }
-        return error / av.size / (255.0 * 255.0) <= MAX_NORMALIZED_ERROR && hashDistance <= MAX_HASH_DISTANCE
+        return error / source.luminance.size / (255.0 * 255.0) <= MAX_NORMALIZED_ERROR && hashDistance <= MAX_HASH_DISTANCE
     }
 
     private fun luminance(pixel: Int): Double = 0.299 * Color.red(pixel) + 0.587 * Color.green(pixel) + 0.114 * Color.blue(pixel)
@@ -294,8 +375,9 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         fun activeWorkId(context: Context): UUID? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ACTIVE_WORK_ID, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-        private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 2; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
+        private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 4; private const val MAX_ATTEMPTS_PER_IMAGE = 2; private const val SEARCH_ATTEMPT_TIMEOUT_MS = 60_000L; private const val TRANSIENT_RETRY_DELAY_MS = 2_000L; private const val HTTP_TOO_MANY_REQUESTS = 429; private const val COMPARISON_DECODE_MAX_DIMENSION = 512; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
+        private fun normalizedImageUrl(url: String): String = url.substringBefore('#').trim()
         fun enqueue(context: Context, selections: List<Uri>): UUID { setPaused(context, false); val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_WORK_ID, id.toString()).apply(); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
     }
     private data class ReverseOutcome(
