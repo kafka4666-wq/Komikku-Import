@@ -67,7 +67,9 @@ jobs:
           grep -q 'loadPageForMerge' app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
           grep -q 'withContext(Dispatchers.IO)' app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           grep -q 'appendJournal' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
-          grep -q 'MAX_PARALLEL = 4' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          grep -q 'MAX_PARALLEL = 8' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          grep -q 'MAX_PARALLEL_CANDIDATE_IMAGES = 8' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          grep -q 'findVerifiedCandidate' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           grep -q 'searchYandexWithTransientRetry' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           grep -q 'safeToJournal && !isStopped' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           grep -q 'decodeForComparison' app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
@@ -208,8 +210,8 @@ jobs:
           ! grep -R -Fq "Duplicate review is non-destructive" app/src/main/java || { echo "stale duplicate-review stub detected"; exit 1; }
           ! grep -R -Fq "onOpenLibrary =" app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt || { echo "stale MoreTab callback detected"; exit 1; }
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 122/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.11"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 123/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.12"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           # Upstream debug builds append .dev and the commit count. Clear both so
           # this update-compatible APK has the exact installed-app identity.
@@ -218,8 +220,8 @@ jobs:
           grep -q 'applicationIdSuffix = ""' app/build.gradle.kts
           grep -q 'versionNameSuffix = ""' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 122' app/build.gradle.kts
-          grep -q 'versionName = "1.15.11' app/build.gradle.kts
+          grep -q 'versionCode = 123' app/build.gradle.kts
+          grep -q 'versionName = "1.15.12' app/build.gradle.kts
           grep -q 'android:largeHeap="true"' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<manifest[^>]*>\n)#$1    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n#' app/src/main/AndroidManifest.xml
           perl -0pi -e 's#(<activity\n\s+android:name="\.ui\.main\.MainActivity"[^>]*?)>#${1}\n            android:alwaysRetainTaskState="true">#s' app/src/main/AndroidManifest.xml
@@ -372,14 +374,14 @@ jobs:
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupPermissionActivity' /tmp/komikku-apk-manifest.txt
           grep -Fq 'eu.kanade.tachiyomi.ui.dictionary.ScreenLookupService' /tmp/komikku-apk-manifest.txt
           grep -Eq 'android:foregroundServiceType\([^)]*\)=0x40000001' /tmp/komikku-apk-manifest.txt
-          grep -E "package: name='com.manus.komikku' versionCode='122' versionName='1.15.11'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='123' versionName='1.15.12'" /tmp/komikku-badging.txt
           grep -q "application-label:'Komikku'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.11-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.12-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30

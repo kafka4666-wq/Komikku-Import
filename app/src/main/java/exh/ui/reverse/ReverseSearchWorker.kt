@@ -28,6 +28,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -55,6 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Yandex-only reverse search. Imports only a canonical nH/eH page whose returned
  * source image passes a strict perceptual comparison against the selected image. */
 class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+    private val candidateImageGate = Semaphore(MAX_PARALLEL_CANDIDATE_IMAGES)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
@@ -199,18 +201,33 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         val candidates = parseYandexSites(resultHtml).distinctBy { candidate ->
             candidate.originalImage?.let(::normalizedImageUrl) ?: "${candidate.pageUrl}|${candidate.title}"
         }
-        val match = candidates.asSequence().mapNotNull { candidate ->
-            val imageUrl = candidate.originalImage ?: return@mapNotNull null
-            val remote = downloadBitmap(imageUrl) ?: return@mapNotNull null
-            val matches = try {
-                sameImage(sourceSignature, remote)
-            } finally {
-                remote.recycle()
-            }
-            if (!matches) return@mapNotNull null
-            VerifiedYandexResult(uri.toString(), canonicalGallery(candidate.pageUrl), candidate.title, imageUrl)
-        }.firstOrNull() ?: return@withContext null
+        val match = findVerifiedCandidate(uri, sourceSignature, candidates) ?: return@withContext null
         ReverseOutcome(match.originalUri, match.galleryUrl, match.title, match.matchedImage)
+    }
+
+    private suspend fun findVerifiedCandidate(
+        uri: Uri,
+        sourceSignature: ImageSignature,
+        candidates: List<YandexSite>,
+    ): VerifiedYandexResult? = coroutineScope {
+        val candidatesWithImages = candidates.filter { !it.originalImage.isNullOrBlank() }
+        for (batch in candidatesWithImages.chunked(CANDIDATE_BATCH_SIZE)) {
+            val matches = batch.map { candidate ->
+                async(Dispatchers.IO) {
+                    val imageUrl = candidate.originalImage ?: return@async null
+                    val remote = candidateImageGate.withPermit { downloadBitmap(imageUrl) } ?: return@async null
+                    val same = try {
+                        sameImage(sourceSignature, remote)
+                    } finally {
+                        remote.recycle()
+                    }
+                    if (!same) return@async null
+                    VerifiedYandexResult(uri.toString(), canonicalGallery(candidate.pageUrl), candidate.title, imageUrl)
+                }
+            }.awaitAll()
+            matches.firstOrNull { it != null }?.let { return@coroutineScope it }
+        }
+        null
     }
 
     private fun uploadImageToYandex(bytes: ByteArray): String? {
@@ -375,7 +392,7 @@ class ReverseSearchWorker(appContext: Context, params: WorkerParameters) : Corou
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         fun activeWorkId(context: Context): UUID? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ACTIVE_WORK_ID, null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-        private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 4; private const val MAX_ATTEMPTS_PER_IMAGE = 2; private const val SEARCH_ATTEMPT_TIMEOUT_MS = 60_000L; private const val TRANSIENT_RETRY_DELAY_MS = 2_000L; private const val HTTP_TOO_MANY_REQUESTS = 429; private const val COMPARISON_DECODE_MAX_DIMENSION = 512; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
+        private const val MAX_IMAGES = 2_000; private const val MAX_PARALLEL = 8; private const val MAX_PARALLEL_CANDIDATE_IMAGES = 8; private const val CANDIDATE_BATCH_SIZE = 4; private const val MAX_ATTEMPTS_PER_IMAGE = 2; private const val SEARCH_ATTEMPT_TIMEOUT_MS = 60_000L; private const val TRANSIENT_RETRY_DELAY_MS = 2_000L; private const val HTTP_TOO_MANY_REQUESTS = 429; private const val COMPARISON_DECODE_MAX_DIMENSION = 512; private const val MAX_NORMALIZED_ERROR = 0.10; private const val MAX_HASH_DISTANCE = 130; private const val USER_AGENT = "Komikku Reverse Search/1.0"
         private val GALLERY_REGEX = Regex("(?:https?://)?((?:www\\.)?(?:nhentai\\.net|exhentai\\.org))/g/(\\d{5,8})", RegexOption.IGNORE_CASE)
         private fun normalizedImageUrl(url: String): String = url.substringBefore('#').trim()
         fun enqueue(context: Context, selections: List<Uri>): UUID { setPaused(context, false); val id = UUID.randomUUID(); val dir = File(context.filesDir, "reverse-search").apply { mkdirs() }; File(dir, "$id.selection").writeText(selections.joinToString("\\n")); context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_WORK_ID, id.toString()).apply(); val request = OneTimeWorkRequestBuilder<ReverseSearchWorker>().setId(id).setInputData(workDataOf(KEY_SELECTION to File(dir, "$id.selection").absolutePath)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build(); context.workManager.enqueueUniqueWork("komikku_reverse_search", androidx.work.ExistingWorkPolicy.REPLACE, request); return id }
