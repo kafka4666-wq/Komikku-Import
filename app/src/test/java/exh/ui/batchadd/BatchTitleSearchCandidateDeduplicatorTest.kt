@@ -1,11 +1,12 @@
 package exh.ui.batchadd
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class BatchTitleSearchCandidateDeduplicatorTest {
     @Test
-    fun `one result is kept per normalized input title even when sources name it differently`() {
+    fun `different input titles are never collapsed together`() {
         val candidates = listOf(
             candidate(
                 id = "first-source",
@@ -32,15 +33,15 @@ class BatchTitleSearchCandidateDeduplicatorTest {
 
         val result = TitleSearchCandidateDeduplicator.collapse(candidates)
 
-        assertEquals(2, result.size)
+        assertEquals(3, result.size)
         assertEquals(
-            listOf("https://z.example/cafe-girl", "https://a.example/cafe-girl-2"),
-            result.map { it.url },
+            setOf("https://a.example/cafe-girl", "https://z.example/cafe-girl", "https://a.example/cafe-girl-2"),
+            result.map { it.url }.toSet(),
         )
     }
 
     @Test
-    fun `same matched title from different input rows is kept once`() {
+    fun `same url for one input is kept once but different inputs stay separate`() {
         val candidates = listOf(
             candidate(
                 id = "alias-search",
@@ -57,6 +58,13 @@ class BatchTitleSearchCandidateDeduplicatorTest {
                 url = "https://z.example/cafe-girl",
             ),
             candidate(
+                id = "dup-url",
+                inputTitle = "Cafe Girl English",
+                matchedTitle = "Cafe Girl",
+                sourceName = "B Source",
+                url = "https://a.example/cafe-girl/",
+            ),
+            candidate(
                 id = "other-title",
                 inputTitle = "Another Book",
                 matchedTitle = "Another Book",
@@ -67,25 +75,39 @@ class BatchTitleSearchCandidateDeduplicatorTest {
 
         val result = TitleSearchCandidateDeduplicator.collapse(candidates)
 
-        assertEquals(2, result.size)
+        assertEquals(3, result.size)
         assertEquals(
-            listOf("https://z.example/cafe-girl", "https://a.example/another-book"),
-            result.map { it.url },
+            setOf("https://a.example/cafe-girl", "https://z.example/cafe-girl", "https://a.example/another-book"),
+            result.map { it.url.trimEnd('/') }.toSet(),
         )
     }
 
     @Test
-    fun `literal match wins and source order breaks ties consistently`() {
+    fun `best per input prefers exact then source order`() {
         val candidates = listOf(
             candidate("z-first", "Summer Girl", "Summer Girl", "Z Source", "https://z.example/summer"),
             candidate("a-second", "Summer Girl", "Summer Girl", "A Source", "https://a.example/summer"),
             candidate("decorated", "Summer Girl", "Summer Girl Official", "0 Source", "https://0.example/summer"),
         )
 
-        val result = TitleSearchCandidateDeduplicator.collapse(candidates)
+        val best = TitleSearchCandidateDeduplicator.bestPerInput(candidates)
 
-        assertEquals(1, result.size)
-        assertEquals("https://a.example/summer", result.single().url)
+        assertEquals(1, best.size)
+        assertEquals("https://a.example/summer", best.single().url)
+    }
+
+    @Test
+    fun `all unique sources for one input are kept after collapse`() {
+        val candidates = listOf(
+            candidate("a", "Summer Girl", "Summer Girl", "A Source", "https://a.example/summer"),
+            candidate("z", "Summer Girl", "Summer Girl", "Z Source", "https://z.example/summer"),
+            candidate("weak", "Summer Girl", "Totally Unrelated Hit", "M Source", "https://m.example/other"),
+        )
+
+        val result = TitleSearchCandidateDeduplicator.collapse(candidates)
+        assertEquals(3, result.size)
+        assertTrue(result.any { TitleMatchQuality.isExact(it) })
+        assertTrue(result.any { !TitleMatchQuality.isStrong(it) })
     }
 
     private fun candidate(
