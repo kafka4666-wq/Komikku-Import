@@ -2,7 +2,6 @@ package exh.ui.batchadd
 
 import android.content.Context
 import android.content.Intent
-import android.app.ActivityManager
 import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
@@ -293,10 +292,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
         val limits = searchConcurrencyLimits()
         val titleSemaphore = Semaphore(limits.parallelTitles)
-        val sourceSearchSemaphore = Semaphore(FOREGROUND_GLOBAL_SOURCE_SEARCHES)
-        val backgroundSourceSearchSemaphore = Semaphore(BACKGROUND_GLOBAL_SOURCE_SEARCHES)
-        val perSourceSemaphores = sources.associate { it.id to Semaphore(FOREGROUND_PER_SOURCE) }
-        val backgroundPerSourceSemaphores = sources.associate { it.id to Semaphore(BACKGROUND_PER_SOURCE) }
+        val sourceSearchSemaphore = Semaphore(limits.globalSourceSearches)
+        val perSourceSemaphores = sources.associate { it.id to Semaphore(limits.globalSourceSearches) }
         setForeground(getForegroundInfo())
         setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))
         updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources · ${limits.globalSourceSearches} concurrent requests")
@@ -314,9 +311,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                         source,
                                         title,
                                         sourceSearchSemaphore,
-                                        backgroundSourceSearchSemaphore,
                                         perSourceSemaphores.getValue(source.id),
-                                        backgroundPerSourceSemaphores.getValue(source.id),
                                     )
                                 }
                             }.awaitAll().flatten()
@@ -379,27 +374,22 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val globalSourceSearches: Int,
     )
 
-    /** Use a lighter profile while another app is foregrounded, battery saver is on,
-     * or Android reports moderate-or-higher thermal pressure. */
+    /** Restore the earlier 12-request speed profile; throttle only for power or thermal stress. */
     private fun searchConcurrencyLimits(): SearchConcurrencyLimits {
-        val processImportance = runCatching {
-            ActivityManager.RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
-        }.getOrDefault(ActivityManager.RunningAppProcessInfo.IMPORTANCE_BACKGROUND)
-        val appIsForeground = processImportance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
         val powerManager = applicationContext.getSystemService(PowerManager::class.java)
         val powerSave = powerManager?.isPowerSaveMode == true
         val thermallyConstrained = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && runCatching {
             (powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE) >= PowerManager.THERMAL_STATUS_MODERATE
         }.getOrDefault(true)
-        return if (!appIsForeground || powerSave || thermallyConstrained) {
+        return if (powerSave || thermallyConstrained) {
             SearchConcurrencyLimits(
-                parallelTitles = BACKGROUND_PARALLEL_TITLES,
-                globalSourceSearches = BACKGROUND_GLOBAL_SOURCE_SEARCHES,
+                parallelTitles = THROTTLED_PARALLEL_TITLES,
+                globalSourceSearches = THROTTLED_GLOBAL_SOURCE_SEARCHES,
             )
         } else {
             SearchConcurrencyLimits(
-                parallelTitles = FOREGROUND_PARALLEL_TITLES,
-                globalSourceSearches = FOREGROUND_GLOBAL_SOURCE_SEARCHES,
+                parallelTitles = NORMAL_PARALLEL_TITLES,
+                globalSourceSearches = NORMAL_GLOBAL_SOURCE_SEARCHES,
             )
         }
     }
@@ -408,9 +398,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         source: Source,
         title: String,
         globalSemaphore: Semaphore,
-        backgroundSemaphore: Semaphore,
         sourceSemaphore: Semaphore,
-        backgroundSourceSemaphore: Semaphore,
     ): List<TitleSearchCandidate> {
         return try {
             awaitNotPaused()
@@ -420,13 +408,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                         withTimeoutOrNull(15_000L) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
                     }
                 }
-            val page = if (searchConcurrencyLimits().globalSourceSearches == BACKGROUND_GLOBAL_SOURCE_SEARCHES) {
-                backgroundSourceSemaphore.withPermit {
-                    backgroundSemaphore.withPermit { query() }
-                }
-            } else {
-                query()
-            }
+            val page = query()
                 ?: return emptyList()
             page.mangas.map { manga ->
                 val local = manga.toDomainManga(source.id)
@@ -501,12 +483,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
-        private const val BACKGROUND_PARALLEL_TITLES = 4
-        private const val BACKGROUND_GLOBAL_SOURCE_SEARCHES = 6
-        private const val BACKGROUND_PER_SOURCE = 1
-        private const val FOREGROUND_PARALLEL_TITLES = 8
-        private const val FOREGROUND_GLOBAL_SOURCE_SEARCHES = 16
-        private const val FOREGROUND_PER_SOURCE = 2
+        private const val THROTTLED_PARALLEL_TITLES = 4
+        private const val THROTTLED_GLOBAL_SOURCE_SEARCHES = 6
+        private const val NORMAL_PARALLEL_TITLES = 12
+        private const val NORMAL_GLOBAL_SOURCE_SEARCHES = 12
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
