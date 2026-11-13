@@ -1,6 +1,8 @@
 package exh.ui.batchadd
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -15,6 +17,7 @@ import androidx.work.workDataOf
 import eu.kanade.domain.manga.interactor.UpdateManga
 import eu.kanade.domain.ui.KomikkuExtendedFeatureStore
 import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.ui.main.MainActivity
 import eu.kanade.tachiyomi.data.BatchImportStatus
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
@@ -271,6 +274,16 @@ class BatchImportJob(
             setOnlyAlertOnce(true)
             setAutoCancel(false)
             setSubText("${if (total == 0) 0 else completed * 100 / total}%")
+            setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    Notifications.ID_BATCH_IMPORT_PROGRESS,
+                    Intent(context, MainActivity::class.java).setAction(ACTION_OPEN_BATCH_IMPORT).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
             addAction(R.drawable.ic_pause_24dp, "Pause", NotificationReceiver.pauseBatchImportPendingBroadcast(context))
             addAction(R.drawable.ic_play_arrow_24dp, "Resume", NotificationReceiver.resumeBatchImportPendingBroadcast(context))
             addAction(R.drawable.ic_close_24dp, "Cancel", NotificationReceiver.cancelBatchImportPendingBroadcast(context))
@@ -429,6 +442,7 @@ class BatchImportJob(
             stop(context)
         }
 
+        const val ACTION_OPEN_BATCH_IMPORT = "com.manus.komikku.OPEN_BATCH_IMPORT"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
         const val KEY_ADDED = "added"

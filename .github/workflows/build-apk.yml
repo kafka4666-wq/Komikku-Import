@@ -60,6 +60,7 @@ jobs:
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
           cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/main/MainActivity.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryStateSnapshot.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryStateSnapshot.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt

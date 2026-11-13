@@ -93,6 +93,8 @@ import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
 import eu.kanade.tachiyomi.ui.browse.source.browse.BrowseSourceScreen
 import eu.kanade.tachiyomi.ui.browse.source.feed.SourceFeedScreen
 import eu.kanade.tachiyomi.ui.browse.source.globalsearch.GlobalSearchScreen
+import exh.ui.batchadd.BatchAddScreen
+import exh.ui.batchadd.BatchImportJob
 import exh.ui.batchadd.BatchTitleSearchScreen
 import exh.ui.batchadd.BatchTitleSearchWorker
 import exh.ui.reverse.ReverseSearchScreen
@@ -690,6 +692,11 @@ class MainActivity : BaseActivity() {
     }
 
     private fun handleIntentAction(intent: Intent, navigator: Navigator): Boolean {
+        if (intent.action == BatchImportJob.ACTION_OPEN_BATCH_IMPORT) {
+            navigator.popUntilRoot()
+            navigator.push(BatchAddScreen())
+            return true
+        }
         if (intent.action == BatchTitleSearchWorker.ACTION_OPEN_BATCH_TITLE_SEARCH) {
             val workId = intent.getStringExtra(BatchTitleSearchWorker.EXTRA_WORK_ID)
             navigator.popUntilRoot()
