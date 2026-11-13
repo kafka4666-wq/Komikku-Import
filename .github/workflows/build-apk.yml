@@ -47,7 +47,7 @@ jobs:
           mkdir -p app/src/main/java/eu/kanade/presentation/components
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
-          git -C "$GITHUB_WORKSPACE" show 253ca2b00bd5f87908f931fcbb5150bbc9340c83:app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt > app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          cp ../app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'NORMAL_GLOBAL_SOURCE_SEARCHES = 64' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
