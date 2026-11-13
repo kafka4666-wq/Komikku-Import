@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Check out overlay repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check out official Komikku source
         uses: actions/checkout@v4
         with:
@@ -45,7 +47,127 @@ jobs:
           mkdir -p app/src/main/java/eu/kanade/presentation/components
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
-          cp ../app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          # Restore last good BatchTitleSearch (strong/weak tabs + fast concurrency) then patch resume/found counts
+          git -C "$GITHUB_WORKSPACE" show 253ca2b00bd5f87908f931fcbb5150bbc9340c83:app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt \
+            > app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt')
+          t = p.read_text()
+          # Live found counts in UI
+          t = t.replace(
+              'if (total > 0) LinearProgressIndicator(progress = { completed.toFloat() / total }, modifier = Modifier.fillMaxWidth())\n                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {',
+              'if (total > 0) LinearProgressIndicator(progress = { completed.toFloat() / total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())\n'
+              '                        val found = progress?.getInt(BatchTitleSearchWorker.KEY_FOUND, 0) ?: 0\n'
+              '                        val foundStrong = progress?.getInt(BatchTitleSearchWorker.KEY_FOUND_STRONG, 0) ?: 0\n'
+              '                        Text("Found so far: $found matches · Strong $foundStrong", style = MaterialTheme.typography.titleSmall)\n'
+              '                        Text("Safe to leave the app — reopen the same title list to resume if it is killed.", style = MaterialTheme.typography.bodySmall)\n'
+              '                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {',
+              1,
+          )
+          # Content-key checkpoint dirs (survive work id changes)
+          t = t.replace(
+              'val resultDirectory = File(applicationContext.filesDir, "batch-title-search-${id}.result-rows")\n        val finalResultFile = File(applicationContext.filesDir, "batch-title-search-${id}.final-results")',
+              'val contentKey = inputData.getString(KEY_CONTENT_KEY) ?: id.toString()\n'
+              '        val resultDirectory = File(applicationContext.filesDir, "batch-title-search-$contentKey.result-rows")\n'
+              '        val finalResultFile = File(applicationContext.filesDir, "batch-title-search-$contentKey.final-results")',
+              1,
+          )
+          t = t.replace(
+              'val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })\n        val limits = searchConcurrencyLimits()',
+              'val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })\n'
+              '        val foundTotal = AtomicInteger(0)\n'
+              '        val foundStrong = AtomicInteger(0)\n'
+              '        run {\n'
+              '            val existing = resultDirectory.listFiles().orEmpty()\n'
+              '                .filter { it.isFile && it.name.endsWith(".row") }\n'
+              '                .flatMap { it.readLines() }\n'
+              '                .mapNotNull(::decode)\n'
+              '            val collapsed = TitleSearchCandidateDeduplicator.collapse(existing)\n'
+              '            foundTotal.set(collapsed.size)\n'
+              '            foundStrong.set(collapsed.count { TitleMatchQuality.isStrong(it) })\n'
+              '        }\n'
+              '        val limits = searchConcurrencyLimits()',
+              1,
+          )
+          t = t.replace(
+              'val done = completed.incrementAndGet()\n                        setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))\n                        updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")',
+              'foundTotal.addAndGet(candidates.distinctBy { it.url }.size)\n'
+              '                        foundStrong.addAndGet(candidates.count { TitleMatchQuality.isStrong(it) })\n'
+              '                        val done = completed.incrementAndGet()\n'
+              '                        setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_FOUND to foundTotal.get(), KEY_FOUND_STRONG to foundStrong.get(), KEY_PAUSED to isPaused(applicationContext)))\n'
+              '                        updateNotification(done, titles.size, "Finished $done/${titles.size} · found ~${foundTotal.get()} · ${title.take(36)}")',
+              1,
+          )
+          t = t.replace(
+              'setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))\n        updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources · ${limits.globalSourceSearches} concurrent requests")',
+              'setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size, KEY_FOUND to foundTotal.get(), KEY_FOUND_STRONG to foundStrong.get()))\n'
+              '        updateNotification(completed.get(), titles.size, "Searching ${sources.size} sources · found ${foundTotal.get()} · resume-safe")',
+              1,
+          )
+          t = t.replace(
+              'const val KEY_COMPLETED = "completed"\n        const val KEY_TOTAL = "total"\n        const val KEY_PAUSED = "paused"',
+              'const val KEY_CONTENT_KEY = "content_key"\n        const val KEY_COMPLETED = "completed"\n        const val KEY_TOTAL = "total"\n        const val KEY_FOUND = "found"\n        const val KEY_FOUND_STRONG = "found_strong"\n        const val KEY_PAUSED = "paused"',
+              1,
+          )
+          old_enq = '''        suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
+            val workManager = context.workManager
+            val uniqueName = uniqueUriWorkName(uri)
+            val activeWork = runCatching {
+                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }
+            }.getOrNull()
+            if (activeWork != null) return@withContext activeWork.id
+
+            setPaused(context, false)
+            val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
+                .setInputData(workDataOf(KEY_URI to uri.toString()))
+                .addTag("batch_title_search")
+                .build()
+            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request).result.get()
+            runCatching {
+                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }?.id
+            }.getOrNull() ?: request.id
+        }'''
+          new_enq = '''        suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
+            val workManager = context.workManager
+            val titles = context.contentResolver.openInputStream(uri)?.bufferedReader()?.useLines { lines ->
+                lines.map(::cleanTitle).map(String::trim).filter(String::isNotBlank).distinct().toList()
+            }.orEmpty()
+            val contentKey = contentFingerprint(titles.ifEmpty { listOf(uri.toString()) })
+            val uniqueName = "batch_title_search_content_$contentKey"
+            val titlesFile = File(context.filesDir, "batch-title-search-$contentKey.txt")
+            titlesFile.writeText(titles.joinToString("\\n"))
+            val infos = runCatching { workManager.getWorkInfosForUniqueWork(uniqueName).get() }.getOrDefault(emptyList())
+            val activeWork = infos.firstOrNull { !it.state.isFinished }
+            if (activeWork != null) return@withContext activeWork.id
+            val finished = infos.firstOrNull { it.state == WorkInfo.State.SUCCEEDED }
+            val finalFile = File(context.filesDir, "batch-title-search-$contentKey.final-results")
+            if (finished != null && finalFile.isFile && finalFile.length() > 0L) return@withContext finished.id
+            setPaused(context, false)
+            val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
+                .setInputData(workDataOf(KEY_URI to uri.toString(), KEY_TITLES_FILE to titlesFile.absolutePath, KEY_CONTENT_KEY to contentKey))
+                .addTag("batch_title_search")
+                .build()
+            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request)
+            runCatching {
+                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }?.id
+            }.getOrNull() ?: request.id
+        }
+        private fun contentFingerprint(titles: List<String>): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            titles.forEach { title ->
+                digest.update(title.lowercase().toByteArray(Charsets.UTF_8))
+                digest.update(0)
+            }
+            return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }.take(24)
+        }'''
+          if old_enq not in t:
+              raise SystemExit('enqueue block not found for patch')
+          t = t.replace(old_enq, new_enq, 1)
+          p.write_text(t)
+          assert 'KEY_FOUND' in t and 'contentFingerprint' in t and 'Found so far' in t
+          print('BatchTitleSearch patched for found counts + content-hash resume')
+          PY
           cp ../app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
@@ -65,7 +187,6 @@ jobs:
           cp ../app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
           cp ../app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt
           cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
-          # FlexibleAdapter: pin direct Maven coordinate (avoids catalog path issues)
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -80,16 +201,17 @@ jobs:
           p.write_text(t2)
           print(f'replaced flexible implementation lines: {n}')
           PY
-          # Match installed app identity for in-place updates
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 128/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.17"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*applicationIdSuffix[[:space:]]*=.*$/            applicationIdSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
-          grep -q 'versionCode = 128' app/build.gradle.kts
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'NORMAL_GLOBAL_SOURCE_SEARCHES = 64' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'KEY_FOUND' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'contentFingerprint' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'Found so far' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
