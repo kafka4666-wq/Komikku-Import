@@ -698,7 +698,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         fun partialResultsPath(context: Context, workId: String): String =
             File(context.filesDir, "batch-title-search-$workId.result-rows").absolutePath
 
-        suspend fun enqueue(
+        internal suspend fun enqueue(
             context: Context,
             uri: Uri,
             speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
