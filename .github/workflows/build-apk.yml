@@ -19,5 +19,86 @@ jobs:
     steps:
       - name: Check out overlay repository
         uses: actions/checkout@v4
-      - name: Placeholder note
-        run: echo 'Use full workflow from local build-apk.yml - partial update'
+      - name: Check out official Komikku source
+        uses: actions/checkout@v4
+        with:
+          repository: komikku-app/komikku
+          ref: 3402f2c7777f939fd05f9f66de86a8043bd95050
+          path: upstream
+      - name: Apply base patch and final Kotlin overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p worker-overlay
+          unzip -q komikku-worker-instrumentation.zip -d worker-overlay
+          cd upstream
+          cp ../komikku-overlay.patch .
+          perl -pe 's/\e\[[0-9;]*[[:alpha:]]//g' komikku-overlay.patch > komikku-overlay.patch.clean
+          mv komikku-overlay.patch.clean komikku-overlay.patch
+          git apply --recount --verbose komikku-overlay.patch
+          unzip -oq ../komikku-final-overlay.zip -d .
+          mkdir -p app/src/main/java/exh/ui/reverse app/src/main/java/eu/kanade/tachiyomi/data/notification
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/ui/library app/src/main/java/eu/kanade/tachiyomi/ui/reader
+          mkdir -p app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader
+          mkdir -p app/src/main/java/eu/kanade/presentation/reader
+          mkdir -p app/src/test/java/exh/ui/batchadd
+          cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
+          cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
+          cp ../app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          cp ../app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
+          cp ../app/src/main/java/exh/ui/batchadd/BatchImportJob.kt app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryScreenModel.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryStateSnapshot.kt app/src/main/java/eu/kanade/tachiyomi/ui/library/LibraryStateSnapshot.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderPageMergeStore.kt
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader/HttpPageLoader.kt
+          cp ../app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt app/src/main/java/eu/kanade/presentation/reader/ReaderPageActionsDialog.kt
+          mkdir -p app/src/main/java/eu/kanade/presentation/components
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt app/src/main/java/eu/kanade/presentation/components/MangaAuroraDesignSystem.kt
+          cp ../app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt app/src/main/java/eu/kanade/presentation/components/MangaTreasuryVisuals.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/MangaPortCoverage.kt app/src/main/java/eu/kanade/domain/ui/MangaPortCoverage.kt
+          cp ../app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt app/src/main/java/eu/kanade/domain/ui/DoujinCustomisationsPreferences.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt app/src/main/java/eu/kanade/presentation/library/components/DoujinCardAppearance.kt
+          cp ../app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt app/src/main/java/eu/kanade/presentation/library/components/CommonMangaItem.kt
+          cp ../app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt app/src/main/java/eu/kanade/presentation/manga/components/MangaInfoHeader.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsDoujinCustomisationsScreen.kt
+          assert_source() {
+            local label="$1"; local needle="$2"; local path="$3"
+            test -s "$path" || { echo "missing $label: $path"; exit 1; }
+            grep -Fq "$needle" "$path" || { echo "missing $label marker '$needle' in $path"; exit 1; }
+          }
+          assert_source "import job" "recordSourceEvent" app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
+          assert_source "restorable TXT title-search work ID" "rememberSaveable(inputUriString, existingJobId)" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "unique TXT title-search work" "enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request)" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "resumable per-title progress checkpoint" "result-rows" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "search every enabled source for each title" "sources.map { source ->" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "wait for all enabled source results" ".awaitAll().flatten()" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "collect source results before final deduplication" "writeConsolidatedResults(resultDirectory, finalResultFile)" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "fast normal global search concurrency" "NORMAL_GLOBAL_SOURCE_SEARCHES = 64" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "fast normal parallel titles" "NORMAL_PARALLEL_TITLES = 40" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "low-power/thermal fallback cap" "THROTTLED_GLOBAL_SOURCE_SEARCHES = 24" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "thermal-stress fallback" "THERMAL_STATUS_MODERATE" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "per-input title collapse" "TitleSearchCandidateDeduplicator.collapse" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "strong vs weak match split" "TitleMatchQuality.isStrong" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "strong weak result tabs" "Strong (" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "final duplicate recheck before results publish" "writeConsolidatedResults(resultDirectory, finalResultFile)" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "atomically published deduplicated results" "KEY_RESULT_FILE to finalResultFile.absolutePath" app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          assert_source "different inputs never collapsed regression" "different input titles are never collapsed together" app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
+          assert_source "url dedupe keeps other inputs regression" "same url for one input is kept once but different inputs stay separate" app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
+          assert_source "best per input regression" "best per input prefers exact then source order" app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
+      - name: Build release APK
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: komikku-import-apk
+          path: |
+            upstream/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
