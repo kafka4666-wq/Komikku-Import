@@ -25,8 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,7 +69,7 @@ class BatchAddScreen : Screen() {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPreset = titleSearchSpeed))
+            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPresetName = titleSearchSpeed.name))
         }
 
         Scaffold(

@@ -90,13 +90,14 @@ import coil3.compose.AsyncImage
 class BatchTitleSearchScreen(
     private val inputUriString: String,
     private val existingJobId: String? = null,
-    private val speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
+    private val speedPresetName: String = TitleSearchSpeedPreset.FAST.name,
 ) : Screen() {
     @Composable
     override fun Content() {
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
+        val speedPreset = TitleSearchSpeedPreset.fromName(speedPresetName)
         var jobId by rememberSaveable(inputUriString, existingJobId) { mutableStateOf(existingJobId) }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
@@ -104,7 +105,7 @@ class BatchTitleSearchScreen(
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
-        LaunchedEffect(inputUriString, existingJobId, speedPreset) {
+        LaunchedEffect(inputUriString, existingJobId, speedPresetName) {
             if (jobId != null) return@LaunchedEffect
             if (existingJobId != null) {
                 jobId = existingJobId
