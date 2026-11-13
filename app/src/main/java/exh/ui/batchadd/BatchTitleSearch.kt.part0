@@ -1,0 +1,244 @@
+package exh.ui.batchadd
+
+import android.content.Context
+import android.content.Intent
+import android.app.PendingIntent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.content.pm.ServiceInfo
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.ForegroundInfo
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import cafe.adriel.voyager.navigator.LocalNavigator
+import eu.kanade.presentation.components.AppBar
+import eu.kanade.presentation.util.Screen
+import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.data.notification.Notifications
+import eu.kanade.tachiyomi.source.Source
+import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.util.system.notificationBuilder
+import eu.kanade.tachiyomi.util.system.workManager
+import exh.log.xLogE
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
+import tachiyomi.core.common.util.QuerySanitizer.sanitize
+import mihon.domain.manga.model.toDomainManga
+import tachiyomi.domain.source.service.SourceManager
+import tachiyomi.presentation.core.components.material.Scaffold
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.security.MessageDigest
+import java.text.Normalizer
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
+import android.util.AtomicFile
+import android.util.Base64
+import coil3.compose.AsyncImage
+
+class BatchTitleSearchScreen(private val inputUriString: String, private val existingJobId: String? = null) : Screen() {
+    @Composable
+    override fun Content() {
+        val context = LocalContext.current
+        val navigator = LocalNavigator.current
+        val manager = remember { context.applicationContext.workManager }
+        var jobId by rememberSaveable(inputUriString, existingJobId) { mutableStateOf(existingJobId) }
+        var contentKey by rememberSaveable(inputUriString) { mutableStateOf<String?>(null) }
+        var info by remember { mutableStateOf<WorkInfo?>(null) }
+        var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
+        val selected = remember { mutableStateListOf<String>() }
+        var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+        var statusNote by remember { mutableStateOf<String?>(null) }
+        val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
+
+        LaunchedEffect(inputUriString, existingJobId) {
+            if (existingJobId != null) {
+                jobId = existingJobId
+                return@LaunchedEffect
+            }
+            if (jobId != null && contentKey != null) return@LaunchedEffect
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    inputUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val outcome = BatchTitleSearchWorker.enqueueOrResume(context.applicationContext, inputUri)
+            jobId = outcome.workId.toString()
+            contentKey = outcome.contentKey
+            statusNote = outcome.message
+        }
+        LaunchedEffect(jobId) {
+            val id = jobId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
+            manager.getWorkInfoByIdFlow(id).collect { workInfo ->
+                info = workInfo
+                if (workInfo?.state?.isFinished == true) {
+                    val path = workInfo.outputData.getString(BatchTitleSearchWorker.KEY_RESULT_FILE)
+                        ?: contentKey?.let { BatchTitleSearchWorker.finalResultsPath(context, it) }
+                    results = BatchTitleSearchWorker.readResults(context, path)
+                }
+            }
+        }
+        LaunchedEffect(jobId, contentKey, info?.state) {
+            if (info?.state != WorkInfo.State.RUNNING && info?.state != WorkInfo.State.ENQUEUED) return@LaunchedEffect
+            while (true) {
+                val key = contentKey
+                if (key != null) {
+                    results = BatchTitleSearchWorker.readPartialResults(context, key)
+                }
+                delay(1_500)
+            }
+        }
+
+        val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
+        val progress = info?.progress
+        val completed = progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, 0) ?: 0
+        val total = progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, 0) ?: 0
+        val found = progress?.getInt(BatchTitleSearchWorker.KEY_FOUND, results.size) ?: results.size
+        val foundStrong = progress?.getInt(
+            BatchTitleSearchWorker.KEY_FOUND_STRONG,
+            results.count { TitleMatchQuality.isStrong(it) },
+        ) ?: results.count { TitleMatchQuality.isStrong(it) }
+        val foundWeak = progress?.getInt(
+            BatchTitleSearchWorker.KEY_FOUND_WEAK,
+            results.count { !TitleMatchQuality.isStrong(it) },
+        ) ?: results.count { !TitleMatchQuality.isStrong(it) }
+        val currentTitle = progress?.getString(BatchTitleSearchWorker.KEY_CURRENT_TITLE).orEmpty()
+        val etaSeconds = progress?.getInt(BatchTitleSearchWorker.KEY_ETA_SECONDS, -1) ?: -1
+        val paused = progress?.getBoolean(BatchTitleSearchWorker.KEY_PAUSED, false)
+            ?: BatchTitleSearchWorker.isPaused(context)
+
+        val strongResults = remember(results) { results.filter { TitleMatchQuality.isStrong(it) } }
+        val weakResults = remember(results) { results.filter { !TitleMatchQuality.isStrong(it) } }
+        val visibleResults = if (selectedTab == 0) strongResults else weakResults
+        val selectedUrls = results.filter { it.id in selected }.map { it.url }.distinct()
+
+        Scaffold(topBar = { scroll ->
+            AppBar(title = "Find titles in enabled sources", navigateUp = { navigator?.pop() }, scrollBehavior = scroll)
+        }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                if (running) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Search continues in the background. If the app is killed or crashes, reopen the same title list and it will resume from the last finished title.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        statusNote?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CircularProgressIndicator()
+                            Text(if (total > 0) "Searching $completed / $total titles" else "Searching enabled sources…")
+                        }
+                        if (total > 0) {
+                            LinearProgressIndicator(
+                                progress = { completed.toFloat() / total.coerceAtLeast(1) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Text(
+                            "Found so far: $found matches · Strong $foundStrong · Weak $foundWeak",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        if (currentTitle.isNotBlank()) {
+                            Text("Current: ${currentTitle.take(80)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (etaSeconds >= 0 && completed < total) {
+                            Text("ETA ~ ${formatEta(etaSeconds)} remaining", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (results.isNotEmpty()) {
+                            Text(
+                                "Partial results are listed below and update live. You can select and add strong matches before the full run finishes.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { BatchTitleSearchWorker.setPaused(context, true) }) { Text("Pause") }
+                            Button(onClick = { BatchTitleSearchWorker.setPaused(context, false) }) { Text("Resume") }
+                            TextButton(onClick = { jobId?.let { manager.cancelWorkById(UUID.fromString(it)) } }) { Text("Cancel") }
+                        }
+                        TextButton(
+                            onClick = {
+                                val key = contentKey
+                                if (key != null) BatchTitleSearchWorker.clearCheckpoints(context, key)
+                                jobId?.let { runCatching { manager.cancelWorkById(UUID.fromString(it)) } }
+                                jobId = null
+                                contentKey = null
+                                results = emptyList()
+                                selected.clear()
+                                statusNote = "Restarting from the beginning…"
+                            },
+                        ) { Text("Restart from scratch") }
+                        if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                if (results.isNotEmpty()) {
+                    if (!running) {
+                        statusNote?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                    TabRow(selectedTabIndex = selectedTab) {
+                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Strong (${strongResults.size})") })
+                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Weak (${weakResults.size})") })
+                    }
