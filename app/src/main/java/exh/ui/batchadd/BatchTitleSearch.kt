@@ -87,7 +87,11 @@ import android.util.AtomicFile
 import android.util.Base64
 import coil3.compose.AsyncImage
 
-class BatchTitleSearchScreen(private val inputUriString: String, private val existingJobId: String? = null) : Screen() {
+class BatchTitleSearchScreen(
+    private val inputUriString: String,
+    private val existingJobId: String? = null,
+    private val speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
+) : Screen() {
     @Composable
     override fun Content() {
         val context = LocalContext.current
@@ -100,29 +104,52 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
-        LaunchedEffect(inputUriString, existingJobId) {
+        LaunchedEffect(inputUriString, existingJobId, speedPreset) {
             if (jobId != null) return@LaunchedEffect
             if (existingJobId != null) {
                 jobId = existingJobId
                 return@LaunchedEffect
             }
             runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            jobId = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri).toString()
+            jobId = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri, speedPreset).toString()
         }
         LaunchedEffect(jobId) {
             val id = jobId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
             manager.getWorkInfoByIdFlow(id).collect { workInfo ->
                 info = workInfo
                 if (workInfo?.state?.isFinished == true) {
-                    results = BatchTitleSearchWorker.readResults(context, workInfo.outputData.getString(BatchTitleSearchWorker.KEY_RESULT_FILE))
+                    val resultPath = workInfo.outputData.getString(BatchTitleSearchWorker.KEY_RESULT_FILE)
+                        ?: BatchTitleSearchWorker.partialResultsPath(context, id.toString())
+                    results = BatchTitleSearchWorker.readResults(context, resultPath)
                 }
+            }
+        }
+        LaunchedEffect(jobId, info?.state) {
+            if (info?.state != WorkInfo.State.RUNNING && info?.state != WorkInfo.State.ENQUEUED) return@LaunchedEffect
+            val id = jobId ?: return@LaunchedEffect
+            val path = BatchTitleSearchWorker.partialResultsPath(context, id)
+            while (true) {
+                results = BatchTitleSearchWorker.readResults(context, path)
+                delay(2_500)
             }
         }
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
         val progress = info?.progress
         val completed = progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, 0) ?: 0
         val total = progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, 0) ?: 0
-        val paused = progress?.getBoolean(BatchTitleSearchWorker.KEY_PAUSED, false) ?: BatchTitleSearchWorker.isPaused(context)
+        val found = progress?.getInt(BatchTitleSearchWorker.KEY_FOUND, results.size) ?: results.size
+        val foundStrong = progress?.getInt(
+            BatchTitleSearchWorker.KEY_FOUND_STRONG,
+            results.count { TitleMatchQuality.isStrong(it) },
+        ) ?: results.count { TitleMatchQuality.isStrong(it) }
+        val foundWeak = progress?.getInt(
+            BatchTitleSearchWorker.KEY_FOUND_WEAK,
+            results.count { !TitleMatchQuality.isStrong(it) },
+        ) ?: results.count { !TitleMatchQuality.isStrong(it) }
+        val etaSeconds = progress?.getInt(BatchTitleSearchWorker.KEY_ETA_SECONDS, -1) ?: -1
+        val activeSpeedPreset = progress?.getString(BatchTitleSearchWorker.KEY_SPEED_PRESET)
+            ?.let { TitleSearchSpeedPreset.fromName(it) } ?: speedPreset
+        val paused = BatchTitleSearchWorker.isPaused(context)
 
         val strongResults = remember(results) { results.filter { TitleMatchQuality.isStrong(it) } }
         val weakResults = remember(results) { results.filter { !TitleMatchQuality.isStrong(it) } }
@@ -139,7 +166,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            "All enabled sources are searched for each title. Results are kept per input title (no cross-title collapse). Strong and weak matches are split into tabs when finished.",
+                            "Searching all enabled sources with the ${activeSpeedPreset.label} preset. Results stay grouped by input title, and partial matches appear below as titles finish.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -147,6 +174,10 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                             Text(if (total > 0) "Searching $completed/$total titles…" else "Searching enabled sources…")
                         }
                         if (total > 0) LinearProgressIndicator(progress = { completed.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+                        Text("Found $found matches · Strong $foundStrong · Weak $foundWeak", style = MaterialTheme.typography.titleSmall)
+                        if (etaSeconds >= 0 && completed < total) {
+                            Text("Estimated time remaining: ${formatTitleSearchEta(etaSeconds)}", style = MaterialTheme.typography.bodySmall)
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { jobId?.let { BatchTitleSearchWorker.setPaused(context, true) } }) { Text("Pause") }
                             Button(onClick = { BatchTitleSearchWorker.setPaused(context, false) }) { Text("Resume") }
@@ -154,7 +185,8 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                         }
                         if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
                     }
-                } else if (results.isNotEmpty()) {
+                }
+                if (results.isNotEmpty()) {
                     TabRow(selectedTabIndex = selectedTab) {
                         Tab(
                             selected = selectedTab == 0,
@@ -168,7 +200,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                         )
                     }
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -229,13 +261,13 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                             )
                         }
                     }
-                } else if (info?.state?.isFinished == true) {
+                } else if (!running && info?.state?.isFinished == true) {
                     Text(
                         "No matching titles were found across the enabled installed sources.",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(16.dp),
                     )
-                } else {
+                } else if (!running) {
                     Text(
                         "Preparing title search…",
                         style = MaterialTheme.typography.bodyMedium,
@@ -352,6 +384,56 @@ internal object TitleSearchCandidateDeduplicator {
         .filter { it.isLetterOrDigit() }
 }
 
+internal data class TitleSearchConcurrencyLimits(
+    val parallelTitles: Int,
+    val globalSourceSearches: Int,
+    val perSourceSearches: Int,
+    val timeoutMillis: Long,
+)
+
+internal enum class TitleSearchSpeedPreset(
+    val label: String,
+    val description: String,
+    private val normalLimits: TitleSearchConcurrencyLimits,
+    private val throttledLimits: TitleSearchConcurrencyLimits,
+) {
+    FAST(
+        "Fast",
+        "Fastest: up to 64 source requests at once; may trigger rate limits on some sites.",
+        TitleSearchConcurrencyLimits(40, 64, 8, 8_000L),
+        TitleSearchConcurrencyLimits(12, 24, 4, 10_000L),
+    ),
+    BALANCED(
+        "Balanced",
+        "Moderate parallelism for a better balance between speed and source stability.",
+        TitleSearchConcurrencyLimits(28, 48, 6, 9_000L),
+        TitleSearchConcurrencyLimits(10, 20, 3, 12_000L),
+    ),
+    GENTLE(
+        "Gentle",
+        "Fewer simultaneous requests to reduce device and source load; usually slower.",
+        TitleSearchConcurrencyLimits(16, 24, 3, 12_000L),
+        TitleSearchConcurrencyLimits(8, 16, 2, 15_000L),
+    );
+
+    fun concurrencyLimits(throttled: Boolean): TitleSearchConcurrencyLimits =
+        if (throttled) throttledLimits else normalLimits
+
+    companion object {
+        fun fromName(value: String?): TitleSearchSpeedPreset =
+            values().firstOrNull { it.name == value } ?: FAST
+    }
+}
+
+private fun formatTitleSearchEta(seconds: Int): String {
+    val remaining = seconds.coerceAtLeast(0)
+    return when {
+        remaining < 60 -> "$remaining sec"
+        remaining < 3_600 -> "${remaining / 60} min"
+        else -> "${remaining / 3_600} hr ${(remaining % 3_600) / 60} min"
+    }
+}
+
 class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
@@ -377,13 +459,37 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
             .forEach { it.delete() }
         fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
+        val checkpointCandidates = resultDirectory.listFiles().orEmpty()
+            .filter { it.isFile && it.name.endsWith(".row") }
+            .sortedBy { it.name }
+            .flatMap { it.readLines() }
+            .mapNotNull(::decode)
+            .distinctBy { it.id }
+        val checkpointResults = TitleSearchCandidateDeduplicator.collapse(checkpointCandidates)
         val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
-        val limits = searchConcurrencyLimits()
+        val initialCompleted = completed.get()
+        val startedAtMillis = System.currentTimeMillis()
+        val found = AtomicInteger(checkpointResults.size)
+        val foundStrong = AtomicInteger(checkpointResults.count { TitleMatchQuality.isStrong(it) })
+        val foundWeak = AtomicInteger(checkpointResults.count { !TitleMatchQuality.isStrong(it) })
+        val speedPreset = TitleSearchSpeedPreset.fromName(inputData.getString(KEY_SPEED_PRESET))
+        val limits = searchConcurrencyLimits(speedPreset)
         val titleSemaphore = Semaphore(limits.parallelTitles)
         val sourceSearchSemaphore = Semaphore(limits.globalSourceSearches)
         val perSourceSemaphores = sources.associate { it.id to Semaphore(limits.perSourceSearches) }
         setForeground(getForegroundInfo())
-        setProgress(workDataOf(KEY_COMPLETED to completed.get(), KEY_TOTAL to titles.size))
+        setProgress(
+            workDataOf(
+                KEY_COMPLETED to completed.get(),
+                KEY_TOTAL to titles.size,
+                KEY_FOUND to found.get(),
+                KEY_FOUND_STRONG to foundStrong.get(),
+                KEY_FOUND_WEAK to foundWeak.get(),
+                KEY_ETA_SECONDS to -1,
+                KEY_SPEED_PRESET to speedPreset.name,
+                KEY_PAUSED to isPaused(applicationContext),
+            ),
+        )
         updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources · ${limits.globalSourceSearches} concurrent requests")
         coroutineScope {
             titles.mapIndexedNotNull { index, title ->
@@ -399,13 +505,15 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                         title,
                                         sourceSearchSemaphore,
                                         perSourceSemaphores.getValue(source.id),
+                                        limits.timeoutMillis,
                                     )
                                 }
                             }.awaitAll().flatten()
                         }
                         val outputFile = rowFile(index)
                         val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
-                        val rows = candidates.distinctBy { it.url }.joinToString("\n") { encode(it) }
+                        val titleCandidates = TitleSearchCandidateDeduplicator.collapse(candidates)
+                        val rows = titleCandidates.joinToString("\n") { encode(it) }
                         try {
                             FileOutputStream(tempFile).use { stream ->
                                 if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
@@ -417,8 +525,31 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                             throw error
                         }
                         val done = completed.incrementAndGet()
-                        setProgress(workDataOf(KEY_COMPLETED to done, KEY_TOTAL to titles.size, KEY_PAUSED to isPaused(applicationContext)))
-                        updateNotification(done, titles.size, "Finished $done/${titles.size}: ${title.take(48)}")
+                        found.addAndGet(titleCandidates.size)
+                        foundStrong.addAndGet(titleCandidates.count { TitleMatchQuality.isStrong(it) })
+                        foundWeak.addAndGet(titleCandidates.count { !TitleMatchQuality.isStrong(it) })
+                        val completedThisRun = done - initialCompleted
+                        val elapsedMillis = System.currentTimeMillis() - startedAtMillis
+                        val etaSeconds = if (completedThisRun >= 5) {
+                            (((titles.size - done).coerceAtLeast(0).toLong() * elapsedMillis) / completedThisRun / 1_000L)
+                                .coerceAtMost(Int.MAX_VALUE.toLong())
+                                .toInt()
+                        } else {
+                            -1
+                        }
+                        setProgress(
+                            workDataOf(
+                                KEY_COMPLETED to done,
+                                KEY_TOTAL to titles.size,
+                                KEY_FOUND to found.get(),
+                                KEY_FOUND_STRONG to foundStrong.get(),
+                                KEY_FOUND_WEAK to foundWeak.get(),
+                                KEY_ETA_SECONDS to etaSeconds,
+                                KEY_SPEED_PRESET to speedPreset.name,
+                                KEY_PAUSED to isPaused(applicationContext),
+                            ),
+                        )
+                        updateNotification(done, titles.size, "Finished $done/${titles.size} · ${found.get()} matches")
                     }
                 }
             }.awaitAll()
@@ -458,31 +589,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         return uniqueCandidates.size
     }
 
-    private data class SearchConcurrencyLimits(
-        val parallelTitles: Int,
-        val globalSourceSearches: Int,
-        val perSourceSearches: Int,
-    )
-
-    private fun searchConcurrencyLimits(): SearchConcurrencyLimits {
+    private fun searchConcurrencyLimits(speedPreset: TitleSearchSpeedPreset): TitleSearchConcurrencyLimits {
         val powerManager = applicationContext.getSystemService(PowerManager::class.java)
         val powerSave = powerManager?.isPowerSaveMode == true
         val thermallyConstrained = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && runCatching {
             (powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE) >= PowerManager.THERMAL_STATUS_MODERATE
         }.getOrDefault(false)
-        return if (powerSave || thermallyConstrained) {
-            SearchConcurrencyLimits(
-                parallelTitles = THROTTLED_PARALLEL_TITLES,
-                globalSourceSearches = THROTTLED_GLOBAL_SOURCE_SEARCHES,
-                perSourceSearches = THROTTLED_PER_SOURCE_SEARCHES,
-            )
-        } else {
-            SearchConcurrencyLimits(
-                parallelTitles = NORMAL_PARALLEL_TITLES,
-                globalSourceSearches = NORMAL_GLOBAL_SOURCE_SEARCHES,
-                perSourceSearches = NORMAL_PER_SOURCE_SEARCHES,
-            )
-        }
+        return speedPreset.concurrencyLimits(powerSave || thermallyConstrained)
     }
 
     private suspend fun searchSource(
@@ -490,25 +603,27 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         title: String,
         globalSemaphore: Semaphore,
         sourceSemaphore: Semaphore,
+        timeoutMillis: Long,
     ): List<TitleSearchCandidate> {
         return try {
             awaitNotPaused()
             suspend fun query() =
                 sourceSemaphore.withPermit {
                     globalSemaphore.withPermit {
-                        withTimeoutOrNull(SEARCH_TIMEOUT_MS) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
+                        withTimeoutOrNull(timeoutMillis) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
                     }
                 }
             val page = query()
                 ?: return emptyList()
             page.mangas.map { manga ->
                 val local = manga.toDomainManga(source.id)
+                val mangaUrl = absoluteUrl(source, manga.url)
                 TitleSearchCandidate(
-                    id = "${title.hashCode()}-${source.id}-${manga.url.hashCode()}",
+                    id = candidateId(title, source.id, mangaUrl),
                     inputTitle = title,
                     matchedTitle = manga.title,
                     sourceName = source.name,
-                    url = absoluteUrl(source, manga.url),
+                    url = mangaUrl,
                     thumbnailUrl = local.thumbnailUrl?.let { absoluteUrl(source, it) },
                 )
             }
@@ -520,11 +635,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     }
     private suspend fun awaitNotPaused() {
         while (isPaused(applicationContext) && !isStopped) {
-            setProgress(workDataOf(KEY_PAUSED to true))
             updateNotification(0, 0, "Paused · waiting to resume")
             delay(750)
         }
-        if (!isStopped) setProgress(workDataOf(KEY_PAUSED to false))
     }
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
         NOTIFICATION_ID,
@@ -569,21 +682,26 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
         const val KEY_PAUSED = "paused"
+        const val KEY_FOUND = "found"
+        const val KEY_FOUND_STRONG = "found_strong"
+        const val KEY_FOUND_WEAK = "found_weak"
+        const val KEY_ETA_SECONDS = "eta_seconds"
+        const val KEY_SPEED_PRESET = "speed_preset"
         const val NOTIFICATION_ID = -1810
         const val ACTION_OPEN_BATCH_TITLE_SEARCH = "com.manus.komikku.OPEN_BATCH_TITLE_SEARCH"
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
-        private const val THROTTLED_PARALLEL_TITLES = 12
-        private const val THROTTLED_GLOBAL_SOURCE_SEARCHES = 24
-        private const val THROTTLED_PER_SOURCE_SEARCHES = 4
-        private const val NORMAL_PARALLEL_TITLES = 40
-        private const val NORMAL_GLOBAL_SOURCE_SEARCHES = 64
-        private const val NORMAL_PER_SOURCE_SEARCHES = 8
-        private const val SEARCH_TIMEOUT_MS = 8_000L
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
-        suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
+        fun partialResultsPath(context: Context, workId: String): String =
+            File(context.filesDir, "batch-title-search-$workId.result-rows").absolutePath
+
+        suspend fun enqueue(
+            context: Context,
+            uri: Uri,
+            speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
+        ): UUID = withContext(Dispatchers.IO) {
             val workManager = context.workManager
             val uniqueName = uniqueUriWorkName(uri)
             val activeWork = runCatching {
@@ -593,7 +711,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
 
             setPaused(context, false)
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
-                .setInputData(workDataOf(KEY_URI to uri.toString()))
+                .setInputData(workDataOf(KEY_URI to uri.toString(), KEY_SPEED_PRESET to speedPreset.name))
                 .addTag("batch_title_search")
                 .build()
             workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request).result.get()
@@ -608,7 +726,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             file.writeText(titles.joinToString("\n"))
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
                 .setId(id)
-                .setInputData(workDataOf(KEY_TITLES_FILE to file.absolutePath, KEY_AUTO_IMPORT to autoImport))
+                .setInputData(
+                    workDataOf(
+                        KEY_TITLES_FILE to file.absolutePath,
+                        KEY_AUTO_IMPORT to autoImport,
+                        KEY_SPEED_PRESET to TitleSearchSpeedPreset.FAST.name,
+                    ),
+                )
                 .addTag("batch_title_search")
                 .build()
             context.workManager.enqueue(request)
@@ -633,6 +757,11 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             val key = digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
             return "batch_title_search_uri_$key"
         }
+        private fun candidateId(title: String, sourceId: Long, url: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("$title\u0000$sourceId\u0000$url".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
         private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
         private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4], v.getOrNull(5)?.ifBlank { null }) }.getOrNull()
         private fun cleanTitle(value: String): String = value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ").replace(Regex("\\s+"), " ").trim()

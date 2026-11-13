@@ -96,6 +96,7 @@ fun MoreScreen(
     // KMK -->
     onClickLibraryUpdateErrors: () -> Unit,
     // KMK <--
+    onClickQuickTitleSearch: () -> Unit = {},
 ) {
     val uriHandler = LocalUriHandler.current
     // SY -->
@@ -325,6 +326,14 @@ fun MoreScreen(
             }
             // SY <--
 
+            item {
+                TextPreferenceWidget(
+                    title = "Quick Title Search",
+                    subtitle = "Choose a TXT/CSV list and search enabled sources without opening Batch Add",
+                    icon = Icons.Outlined.Search,
+                    onPreferenceClick = onClickQuickTitleSearch,
+                )
+            }
             item {
                 TextPreferenceWidget(
                     title = "Batch Image",

@@ -24,6 +24,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +54,9 @@ class BatchAddScreen : Screen() {
         val state by screenModel.state.collectAsState()
         val navigator = LocalNavigator.currentOrThrow
         val context = LocalContext.current
+        var titleSearchSpeedName by rememberSaveable { mutableStateOf(TitleSearchSpeedPreset.FAST.name) }
+        var showTitleSearchSpeedDialog by rememberSaveable { mutableStateOf(false) }
+        val titleSearchSpeed = TitleSearchSpeedPreset.fromName(titleSearchSpeedName)
         val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri ?: return@rememberLauncherForActivityResult
             runCatching {
@@ -63,7 +69,7 @@ class BatchAddScreen : Screen() {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString()))
+            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPreset = titleSearchSpeed))
         }
 
         Scaffold(
@@ -119,7 +125,18 @@ class BatchAddScreen : Screen() {
                         ) {
                             Text(text = "Import / retry TXT/CSV file")
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { showTitleSearchSpeedDialog = true },
+                        ) {
+                            Text("Title search speed: ${titleSearchSpeed.label} · change")
+                        }
+                        Text(
+                            text = titleSearchSpeed.description,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = { titleFilePicker.launch(arrayOf("text/plain", "text/csv", "text/*")) },
@@ -258,6 +275,36 @@ class BatchAddScreen : Screen() {
                 },
             )
             null -> Unit
+        }
+
+        if (showTitleSearchSpeedDialog) {
+            AlertDialog(
+                onDismissRequest = { showTitleSearchSpeedDialog = false },
+                title = { Text("Title search speed") },
+                text = {
+                    Column {
+                        TitleSearchSpeedPreset.values().forEach { preset ->
+                            TextButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    titleSearchSpeedName = preset.name
+                                    showTitleSearchSpeedDialog = false
+                                },
+                            ) {
+                                Text(
+                                    text = "${if (preset == titleSearchSpeed) "✓ " else ""}${preset.label}\n${preset.description}",
+                                    textAlign = TextAlign.Start,
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showTitleSearchSpeedDialog = false }) {
+                        Text("Close")
+                    }
+                },
+            )
         }
     }
 }

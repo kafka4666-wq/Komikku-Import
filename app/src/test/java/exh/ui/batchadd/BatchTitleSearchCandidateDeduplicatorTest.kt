@@ -110,6 +110,36 @@ class BatchTitleSearchCandidateDeduplicatorTest {
         assertTrue(result.any { !TitleMatchQuality.isStrong(it) })
     }
 
+    @Test
+    fun `speed presets trade request concurrency for source load`() {
+        val fast = TitleSearchSpeedPreset.FAST.concurrencyLimits(throttled = false)
+        val balanced = TitleSearchSpeedPreset.BALANCED.concurrencyLimits(throttled = false)
+        val gentle = TitleSearchSpeedPreset.GENTLE.concurrencyLimits(throttled = false)
+
+        assertTrue(fast.globalSourceSearches > balanced.globalSourceSearches)
+        assertTrue(balanced.globalSourceSearches > gentle.globalSourceSearches)
+        assertTrue(fast.perSourceSearches > balanced.perSourceSearches)
+        assertTrue(balanced.perSourceSearches >= gentle.perSourceSearches)
+        assertTrue(gentle.timeoutMillis > fast.timeoutMillis)
+    }
+
+    @Test
+    fun `thermal throttling lowers concurrency for every speed preset`() {
+        TitleSearchSpeedPreset.values().forEach { preset ->
+            val normal = preset.concurrencyLimits(throttled = false)
+            val throttled = preset.concurrencyLimits(throttled = true)
+
+            assertTrue(throttled.globalSourceSearches < normal.globalSourceSearches)
+            assertTrue(throttled.perSourceSearches <= normal.perSourceSearches)
+            assertTrue(throttled.parallelTitles < normal.parallelTitles)
+        }
+    }
+
+    @Test
+    fun `unknown saved speed preset falls back to fast`() {
+        assertEquals(TitleSearchSpeedPreset.FAST, TitleSearchSpeedPreset.fromName("UNKNOWN"))
+    }
+
     private fun candidate(
         id: String,
         inputTitle: String,

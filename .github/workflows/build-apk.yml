@@ -40,6 +40,7 @@ jobs:
           git apply --recount --verbose komikku-overlay.patch
           unzip -oq ../komikku-final-overlay.zip -d .
           mkdir -p app/src/main/java/exh/ui/reverse app/src/main/java/eu/kanade/tachiyomi/data/notification
+          mkdir -p app/src/main/java/eu/kanade/presentation/more
           mkdir -p app/src/main/java/eu/kanade/tachiyomi/ui/library app/src/main/java/eu/kanade/tachiyomi/ui/reader
           mkdir -p app/src/main/java/eu/kanade/tachiyomi/ui/reader/loader
           mkdir -p app/src/main/java/eu/kanade/presentation/reader
@@ -48,9 +49,13 @@ jobs:
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt app/src/main/java/exh/ui/reverse/ReverseSearchScreen.kt
           cp ../app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt app/src/main/java/exh/ui/reverse/ReverseSearchWorker.kt
           cp ../app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          cp ../app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt app/src/main/java/exh/ui/batchadd/BatchAddScreen.kt
+          cp ../app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           test -s app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'NORMAL_GLOBAL_SOURCE_SEARCHES = 64' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchConcurrencyLimits(40, 64, 8, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchSpeedPreset.FAST' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'Quick Title Search' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
           cp ../app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
@@ -91,7 +96,7 @@ jobs:
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*applicationIdSuffix[[:space:]]*=.*$/            applicationIdSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'NORMAL_GLOBAL_SOURCE_SEARCHES = 64' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchConcurrencyLimits(40, 64, 8, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -104,6 +109,12 @@ jobs:
           packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Run title-search unit tests
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew :app:testDebugUnitTest --tests exh.ui.batchadd.BatchTitleSearchCandidateDeduplicatorTest --no-daemon --console=plain
       - name: Configure stable signing
         working-directory: upstream
         env:

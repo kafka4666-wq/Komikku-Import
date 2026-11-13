@@ -1,6 +1,8 @@
 package eu.kanade.tachiyomi.ui.more
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.graphics.res.animatedVectorResource
 import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
@@ -38,6 +40,7 @@ import eu.kanade.tachiyomi.ui.setting.SettingsScreen
 import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
+import exh.ui.batchadd.BatchTitleSearchScreen
 import exh.ui.batchimage.BatchImageScreen
 import exh.ui.reverse.ReverseSearchScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
@@ -78,6 +81,13 @@ data object MoreTab : Tab {
         val context = LocalContext.current
         val navigator = LocalNavigator.current ?: return
         val tabNavigator = LocalTabNavigator.current
+        val quickTitleSearchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri ?: return@rememberLauncherForActivityResult
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            navigator.push(BatchTitleSearchScreen(uri.toString()))
+        }
         val screenModel = rememberScreenModel { MoreScreenModel() }
         val downloadQueueState by screenModel.downloadQueueState.collectAsState()
         LaunchedEffect(Unit) {
@@ -101,6 +111,9 @@ data object MoreTab : Tab {
             onClickAbout = { navigator.push(SettingsScreen(SettingsScreen.Destination.About)) },
             // SY -->
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
+            onClickQuickTitleSearch = {
+                quickTitleSearchPicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
+            },
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
             onClickBatchImage = { navigator.push(BatchImageScreen()) },
             onClickReverseSearch = { navigator.push(ReverseSearchScreen()) },
