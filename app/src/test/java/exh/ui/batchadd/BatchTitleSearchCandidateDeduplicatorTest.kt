@@ -1,8 +1,6 @@
 package exh.ui.batchadd
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class BatchTitleSearchCandidateDeduplicatorTest {
@@ -77,19 +75,17 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
-    fun `title match ignores punctuation accents and bracketed language notes`() {
-        assertTrue(TitleSearchMatchQuality.isConfidentMatch("Café-Girl [English]", "Cafe Girl"))
-    }
+    fun `literal match wins and source order breaks ties consistently`() {
+        val candidates = listOf(
+            candidate("z-first", "Summer Girl", "Summer Girl", "Z Source", "https://z.example/summer"),
+            candidate("a-second", "Summer Girl", "Summer Girl", "A Source", "https://a.example/summer"),
+            candidate("decorated", "Summer Girl", "Summer Girl Official", "0 Source", "https://0.example/summer"),
+        )
 
-    @Test
-    fun `a typo in a title is not accepted as a match`() {
-        assertFalse(TitleSearchMatchQuality.isConfidentMatch("The Adventures of Summer Girl", "The Adventures of Sumner Girl"))
-    }
+        val result = TitleSearchCandidateDeduplicator.collapse(candidates)
 
-    @Test
-    fun `unrelated and short substring results are not accepted`() {
-        assertFalse(TitleSearchMatchQuality.isConfidentMatch("My Favorite Manga", "Completely Different Series"))
-        assertFalse(TitleSearchMatchQuality.isConfidentMatch("Hero", "Heroic Fantasy Story"))
+        assertEquals(1, result.size)
+        assertEquals("https://a.example/summer", result.single().url)
     }
 
     private fun candidate(

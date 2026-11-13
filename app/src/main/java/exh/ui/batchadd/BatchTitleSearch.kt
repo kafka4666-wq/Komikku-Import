@@ -66,9 +66,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -138,7 +135,7 @@ class BatchTitleSearchScreen(private val inputUriString: String, private val exi
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    Text("Only exact title matches after case, accent, punctuation, and bracket-note normalization are accepted. Search stops at the first matching source; review it before adding.", style = MaterialTheme.typography.bodyMedium)
+                    Text("All enabled sources are searched for each title. Duplicate matches are collapsed to one result, preferring the literal title match and then a consistent source order.", style = MaterialTheme.typography.bodyMedium)
                 }
                 if (running) item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -268,20 +265,6 @@ internal object TitleSearchCandidateDeduplicator {
         .filter { it.isLetterOrDigit() }
 }
 
-internal object TitleSearchMatchQuality {
-    fun isConfidentMatch(query: String, resultTitle: String): Boolean {
-        val queryKey = normalize(query)
-        val resultKey = normalize(resultTitle)
-        return queryKey.isNotEmpty() && queryKey == resultKey
-    }
-
-    private fun normalize(value: String): String = Normalizer
-        .normalize(value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " "), Normalizer.Form.NFKD)
-        .lowercase()
-        .filter(Char::isLetterOrDigit)
-
-}
-
 class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
@@ -323,18 +306,24 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 async(Dispatchers.IO) {
                     titleSemaphore.withPermit {
                         awaitNotPaused()
-                        val candidates = searchTitleUntilFirstSourceMatch(
-                            title,
-                            sources,
-                            sourceSearchSemaphore,
-                            backgroundSourceSearchSemaphore,
-                            perSourceSemaphores,
-                            backgroundPerSourceSemaphores,
-                            searchConcurrencyLimits().sourcesPerTitleBatch,
-                        )
+                        // Search every enabled source before deduplicating the complete result set.
+                        val candidates = coroutineScope {
+                            sources.map { source ->
+                                async {
+                                    searchSource(
+                                        source,
+                                        title,
+                                        sourceSearchSemaphore,
+                                        backgroundSourceSearchSemaphore,
+                                        perSourceSemaphores.getValue(source.id),
+                                        backgroundPerSourceSemaphores.getValue(source.id),
+                                    )
+                                }
+                            }.awaitAll().flatten()
+                        }
                         val outputFile = rowFile(index)
                         val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
-                        val rows = candidates.distinctBy { it.url }.take(8).joinToString("\n") { encode(it) }
+                        val rows = candidates.distinctBy { it.url }.joinToString("\n") { encode(it) }
                         try {
                             FileOutputStream(tempFile).use { stream ->
                                 if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
@@ -385,53 +374,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         return uniqueCandidates.size
     }
 
-    private suspend fun searchTitleUntilFirstSourceMatch(
-        title: String,
-        sources: List<HttpSource>,
-        globalSemaphore: Semaphore,
-        backgroundSemaphore: Semaphore,
-        perSourceSemaphores: Map<Long, Semaphore>,
-        backgroundPerSourceSemaphores: Map<Long, Semaphore>,
-        sourcesPerBatch: Int,
-    ): List<TitleSearchCandidate> {
-        for (sourceBatch in sources.chunked(sourcesPerBatch)) {
-            val batchMatch = supervisorScope {
-                val results = Channel<List<TitleSearchCandidate>>(capacity = sourceBatch.size)
-                val pending = sourceBatch.map { source ->
-                    launch {
-                        results.send(searchSource(
-                            source,
-                            title,
-                            globalSemaphore,
-                            backgroundSemaphore,
-                            perSourceSemaphores.getValue(source.id),
-                            backgroundPerSourceSemaphores.getValue(source.id),
-                        ))
-                    }
-                }.toMutableList()
-                try {
-                    repeat(sourceBatch.size) {
-                        val candidates = results.receive()
-                        if (candidates.isNotEmpty()) {
-                            pending.forEach { it.cancel() }
-                            return@supervisorScope candidates
-                        }
-                    }
-                    emptyList()
-                } finally {
-                    pending.forEach { it.cancel() }
-                    results.close()
-                }
-            }
-            if (batchMatch.isNotEmpty()) return batchMatch
-        }
-        return emptyList()
-    }
-
     private data class SearchConcurrencyLimits(
         val parallelTitles: Int,
         val globalSourceSearches: Int,
-        val sourcesPerTitleBatch: Int,
     )
 
     /** Use a lighter profile while another app is foregrounded, battery saver is on,
@@ -450,13 +395,11 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             SearchConcurrencyLimits(
                 parallelTitles = BACKGROUND_PARALLEL_TITLES,
                 globalSourceSearches = BACKGROUND_GLOBAL_SOURCE_SEARCHES,
-                sourcesPerTitleBatch = BACKGROUND_SOURCES_PER_TITLE_BATCH,
             )
         } else {
             SearchConcurrencyLimits(
                 parallelTitles = FOREGROUND_PARALLEL_TITLES,
                 globalSourceSearches = FOREGROUND_GLOBAL_SOURCE_SEARCHES,
-                sourcesPerTitleBatch = FOREGROUND_SOURCES_PER_TITLE_BATCH,
             )
         }
     }
@@ -485,7 +428,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 query()
             }
                 ?: return emptyList()
-            page.mangas.filter { manga -> TitleSearchMatchQuality.isConfidentMatch(title, manga.title) }.map { manga ->
+            page.mangas.map { manga ->
                 val local = manga.toDomainManga(source.id)
                 TitleSearchCandidate(
                     id = "${title.hashCode()}-${source.id}-${manga.url.hashCode()}",
@@ -561,11 +504,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private const val BACKGROUND_PARALLEL_TITLES = 4
         private const val BACKGROUND_GLOBAL_SOURCE_SEARCHES = 6
         private const val BACKGROUND_PER_SOURCE = 1
-        private const val BACKGROUND_SOURCES_PER_TITLE_BATCH = 2
         private const val FOREGROUND_PARALLEL_TITLES = 8
         private const val FOREGROUND_GLOBAL_SOURCE_SEARCHES = 16
         private const val FOREGROUND_PER_SOURCE = 2
-        private const val FOREGROUND_SOURCES_PER_TITLE_BATCH = 4
         fun isPaused(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PAUSED, false)
         fun setPaused(context: Context, value: Boolean) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PAUSED, value).apply() }
         suspend fun enqueue(context: Context, uri: Uri): UUID = withContext(Dispatchers.IO) {
