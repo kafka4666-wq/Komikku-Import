@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -39,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
@@ -84,6 +86,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.AtomicFile
 import android.util.Base64
+import coil3.compose.AsyncImage
 
 class BatchTitleSearchScreen(
     private val inputUriString: String,
@@ -367,6 +370,12 @@ private fun CandidateCard(
     Card(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
             Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+            AsyncImage(
+                model = candidate.thumbnailUrl,
+                contentDescription = candidate.matchedTitle,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(64.dp),
+            )
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(candidate.matchedTitle, style = MaterialTheme.typography.titleSmall)
                 Text("${candidate.sourceName} · from: ${candidate.inputTitle}", style = MaterialTheme.typography.bodySmall)
@@ -506,21 +515,21 @@ internal enum class TitleSearchSpeedPreset(
 ) {
     FAST(
         "Fast",
-        "Fastest: up to 64 source requests at once; may trigger rate limits on some sites.",
-        TitleSearchConcurrencyLimits(40, 64, 8, 8_000L),
-        TitleSearchConcurrencyLimits(12, 24, 4, 10_000L),
+        "Fast while keeping the app responsive: up to 16 source requests at once.",
+        TitleSearchConcurrencyLimits(12, 16, 3, 8_000L),
+        TitleSearchConcurrencyLimits(8, 10, 2, 10_000L),
     ),
     BALANCED(
         "Balanced",
         "Moderate parallelism for a better balance between speed and source stability.",
-        TitleSearchConcurrencyLimits(28, 48, 6, 9_000L),
-        TitleSearchConcurrencyLimits(10, 20, 3, 12_000L),
+        TitleSearchConcurrencyLimits(8, 12, 2, 9_000L),
+        TitleSearchConcurrencyLimits(6, 8, 2, 12_000L),
     ),
     GENTLE(
         "Gentle",
-        "Fewer simultaneous requests to reduce device and source load; usually slower.",
-        TitleSearchConcurrencyLimits(16, 24, 3, 12_000L),
-        TitleSearchConcurrencyLimits(8, 16, 2, 15_000L),
+        "Fewer simultaneous requests to reduce source and device load; usually slower.",
+        TitleSearchConcurrencyLimits(4, 8, 1, 12_000L),
+        TitleSearchConcurrencyLimits(3, 6, 1, 15_000L),
     );
 
     fun concurrencyLimits(throttled: Boolean): TitleSearchConcurrencyLimits =
@@ -571,11 +580,11 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val checkpointCandidates = resultDirectory.listFiles().orEmpty()
             .filter { it.isFile && it.name.endsWith(".row") }
             .sortedBy { it.name }
-            .flatMap { it.readLines() }
+            .flatMap { it.readLines().filterNot(::isCheckpointMarker) }
             .mapNotNull(::decode)
             .distinctBy { it.id }
         val checkpointResults = TitleSearchCandidateDeduplicator.collapse(checkpointCandidates)
-        val completed = AtomicInteger(titles.indices.count { rowFile(it).isFile })
+        val completed = AtomicInteger(titles.indices.count { isCompletedCheckpoint(rowFile(it), titles[it]) })
         val initialCompleted = completed.get()
         val startedAtMillis = System.currentTimeMillis()
         val found = AtomicInteger(checkpointResults.size)
@@ -606,7 +615,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             titles.indices.chunked(limits.parallelTitles * 2).forEach { batch ->
                 batch.mapNotNull { index ->
                     val title = titles[index]
-                    if (rowFile(index).isFile) return@mapNotNull null
+                    if (isCompletedCheckpoint(rowFile(index), title)) return@mapNotNull null
                     async(Dispatchers.IO) {
                         titleSemaphore.withPermit {
                             awaitNotPaused(workId)
@@ -635,7 +644,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                             val outputFile = rowFile(index)
                             val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
                             val titleCandidates = TitleSearchCandidateDeduplicator.collapse(candidates)
-                            val rows = titleCandidates.joinToString("\n") { encode(it) }
+                            val rows = buildString {
+                                append(checkpointMarker(title))
+                                if (titleCandidates.isNotEmpty()) {
+                                    append('\n')
+                                    append(titleCandidates.joinToString("\n") { encode(it) })
+                                }
+                            }
                             try {
                                 FileOutputStream(tempFile).use { stream ->
                                     if (rows.isNotEmpty()) stream.write(rows.toByteArray(Charsets.UTF_8))
@@ -921,6 +936,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
 
         private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
         private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4], v.getOrNull(5)?.ifBlank { null }) }.getOrNull()
+        private const val CHECKPOINT_PREFIX = "#batch-title-search-complete:"
+        private fun checkpointMarker(title: String): String = CHECKPOINT_PREFIX + Base64.encodeToString(title.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        private fun isCheckpointMarker(line: String): Boolean = line.startsWith(CHECKPOINT_PREFIX)
+        private fun isCompletedCheckpoint(file: File, title: String): Boolean = runCatching {
+            if (!file.isFile) return@runCatching false
+            val lines = file.readLines()
+            lines.firstOrNull() == checkpointMarker(title) || lines.any { !isCheckpointMarker(it) && decode(it) != null }
+        }.getOrDefault(false)
         private fun cleanTitle(value: String): String = value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ").replace(Regex("\\s+"), " ").trim()
         private fun absoluteUrl(source: Source, value: String): String {
             if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
