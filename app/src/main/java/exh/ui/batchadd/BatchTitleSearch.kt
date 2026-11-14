@@ -277,10 +277,16 @@ class BatchTitleSearchScreen(
         val etaSeconds = progress?.getInt(BatchTitleSearchWorker.KEY_ETA_SECONDS, -1) ?: -1
         val activeSpeedPreset = progress?.getString(BatchTitleSearchWorker.KEY_SPEED_PRESET)
             ?.let { TitleSearchSpeedPreset.fromName(it) } ?: speedPreset
+        val canResume = jobId?.let { BatchTitleSearchWorker.canResume(context, it) } == true
         var paused by remember(jobId) { mutableStateOf(false) }
         LaunchedEffect(jobId, info?.state) {
+            val currentJobId = jobId ?: run {
+                paused = false
+                return@LaunchedEffect
+            }
             while (isActive) {
-                paused = BatchTitleSearchWorker.isPaused(context, jobId)
+                paused = BatchTitleSearchWorker.isPaused(context, currentJobId)
+                if (info?.state?.isFinished == true) break
                 delay(500)
             }
         }
@@ -376,7 +382,9 @@ class BatchTitleSearchScreen(
                             Text("Estimated time remaining: ${formatTitleSearchEta(etaSeconds)}", style = MaterialTheme.typography.bodySmall)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!paused) {
+                            if (!canResume) {
+                                Text("This search predates durable pause/resume. Let it finish or cancel it.", modifier = Modifier.weight(1f))
+                            } else if (!paused) {
                                 Button(onClick = { BatchTitleSearchWorker.setPaused(context, true, jobId) }) { Text("Pause") }
                             } else {
                                 Text("Pausing safely…", modifier = Modifier.weight(1f))
@@ -531,7 +539,7 @@ class BatchTitleSearchScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         if (failed && !failureDetail.isNullOrBlank()) Text(failureDetail, style = MaterialTheme.typography.bodySmall)
-                        if (paused || failed || info?.state == WorkInfo.State.CANCELLED) {
+                        if (canResume && (paused || failed || info?.state == WorkInfo.State.CANCELLED)) {
                             Button(
                                 onClick = {
                                     val previousWorkId = jobId ?: return@Button
@@ -541,6 +549,11 @@ class BatchTitleSearchScreen(
                                     }
                                 },
                             ) { Text("Resume from last completed title") }
+                        } else if (!canResume && (failed || info?.state == WorkInfo.State.CANCELLED)) {
+                            Text(
+                                "This search was started by an older build without a saved session. Re-select its TXT to safely start a new search; future searches can resume from saved checkpoints.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 } else if (!selectingSources && !running) {
@@ -1183,6 +1196,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             if (value && workId != null) runCatching { context.workManager.cancelWorkById(UUID.fromString(workId)) }
         }
         fun savedJobId(context: Context): String? = prefs(context).getString(ACTIVE_JOB_ID, null)
+        fun canResume(context: Context, workId: String): Boolean = prefs(context).getString(WORK_SESSION_PREFIX + workId, null) != null
         fun savedAutoImportWorkId(context: Context, titleSearchWorkId: String): String? {
             val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
             return prefs(context).getString(AUTO_IMPORT_JOB_PREFIX + session, null)
@@ -1203,13 +1217,18 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             val value = savedJobId(context) ?: return null
             val id = runCatching { UUID.fromString(value) }.getOrNull() ?: return null
             val info = runCatching { context.workManager.getWorkInfoById(id).get() }.getOrNull()
+            val recoverable = prefs(context).getString(WORK_SESSION_PREFIX + value, null) != null
             if (info == null) {
-                if (sessionForWork(context, value) != null) return value
+                if (recoverable) return value
                 clearSavedJob(context, value)
                 return null
             }
             if (!info.state.isFinished) return value
-            if (info.state != WorkInfo.State.SUCCEEDED) return value
+            if (info.state != WorkInfo.State.SUCCEEDED) {
+                if (recoverable) return value
+                clearSavedJob(context, value)
+                return null
+            }
             clearSavedJob(context, value)
             return null
         }
@@ -1290,37 +1309,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }
 
         suspend fun resume(context: Context, previousWorkId: String): UUID? = withContext(Dispatchers.IO) {
-            val sessionId = sessionForWork(context, previousWorkId) ?: previousWorkId
-            var manifest = loadManifest(context, sessionId)
-            if (manifest == null) {
-                val oldId = runCatching { UUID.fromString(previousWorkId) }.getOrNull() ?: return@withContext null
-                val oldWork = runCatching { context.workManager.getWorkInfoById(oldId).get() }.getOrNull() ?: return@withContext null
-                val oldInput = oldWork.inputData
-                val inputFile = oldInput.getString(KEY_TITLES_FILE)?.let(::File)
-                val titleText = when {
-                    inputFile?.isFile == true -> runCatching { inputFile.readText() }.getOrNull()
-                    oldInput.getString(KEY_URI) != null -> runCatching {
-                        context.contentResolver.openInputStream(Uri.parse(oldInput.getString(KEY_URI)))?.bufferedReader()?.use { it.readText() }
-                    }.getOrNull()
-                    else -> null
-                } ?: return@withContext null
-                val copiedTitles = File(context.filesDir, "batch-title-search-$sessionId.txt")
-                copiedTitles.writeText(titleText)
-                val migratedManifest = TitleSearchSessionManifest(
-                    sessionId = sessionId,
-                    titleFilePath = copiedTitles.absolutePath,
-                    sourceIds = oldInput.getLongArray(KEY_SOURCE_IDS)?.toSet(),
-                    speedPresetName = oldInput.getString(KEY_SPEED_PRESET) ?: TitleSearchSpeedPreset.FAST.name,
-                    autoImport = oldInput.getBoolean(KEY_AUTO_IMPORT, false) || isAutoImportRequested(context, previousWorkId),
-                    uniqueWorkName = "batch_title_search_session_$sessionId",
-                )
-                saveManifest(context, migratedManifest)
-                prefs(context).edit().putString(WORK_SESSION_PREFIX + previousWorkId, sessionId).apply()
-                manifest = migratedManifest
-            }
-            val sessionManifest = manifest ?: return@withContext null
+            val sessionId = sessionForWork(context, previousWorkId) ?: return@withContext null
+            val manifest = loadManifest(context, sessionId) ?: return@withContext null
             var active = runCatching {
-                context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+                context.workManager.getWorkInfosForUniqueWork(manifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
             }.getOrNull()
             if (active != null && !isPaused(context, sessionId)) {
                 saveJobId(context, active.id.toString(), sessionId)
@@ -1331,12 +1323,12 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 for (attempt in 0 until 50) {
                     delay(100)
                     active = runCatching {
-                        context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+                        context.workManager.getWorkInfosForUniqueWork(manifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
                     }.getOrNull()
                     if (active == null) break
                 }
                 active = runCatching {
-                    context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+                    context.workManager.getWorkInfosForUniqueWork(manifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
                 }.getOrNull()
                 if (active != null && !isPaused(context, sessionId)) {
                     saveJobId(context, active.id.toString(), sessionId)
@@ -1344,7 +1336,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 }
                 if (active != null) return@withContext null
             }
-            enqueueManifest(context, sessionManifest)
+            enqueueManifest(context, manifest)
         }
 
         fun enqueueTitles(context: Context, titles: List<String>, autoImport: Boolean = false): UUID {
