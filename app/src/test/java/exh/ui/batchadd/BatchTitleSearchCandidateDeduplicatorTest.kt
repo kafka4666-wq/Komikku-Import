@@ -97,6 +97,19 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
+    fun `best per input chooses the closest weak title`() {
+        val candidates = listOf(
+            candidate("far", "Summer Girl", "Completely Different", "A Source", "https://a.example/far"),
+            candidate("close", "Summer Girl", "Summer Gurl", "Z Source", "https://z.example/close"),
+        )
+
+        val best = TitleSearchCandidateDeduplicator.bestPerInput(candidates)
+
+        assertEquals("https://z.example/close", best.single().url)
+        assertTrue(!TitleMatchQuality.isStrong(candidates[1]))
+    }
+
+    @Test
     fun `all unique sources for one input are kept after collapse`() {
         val candidates = listOf(
             candidate("a", "Summer Girl", "Summer Girl", "A Source", "https://a.example/summer"),

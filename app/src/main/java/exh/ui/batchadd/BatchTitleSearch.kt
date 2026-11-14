@@ -312,10 +312,12 @@ class BatchTitleSearchScreen(
                                 TextButton(
                                     onClick = {
                                         selected.clear()
-                                        TitleSearchCandidateDeduplicator.bestPerInput(strongResults).forEach { selected.add(it.id) }
-                                        selectedTab = 0
+                                        val candidates = if (selectedTab == 0) strongResults else weakResults
+                                        TitleSearchCandidateDeduplicator.bestPerInput(candidates).forEach { selected.add(it.id) }
                                     },
-                                ) { Text("Select best strong per title") }
+                                ) {
+                                    Text(if (selectedTab == 0) "Select best strong per title" else "Select closest weak per title")
+                                }
                                 TextButton(onClick = { selected.clear() }) { Text("Clear selection") }
                             }
                             Button(
@@ -406,6 +408,39 @@ internal object TitleMatchQuality {
         return hits * 2 >= inputTokens.size && hits >= 2
     }
 
+    /** Stable 0..2000 score used to choose the closest result for a required title. */
+    fun similarityScore(candidate: TitleSearchCandidate): Int {
+        val input = TitleSearchCandidateDeduplicator.normalize(candidate.inputTitle)
+        val matched = TitleSearchCandidateDeduplicator.normalize(candidate.matchedTitle)
+        if (input.isEmpty() || matched.isEmpty()) return 0
+        val maxLength = maxOf(input.length, matched.length)
+        val editScore = ((maxLength - levenshteinDistance(input, matched)) * 1000 / maxLength).coerceAtLeast(0)
+        val inputTokens = candidate.inputTitle.lowercase().split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        val matchedTokens = candidate.matchedTitle.lowercase().split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length >= 2 }
+            .toSet()
+        val tokenScore = if (inputTokens.isEmpty()) 0 else inputTokens.count { it in matchedTokens } * 1000 / inputTokens.size
+        return editScore + tokenScore
+    }
+
+    private fun levenshteinDistance(left: String, right: String): Int {
+        var previous = IntArray(right.length + 1) { it }
+        for (i in left.indices) {
+            val current = IntArray(right.length + 1)
+            current[0] = i + 1
+            for (j in right.indices) {
+                current[j + 1] = minOf(
+                    current[j] + 1,
+                    previous[j + 1] + 1,
+                    previous[j] + if (left[i] == right[j]) 0 else 1,
+                )
+            }
+            previous = current
+        }
+        return previous[right.length]
+    }
+
     private fun String.chunkedTokens(): List<String> {
         if (length < 3) return emptyList()
         return Regex("[a-z0-9]{3,}").findAll(this).map { it.value }.toList()
@@ -442,6 +477,7 @@ internal object TitleSearchCandidateDeduplicator {
                 group.minWith(
                     compareByDescending<TitleSearchCandidate> { TitleMatchQuality.isExact(it) }
                         .thenByDescending { TitleMatchQuality.isStrong(it) }
+                        .thenByDescending { TitleMatchQuality.similarityScore(it) }
                         .thenBy { it.sourceName.lowercase() }
                         .thenBy { it.url.lowercase() },
                 )
