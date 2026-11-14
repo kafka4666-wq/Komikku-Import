@@ -172,15 +172,16 @@ class BatchTitleSearchScreen(
         LaunchedEffect(jobId, importWorkId, fallbackImportWorkId, info?.state, results, inputTitles, autoImportRequested) {
             if (!autoImportRequested || info?.state != WorkInfo.State.SUCCEEDED) return@LaunchedEffect
             var resolvedImportWorkId = importWorkId
-            if (resolvedImportWorkId == null && searchResultsLoaded && results.isNotEmpty() && jobId != null) {
+            val searchWorkId = jobId
+            if (resolvedImportWorkId == null && searchResultsLoaded && results.isNotEmpty() && searchWorkId != null) {
                 val urls = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(results)
                     .map { it.url }.distinctBy(::canonicalImportUrl)
                 if (urls.isNotEmpty()) {
                     val started = withContext(Dispatchers.IO) {
-                        BatchImportJob.startTitleMatches(context.applicationContext, urls, titleSearchWorkId = jobId)
+                        BatchImportJob.startTitleMatches(context.applicationContext, urls, titleSearchWorkId = searchWorkId)
                     }
                     resolvedImportWorkId = started.toString()
-                    BatchTitleSearchWorker.saveAutoImportWorkId(context.applicationContext, jobId, resolvedImportWorkId)
+                    BatchTitleSearchWorker.saveAutoImportWorkId(context.applicationContext, searchWorkId, resolvedImportWorkId)
                     fallbackImportWorkId = resolvedImportWorkId
                 }
             }
