@@ -137,7 +137,9 @@ class BatchTitleSearchScreen(
                 if (workInfo?.state?.isFinished == true) {
                     val resultPath = workInfo.outputData.getString(BatchTitleSearchWorker.KEY_RESULT_FILE)
                         ?: BatchTitleSearchWorker.partialResultsPath(context, id.toString())
-                    results = BatchTitleSearchWorker.readResults(context, resultPath)
+                    results = withContext(Dispatchers.IO) {
+                        BatchTitleSearchWorker.readResults(context, resultPath)
+                    }
                 }
             }
         }
@@ -149,8 +151,8 @@ class BatchTitleSearchScreen(
                 val nextResults = withContext(Dispatchers.IO) {
                     BatchTitleSearchWorker.readResults(context, path)
                 }
-                if (nextResults != results) results = nextResults
-                delay(2_500)
+                if (nextResults.size != results.size) results = nextResults
+                delay(4_000)
             }
         }
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
@@ -516,20 +518,20 @@ internal enum class TitleSearchSpeedPreset(
     FAST(
         "Fast",
         "Fast while keeping the app responsive: up to 16 source requests at once.",
-        TitleSearchConcurrencyLimits(12, 16, 3, 8_000L),
-        TitleSearchConcurrencyLimits(8, 10, 2, 10_000L),
+        TitleSearchConcurrencyLimits(2, 16, 3, 8_000L),
+        TitleSearchConcurrencyLimits(1, 10, 2, 10_000L),
     ),
     BALANCED(
         "Balanced",
         "Moderate parallelism for a better balance between speed and source stability.",
-        TitleSearchConcurrencyLimits(8, 12, 2, 9_000L),
-        TitleSearchConcurrencyLimits(6, 8, 2, 12_000L),
+        TitleSearchConcurrencyLimits(2, 12, 2, 9_000L),
+        TitleSearchConcurrencyLimits(1, 8, 2, 12_000L),
     ),
     GENTLE(
         "Gentle",
         "Fewer simultaneous requests to reduce source and device load; usually slower.",
-        TitleSearchConcurrencyLimits(4, 8, 1, 12_000L),
-        TitleSearchConcurrencyLimits(3, 6, 1, 15_000L),
+        TitleSearchConcurrencyLimits(2, 8, 1, 12_000L),
+        TitleSearchConcurrencyLimits(1, 6, 1, 15_000L),
     );
 
     fun concurrencyLimits(throttled: Boolean): TitleSearchConcurrencyLimits =
@@ -612,7 +614,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         coroutineScope {
             // Keep the number of waiting coroutines bounded. Creating one coroutine per
             // input title made large files consume memory and made pause feel ineffective.
-            titles.indices.chunked(limits.parallelTitles * 2).forEach { batch ->
+            titles.indices.chunked(limits.parallelTitles).forEach { batch ->
                 batch.mapNotNull { index ->
                     val title = titles[index]
                     if (isCompletedCheckpoint(rowFile(index), title)) return@mapNotNull null
