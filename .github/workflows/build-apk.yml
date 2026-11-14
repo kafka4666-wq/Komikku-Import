@@ -98,6 +98,11 @@ jobs:
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchConcurrencyLimits(2, 16, 3, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchRetryPolicy.isRetryable(error)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'checkpointProgress(context.applicationContext, currentWorkId)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq '.setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'getWorkInfosByTag(BatchImportJob.WORK_TAG)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'WORK_TAG = "BatchImport"' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:

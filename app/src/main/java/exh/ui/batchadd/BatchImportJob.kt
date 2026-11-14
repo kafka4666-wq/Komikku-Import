@@ -365,7 +365,8 @@ class BatchImportJob(
     }
 
     companion object {
-        private const val TAG = "BatchImport"
+        internal const val WORK_TAG = "BatchImport"
+        private const val TAG = WORK_TAG
         private const val INPUT_PATH = "input_path"
         private const val KEY_NHENTAI_IMPORT = "nhentai_import"
         private const val KEY_NOTIFICATION_ID = "notification_id"

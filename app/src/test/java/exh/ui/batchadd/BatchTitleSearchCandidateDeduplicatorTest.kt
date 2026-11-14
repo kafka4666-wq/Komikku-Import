@@ -1,8 +1,10 @@
 package exh.ui.batchadd
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.IOException
 
 class BatchTitleSearchCandidateDeduplicatorTest {
     @Test
@@ -189,6 +191,20 @@ class BatchTitleSearchCandidateDeduplicatorTest {
             assertTrue(throttled.perSourceSearches <= normal.perSourceSearches)
             assertTrue(throttled.parallelTitles < normal.parallelTitles)
         }
+    }
+
+    @Test
+    fun `transient I O errors retry but invalid source configuration does not`() {
+        assertTrue(TitleSearchRetryPolicy.isRetryable(IOException("temporary source failure")))
+        assertFalse(TitleSearchRetryPolicy.isRetryable(IllegalStateException("selected source is not installed")))
+    }
+
+    @Test
+    fun `source retries have bounded short delays`() {
+        assertEquals(3, TitleSearchRetryPolicy.SOURCE_ATTEMPTS)
+        assertEquals(1_000L, TitleSearchRetryPolicy.sourceDelayMillis(1))
+        assertEquals(2_000L, TitleSearchRetryPolicy.sourceDelayMillis(2))
+        assertEquals(2_000L, TitleSearchRetryPolicy.sourceDelayMillis(3))
     }
 
     @Test

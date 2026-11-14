@@ -45,11 +45,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
+import androidx.work.NetworkType
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -86,6 +89,7 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.AtomicFile
 import android.util.Base64
@@ -261,10 +265,19 @@ class BatchTitleSearchScreen(
                 delay(4_000)
             }
         }
+        var durableProgress by remember(jobId) { mutableStateOf<Pair<Int, Int>?>(null) }
+        LaunchedEffect(jobId, info?.state, info?.progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, -1)) {
+            val currentWorkId = jobId ?: return@LaunchedEffect
+            durableProgress = withContext(Dispatchers.IO) {
+                BatchTitleSearchWorker.checkpointProgress(context.applicationContext, currentWorkId)
+            }
+        }
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
         val progress = info?.progress
-        val completed = progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, 0) ?: 0
-        val total = progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, 0) ?: 0
+        // Checkpoint rows are committed atomically only after every selected source
+        // finished a title. They remain authoritative across process death/retries.
+        val completed = durableProgress?.first ?: progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, 0) ?: 0
+        val total = durableProgress?.second ?: progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, 0) ?: 0
         val found = progress?.getInt(BatchTitleSearchWorker.KEY_FOUND, results.size) ?: results.size
         val foundStrong = progress?.getInt(
             BatchTitleSearchWorker.KEY_FOUND_STRONG,
@@ -275,9 +288,15 @@ class BatchTitleSearchScreen(
             results.count { !TitleMatchQuality.isStrong(it) },
         ) ?: results.count { !TitleMatchQuality.isStrong(it) }
         val etaSeconds = progress?.getInt(BatchTitleSearchWorker.KEY_ETA_SECONDS, -1) ?: -1
+        val importRunning = progress?.getBoolean(BatchTitleSearchWorker.KEY_BACKGROUND_IMPORT_ACTIVE, false) == true
         val activeSpeedPreset = progress?.getString(BatchTitleSearchWorker.KEY_SPEED_PRESET)
             ?.let { TitleSearchSpeedPreset.fromName(it) } ?: speedPreset
         val canResume = jobId?.let { BatchTitleSearchWorker.canResume(context, it) } == true
+        val recoveringProgress = running && canResume && durableProgress == null
+        var lastRetryFailure by remember(jobId) { mutableStateOf<String?>(null) }
+        LaunchedEffect(jobId, info?.state, info?.runAttemptCount) {
+            lastRetryFailure = jobId?.let { BatchTitleSearchWorker.lastRetryFailure(context, it) }
+        }
         var paused by remember(jobId) { mutableStateOf(false) }
         LaunchedEffect(jobId, info?.state) {
             val currentJobId = jobId ?: run {
@@ -372,12 +391,27 @@ class BatchTitleSearchScreen(
                             "Searching all enabled sources with the ${activeSpeedPreset.label} preset. Results stay grouped by input title, and partial matches appear below as titles finish.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
+                        if (importRunning) {
+                            Text("A library addition is also running. Search is using reduced concurrency so both jobs can keep progressing.", style = MaterialTheme.typography.bodySmall)
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             CircularProgressIndicator()
-                            Text(if (total > 0) "Searching $completed/$total titles…" else "Searching enabled sources…")
+                            Text(
+                                when {
+                                    recoveringProgress -> "Restoring saved title-search progress…"
+                                    total > 0 -> "Searching $completed/$total titles…"
+                                    else -> "Searching enabled sources…"
+                                },
+                            )
                         }
-                        if (total > 0) LinearProgressIndicator(progress = { completed.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+                        if (total > 0 && !recoveringProgress) LinearProgressIndicator(progress = { completed.toFloat() / total }, modifier = Modifier.fillMaxWidth())
                         Text("Found $found matches · Strong $foundStrong · Weak $foundWeak", style = MaterialTheme.typography.titleSmall)
+                        if (info?.state == WorkInfo.State.ENQUEUED && !lastRetryFailure.isNullOrBlank()) {
+                            Text(
+                                "A source request temporarily failed; WorkManager is retrying this title. Completed title checkpoints and other background work are preserved. Attempt ${info?.runAttemptCount ?: 1}. Details: $lastRetryFailure",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         if (etaSeconds >= 0 && completed < total) {
                             Text("Estimated time remaining: ${formatTitleSearchEta(etaSeconds)}", style = MaterialTheme.typography.bodySmall)
                         }
@@ -801,6 +835,14 @@ internal data class TitleSearchConcurrencyLimits(
     val timeoutMillis: Long,
 )
 
+internal object TitleSearchRetryPolicy {
+    const val SOURCE_ATTEMPTS = 3
+
+    fun isRetryable(error: Throwable): Boolean = error is IOException
+
+    fun sourceDelayMillis(completedAttempt: Int): Long = completedAttempt.coerceIn(1, SOURCE_ATTEMPTS - 1) * 1_000L
+}
+
 internal enum class TitleSearchSpeedPreset(
     val label: String,
     val description: String,
@@ -849,6 +891,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
     override suspend fun doWork(): Result {
         val workId = inputData.getString(KEY_SESSION_ID) ?: id.toString()
+        clearRetryFailure(applicationContext, id.toString())
         try {
         val resultDirectory = File(applicationContext.filesDir, "batch-title-search-$workId.result-rows")
         val finalResultFile = File(applicationContext.filesDir, "batch-title-search-$workId.final-results")
@@ -868,9 +911,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .filterIsInstance<HttpSource>()
             .filter { requestedSourceIds?.contains(it.id) ?: (it.lang in enabledLanguages && it.id.toString() !in disabled) }
         if (requestedSourceIds != null && sources.map { it.id }.toSet() != requestedSourceIds) {
-            throw IOException("One or more selected sources are no longer installed. Reinstall them, then resume this search.")
+            throw IllegalStateException("One or more selected sources are no longer installed. Reinstall them, then resume this search.")
         }
-        if (sources.isEmpty()) throw IOException("No selected online sources are currently available.")
+        if (sources.isEmpty()) throw IllegalStateException("No selected online sources are currently available.")
         if (!resultDirectory.exists() && !resultDirectory.mkdirs()) return Result.failure()
         resultDirectory.listFiles().orEmpty()
             .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
@@ -889,7 +932,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val foundStrong = AtomicInteger(checkpointResults.count { TitleMatchQuality.isStrong(it) })
         val foundWeak = AtomicInteger(checkpointResults.count { !TitleMatchQuality.isStrong(it) })
         val speedPreset = TitleSearchSpeedPreset.fromName(inputData.getString(KEY_SPEED_PRESET))
-        val limits = searchConcurrencyLimits(speedPreset)
+        val importRunning = hasActiveLibraryImport()
+        val limits = searchConcurrencyLimits(speedPreset, importRunning)
         val titleSemaphore = Semaphore(limits.parallelTitles)
         val sourceSearchSemaphore = Semaphore(limits.globalSourceSearches)
         val perSourceSemaphores = sources.associate { it.id to Semaphore(limits.perSourceSearches) }
@@ -905,6 +949,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 KEY_SPEED_PRESET to speedPreset.name,
                 KEY_AUTO_IMPORT to inputData.getBoolean(KEY_AUTO_IMPORT, false),
                 KEY_PAUSED to isPaused(applicationContext, workId),
+                KEY_BACKGROUND_IMPORT_ACTIVE to importRunning,
             ),
         )
         updateNotification(completed.get(), titles.size, "Searching ${sources.size} enabled sources · ${limits.globalSourceSearches} concurrent requests")
@@ -985,6 +1030,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                         KEY_SPEED_PRESET to speedPreset.name,
                                         KEY_AUTO_IMPORT to inputData.getBoolean(KEY_AUTO_IMPORT, false),
                                         KEY_PAUSED to isPaused(applicationContext, workId),
+                                        KEY_BACKGROUND_IMPORT_ACTIVE to importRunning,
                                     ),
                                 )
                                 updateNotification(done, titles.size, "Finished $done/${titles.size} · ${found.get()} matches")
@@ -1007,6 +1053,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 BatchImportJob.startTitleMatches(applicationContext, urls, titleSearchWorkId = workId).toString()
             }.onFailure { xLogE("Automatic title import could not be queued", it) }.getOrNull()
         } else null
+        clearRetryFailure(applicationContext, id.toString())
         clearSavedJob(applicationContext, id.toString())
         val output = Data.Builder()
             .putString(KEY_RESULT_FILE, finalResultFile.absolutePath)
@@ -1022,6 +1069,11 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         } catch (error: Exception) {
             xLogE("Title search session failed before all selected sources completed", error)
             val reason = error.message?.take(500) ?: error.javaClass.simpleName
+            if (TitleSearchRetryPolicy.isRetryable(error)) {
+                saveRetryFailure(applicationContext, id.toString(), reason)
+                return Result.retry()
+            }
+            clearRetryFailure(applicationContext, id.toString())
             return Result.failure(workDataOf(KEY_FAILURE_REASON to reason))
         }
     }
@@ -1050,16 +1102,45 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         return uniqueCandidates.size
     }
 
-    private fun searchConcurrencyLimits(speedPreset: TitleSearchSpeedPreset): TitleSearchConcurrencyLimits {
+    private fun hasActiveLibraryImport(): Boolean = runCatching {
+        applicationContext.workManager.getWorkInfosByTag(BatchImportJob.WORK_TAG).get()
+            .any { !it.state.isFinished }
+    }.getOrDefault(false)
+
+    private fun searchConcurrencyLimits(speedPreset: TitleSearchSpeedPreset, importRunning: Boolean): TitleSearchConcurrencyLimits {
         val powerManager = applicationContext.getSystemService(PowerManager::class.java)
         val powerSave = powerManager?.isPowerSaveMode == true
         val thermallyConstrained = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && runCatching {
             (powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE) >= PowerManager.THERMAL_STATUS_MODERATE
         }.getOrDefault(false)
-        return speedPreset.concurrencyLimits(powerSave || thermallyConstrained)
+        return speedPreset.concurrencyLimits(powerSave || thermallyConstrained || importRunning)
     }
 
     private suspend fun searchSource(
+        source: Source,
+        title: String,
+        globalSemaphore: Semaphore,
+        sourceSemaphore: Semaphore,
+        timeoutMillis: Long,
+        workId: String,
+    ): List<TitleSearchCandidate> {
+        var lastFailure: IOException? = null
+        for (attempt in 1..TitleSearchRetryPolicy.SOURCE_ATTEMPTS) {
+            try {
+                return searchSourceOnce(source, title, globalSemaphore, sourceSemaphore, timeoutMillis, workId)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: IOException) {
+                lastFailure = error
+                if (attempt < TitleSearchRetryPolicy.SOURCE_ATTEMPTS) {
+                    delay(TitleSearchRetryPolicy.sourceDelayMillis(attempt))
+                }
+            }
+        }
+        throw lastFailure ?: IOException("Search failed for ${source.name} while checking '$title'.")
+    }
+
+    private suspend fun searchSourceOnce(
         source: Source,
         title: String,
         globalSemaphore: Semaphore,
@@ -1091,7 +1172,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: Exception) {
-            throw IOException("Search failed for ${source.name} while checking '$title'.", error)
+            throw IOException("Search failed for ${source.name} while checking '$title': ${error.message ?: error.javaClass.simpleName}", error)
         }
     }
     private suspend fun awaitNotPaused(workId: String) {
@@ -1150,6 +1231,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_SOURCE_IDS = "source_ids"
         const val KEY_SESSION_ID = "session_id"
         const val KEY_FAILURE_REASON = "failure_reason"
+        const val KEY_BACKGROUND_IMPORT_ACTIVE = "background_import_active"
         const val NOTIFICATION_ID = -1810
         const val ACTION_OPEN_BATCH_TITLE_SEARCH = "com.manus.komikku.OPEN_BATCH_TITLE_SEARCH"
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
@@ -1159,6 +1241,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private const val WORK_SESSION_PREFIX = "work_session:"
         private const val AUTO_IMPORT_JOB_PREFIX = "auto_import_job:"
         private const val AUTO_IMPORT_REQUESTED_PREFIX = "auto_import_requested:"
+        private const val RETRY_FAILURE_PREFIX = "retry_failure:"
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         private fun sessionDirectory(context: Context) = File(context.filesDir, "batch-title-search-sessions").apply { mkdirs() }
         private fun manifestFile(context: Context, sessionId: String) = File(sessionDirectory(context), "$sessionId.session")
@@ -1197,6 +1280,18 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }
         fun savedJobId(context: Context): String? = prefs(context).getString(ACTIVE_JOB_ID, null)
         fun canResume(context: Context, workId: String): Boolean = prefs(context).getString(WORK_SESSION_PREFIX + workId, null) != null
+        fun lastRetryFailure(context: Context, workId: String): String? {
+            val sessionId = sessionForWork(context, workId) ?: workId
+            return prefs(context).getString(RETRY_FAILURE_PREFIX + sessionId, null)
+        }
+        private fun saveRetryFailure(context: Context, workId: String, reason: String) {
+            val sessionId = sessionForWork(context, workId) ?: workId
+            prefs(context).edit().putString(RETRY_FAILURE_PREFIX + sessionId, reason).apply()
+        }
+        private fun clearRetryFailure(context: Context, workId: String) {
+            val sessionId = sessionForWork(context, workId) ?: workId
+            prefs(context).edit().remove(RETRY_FAILURE_PREFIX + sessionId).apply()
+        }
         fun savedAutoImportWorkId(context: Context, titleSearchWorkId: String): String? {
             val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
             return prefs(context).getString(AUTO_IMPORT_JOB_PREFIX + session, null)
@@ -1246,6 +1341,19 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             return File(context.filesDir, "batch-title-search-$sessionId.result-rows").absolutePath
         }
 
+        fun checkpointProgress(context: Context, workId: String): Pair<Int, Int>? = runCatching {
+            val sessionId = sessionForWork(context, workId) ?: return@runCatching null
+            val manifest = loadManifest(context, sessionId) ?: return@runCatching null
+            val titlesFile = File(manifest.titleFilePath)
+            if (!titlesFile.isFile) return@runCatching null
+            val titles = titlesFile.readLines().map(::cleanTitle).map(String::trim).filter(String::isNotBlank).distinct()
+            val rows = File(context.filesDir, "batch-title-search-$sessionId.result-rows")
+            val complete = titles.indices.count { index ->
+                isCompletedCheckpoint(File(rows, "${index.toString().padStart(8, '0')}.row"), titles[index])
+            }
+            complete to titles.size
+        }.getOrNull()
+
         internal suspend fun enqueue(
             context: Context,
             uri: Uri,
@@ -1286,6 +1394,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 KEY_SESSION_ID to manifest.sessionId,
             )
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setInputData(if (manifest.sourceIds == null) input else workDataOf(
                     KEY_TITLES_FILE to manifest.titleFilePath,
                     KEY_SOURCE_IDS to manifest.sourceIds.toLongArray(),
@@ -1293,6 +1402,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                     KEY_AUTO_IMPORT to manifest.autoImport,
                     KEY_SESSION_ID to manifest.sessionId,
                 ))
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)
                 .addTag("batch_title_search")
                 .build()
             prefs(context).edit().putBoolean(pauseKey(manifest.sessionId), false).apply()
@@ -1351,12 +1461,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             val id = UUID.randomUUID()
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
                 .setId(id)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setInputData(workDataOf(
                     KEY_TITLES_FILE to file.absolutePath,
                     KEY_AUTO_IMPORT to autoImport,
                     KEY_SPEED_PRESET to TitleSearchSpeedPreset.FAST.name,
                     KEY_SESSION_ID to sessionId,
                 ))
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)
                 .addTag("batch_title_search")
                 .build()
             prefs(context).edit().putBoolean(pauseKey(sessionId), false).putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + sessionId, autoImport).apply()
