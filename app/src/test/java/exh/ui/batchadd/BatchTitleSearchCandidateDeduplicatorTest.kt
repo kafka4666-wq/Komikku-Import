@@ -110,6 +110,31 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
+    fun `automatic selection prefers any strong hit over a closer weak hit`() {
+        val weak = candidate("weak", "Summer Girl", "Summer Gurlz", "A Source", "https://a.example/weak")
+        val strong = candidate("strong", "Summer Girl", "Summer", "Z Source", "https://z.example/strong")
+        assertTrue(!TitleMatchQuality.isStrong(weak))
+        assertTrue(TitleMatchQuality.isStrong(strong))
+
+        val selected = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(listOf(weak, strong))
+
+        assertEquals(listOf("https://z.example/strong"), selected.map { it.url })
+    }
+
+    @Test
+    fun `automatic selection falls back to the best weak hit when there are no strong hits`() {
+        val candidates = listOf(
+            candidate("far", "Summer Girl", "Completely Different", "A Source", "https://a.example/far"),
+            candidate("close", "Summer Girl", "Summer Gurlz", "Z Source", "https://z.example/close"),
+        )
+
+        val selected = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(candidates)
+
+        assertEquals(listOf("https://z.example/close"), selected.map { it.url })
+        assertTrue(selected.none(TitleMatchQuality::isStrong))
+    }
+
+    @Test
     fun `all unique sources for one input are kept after collapse`() {
         val candidates = listOf(
             candidate("a", "Summer Girl", "Summer Girl", "A Source", "https://a.example/summer"),

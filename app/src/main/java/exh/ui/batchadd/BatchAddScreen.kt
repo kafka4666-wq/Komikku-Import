@@ -75,7 +75,7 @@ class BatchAddScreen : Screen() {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPresetName = titleSearchSpeed.name))
+            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPresetName = titleSearchSpeed.name, autoImport = true))
         }
         fun openTitleSearch() {
             if (openingTitleSearch) return

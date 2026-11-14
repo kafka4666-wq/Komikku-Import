@@ -44,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
@@ -92,6 +93,7 @@ class BatchTitleSearchScreen(
     private val inputUriString: String,
     private val existingJobId: String? = null,
     private val speedPresetName: String = TitleSearchSpeedPreset.FAST.name,
+    private val autoImport: Boolean = false,
 ) : Screen() {
     @Composable
     override fun Content() {
@@ -115,6 +117,9 @@ class BatchTitleSearchScreen(
         }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
+        var inputTitles by remember { mutableStateOf<List<String>>(emptyList()) }
+        var importInfo by remember { mutableStateOf<WorkInfo?>(null) }
+        var importedRows by remember { mutableStateOf<List<AutoImportedTitleResult>>(emptyList()) }
         val selected = remember { mutableStateListOf<String>() }
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
@@ -128,6 +133,7 @@ class BatchTitleSearchScreen(
                 inputUri,
                 selectedSourceIds,
                 speedPreset,
+                autoImport = autoImport,
             ).toString()
         }
         LaunchedEffect(jobId) {
@@ -140,6 +146,35 @@ class BatchTitleSearchScreen(
                     results = withContext(Dispatchers.IO) {
                         BatchTitleSearchWorker.readResults(context, resultPath)
                     }
+                    inputTitles = withContext(Dispatchers.IO) {
+                        BatchTitleSearchWorker.readInputTitles(
+                            context,
+                            workInfo.outputData.getString(BatchTitleSearchWorker.KEY_TITLES_RESULT_FILE),
+                        )
+                    }
+                }
+            }
+        }
+        val autoImportRequested =
+            info?.inputData?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true ||
+            info?.progress?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true ||
+            info?.outputData?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true
+        val importWorkId = info?.outputData?.getString(BatchTitleSearchWorker.KEY_IMPORT_WORK_ID)
+        LaunchedEffect(jobId, importWorkId, info?.state, results, inputTitles, autoImportRequested) {
+            if (!autoImportRequested || info?.state != WorkInfo.State.SUCCEEDED) return@LaunchedEffect
+            val importId = importWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            if (importId == null) {
+                importInfo = null
+                importedRows = buildAutomaticTitleResults(inputTitles, results, emptyMap())
+                return@LaunchedEffect
+            }
+            manager.getWorkInfoByIdFlow(importId).collect { importWork ->
+                importInfo = importWork
+                if (importWork?.state?.isFinished == true) {
+                    val resultFile = importWork.outputData.getString(BatchImportJob.KEY_TITLE_IMPORT_RESULTS_FILE)
+                        ?: File(context.filesDir, "batch-title-import-results-$importId.tsv").absolutePath
+                    val attempts = withContext(Dispatchers.IO) { readTitleImportAttempts(resultFile) }
+                    importedRows = buildAutomaticTitleResults(inputTitles, results, attempts)
                 }
             }
         }
@@ -182,10 +217,15 @@ class BatchTitleSearchScreen(
         val strongResults = remember(results) { results.filter { TitleMatchQuality.isStrong(it) } }
         val weakResults = remember(results) { results.filter { !TitleMatchQuality.isStrong(it) } }
         val visibleResults = if (selectedTab == 0) strongResults else weakResults
+        val searchFinished = info?.state?.isFinished == true
+        val searchSucceeded = info?.state == WorkInfo.State.SUCCEEDED
+        val autoImportPending = autoImportRequested && searchSucceeded && importWorkId != null && importInfo?.state?.isFinished != true
+        val autoImportComplete = autoImportRequested && searchSucceeded && (importWorkId == null || importInfo?.state?.isFinished == true)
+        val visibleImportRows = if (selectedTab == 0) importedRows.filter { it.added } else importedRows.filterNot { it.added }
         val selectedUrls = results.filter { it.id in selected }.map { it.url }.distinct()
 
         Scaffold(topBar = { scroll ->
-            AppBar(title = "Find titles in enabled sources", navigateUp = { navigator?.pop() }, scrollBehavior = scroll)
+            AppBar(title = if (autoImportComplete) "Title search results" else "Find titles in enabled sources", navigateUp = { navigator?.pop() }, scrollBehavior = scroll)
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 val selectingSources = inputUriString.isNotBlank() && existingJobId == null && jobId == null && !sourceSelectionConfirmed
@@ -268,7 +308,59 @@ class BatchTitleSearchScreen(
                         if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                if (!selectingSources && results.isNotEmpty()) {
+                if (!selectingSources && autoImportComplete) {
+                    TabRow(selectedTabIndex = selectedTab) {
+                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Added (${importedRows.count { it.added }})") })
+                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Not added (${importedRows.count { !it.added }})") })
+                    }
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        item {
+                            Text(
+                                if (selectedTab == 0) "Best available matches successfully added to your library."
+                                else "These titles were not added. They either had no search match or the source rejected/failed the add.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        if (visibleImportRows.isEmpty()) {
+                            item {
+                                val emptyMessage = when {
+                                    importedRows.isEmpty() -> "No input titles were provided."
+                                    selectedTab == 0 -> "No titles were added."
+                                    else -> "All input titles were added."
+                                }
+                                Text(emptyMessage, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                        items(visibleImportRows, key = { it.inputTitle.lowercase() }) { row ->
+                            if (row.candidate != null) {
+                                CandidateCard(candidate = row.candidate, checked = false, onCheckedChange = {}, showCheckbox = false)
+                            } else {
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Text(row.inputTitle, style = MaterialTheme.typography.titleSmall)
+                                        Text(row.detail ?: "No matching title was found.", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                            if (!row.added && row.candidate != null && !row.detail.isNullOrBlank()) {
+                                Text(row.detail, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp))
+                            }
+                        }
+                    }
+                } else if (!selectingSources && autoImportPending) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Search complete. Adding the best strong match per title, or the best weak match when no strong match exists.", style = MaterialTheme.typography.bodyMedium)
+                        val importProgress = importInfo?.progress
+                        val done = importProgress?.getInt(BatchImportJob.KEY_COMPLETED, 0) ?: 0
+                        val total = importProgress?.getInt(BatchImportJob.KEY_TOTAL, 0) ?: 0
+                        if (total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+                        Text(if (total > 0) "Adding titles: $done/$total" else "Preparing library additions…", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else if (!selectingSources && results.isNotEmpty() && !autoImportRequested) {
                     TabRow(selectedTabIndex = selectedTab) {
                         Tab(
                             selected = selectedTab == 0,
@@ -345,9 +437,15 @@ class BatchTitleSearchScreen(
                             )
                         }
                     }
+                } else if (!selectingSources && autoImportRequested && searchFinished && !autoImportComplete) {
+                    Text("Preparing title search results…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
                 } else if (!selectingSources && !running && info?.state?.isFinished == true) {
                     Text(
-                        "No matching titles were found across the enabled installed sources.",
+                        when (info?.state) {
+                            WorkInfo.State.FAILED -> "Title search failed before completing; no titles were added automatically."
+                            WorkInfo.State.CANCELLED -> "Title search was cancelled; no titles were added automatically."
+                            else -> "No matching titles were found across the enabled installed sources."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(16.dp),
                     )
@@ -368,10 +466,11 @@ private fun CandidateCard(
     candidate: TitleSearchCandidate,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    showCheckbox: Boolean = true,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
-            Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+            if (showCheckbox) Checkbox(checked = checked, onCheckedChange = onCheckedChange)
             AsyncImage(
                 model = candidate.thumbnailUrl,
                 contentDescription = candidate.matchedTitle,
@@ -391,6 +490,54 @@ private fun CandidateCard(
         }
     }
 }
+
+data class AutoImportedTitleResult(
+    val inputTitle: String,
+    val candidate: TitleSearchCandidate?,
+    val added: Boolean,
+    val detail: String?,
+)
+
+private data class TitleImportAttempt(val added: Boolean, val detail: String?)
+
+private fun readTitleImportAttempts(path: String?): Map<String, TitleImportAttempt> = runCatching {
+    val file = path?.let(::File) ?: return@runCatching emptyMap()
+    if (!file.isFile) return@runCatching emptyMap()
+    file.readLines().mapNotNull { line ->
+        val fields = line.split('\t')
+        if (fields.size < 3) return@mapNotNull null
+        val url = runCatching { String(Base64.decode(fields[1], Base64.DEFAULT), Charsets.UTF_8) }.getOrNull() ?: return@mapNotNull null
+        val detail = runCatching { String(Base64.decode(fields[2], Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()?.ifBlank { null }
+        canonicalImportUrl(url) to TitleImportAttempt(fields[0] == "ADDED", detail)
+    }.toMap()
+}.getOrDefault(emptyMap())
+
+private fun buildAutomaticTitleResults(
+    inputTitles: List<String>,
+    candidates: List<TitleSearchCandidate>,
+    attempts: Map<String, TitleImportAttempt>,
+): List<AutoImportedTitleResult> {
+    val titles = inputTitles.ifEmpty { candidates.map { it.inputTitle }.distinctBy { it.trim().lowercase() } }
+    return titles.distinctBy { it.trim().lowercase() }.map { title ->
+        val best = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(
+            candidates.filter { it.inputTitle.trim().equals(title.trim(), ignoreCase = true) },
+        ).firstOrNull()
+        val attempt = best?.let { attempts[canonicalImportUrl(it.url)] }
+        AutoImportedTitleResult(
+            inputTitle = title,
+            candidate = best,
+            added = attempt?.added == true,
+            detail = when {
+                best == null -> "No matching title was found in the selected sources."
+                attempt == null -> "The title was not added."
+                attempt.added -> null
+                else -> attempt.detail ?: "The source could not add this title."
+            },
+        )
+    }
+}
+
+private fun canonicalImportUrl(value: String): String = value.trim().trimEnd('/').lowercase()
 
 data class TitleSearchCandidate(
     val id: String,
@@ -480,6 +627,12 @@ internal object TitleSearchCandidateDeduplicator {
                     )
             }
     }
+
+    fun bestPerInputPreferringStrong(candidates: List<TitleSearchCandidate>): List<TitleSearchCandidate> =
+        candidates.groupBy { it.inputTitle.trim().lowercase() }.values.mapNotNull { group ->
+            val strong = group.filter(TitleMatchQuality::isStrong)
+            bestPerInput(if (strong.isNotEmpty()) strong else group).singleOrNull()
+        }
 
     fun bestPerInput(candidates: List<TitleSearchCandidate>): List<TitleSearchCandidate> {
         return candidates
@@ -607,6 +760,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 KEY_FOUND_WEAK to foundWeak.get(),
                 KEY_ETA_SECONDS to -1,
                 KEY_SPEED_PRESET to speedPreset.name,
+                KEY_AUTO_IMPORT to inputData.getBoolean(KEY_AUTO_IMPORT, false),
                 KEY_PAUSED to isPaused(applicationContext, workId),
             ),
         )
@@ -686,6 +840,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                         KEY_FOUND_WEAK to foundWeak.get(),
                                         KEY_ETA_SECONDS to etaSeconds,
                                         KEY_SPEED_PRESET to speedPreset.name,
+                                        KEY_AUTO_IMPORT to inputData.getBoolean(KEY_AUTO_IMPORT, false),
                                         KEY_PAUSED to isPaused(applicationContext, workId),
                                     ),
                                 )
@@ -698,16 +853,27 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }
         val uniqueTitleCount = writeConsolidatedResults(resultDirectory, finalResultFile)
         updateNotification(titles.size, titles.size, "Search complete · $uniqueTitleCount unique title matches")
-        if (inputData.getBoolean(KEY_AUTO_IMPORT, false)) {
-            val urls = readResults(applicationContext, finalResultFile.absolutePath)
-                .filter { TitleMatchQuality.isStrong(it) }
-                .let { TitleSearchCandidateDeduplicator.bestPerInput(it) }
-                .map { it.url }
-                .distinct()
-            if (urls.isNotEmpty()) runCatching { BatchImportJob.startTitleMatches(applicationContext, urls) }
-        }
+        val autoImport = inputData.getBoolean(KEY_AUTO_IMPORT, false)
+        val titlesResultFile = File(applicationContext.filesDir, "batch-title-search-$id.titles")
+        titlesResultFile.writeText(titles.joinToString("\n") { Base64.encodeToString(it.toByteArray(Charsets.UTF_8), Base64.NO_WRAP) })
+        val importWorkId = if (autoImport) {
+            val urls = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(
+                readResults(applicationContext, finalResultFile.absolutePath),
+            ).map { it.url }.distinctBy(::canonicalImportUrl)
+            if (urls.isEmpty()) null else runCatching {
+                BatchImportJob.startTitleMatches(applicationContext, urls).toString()
+            }.onFailure { xLogE("Automatic title import could not be queued", it) }.getOrNull()
+        } else null
         clearSavedJob(applicationContext, workId)
-        return Result.success(workDataOf(KEY_RESULT_FILE to finalResultFile.absolutePath, KEY_COMPLETED to titles.size, KEY_TOTAL to titles.size))
+        val output = Data.Builder()
+            .putString(KEY_RESULT_FILE, finalResultFile.absolutePath)
+            .putString(KEY_TITLES_RESULT_FILE, titlesResultFile.absolutePath)
+            .putInt(KEY_COMPLETED, titles.size)
+            .putInt(KEY_TOTAL, titles.size)
+            .putBoolean(KEY_AUTO_IMPORT, autoImport)
+            .apply { if (importWorkId != null) putString(KEY_IMPORT_WORK_ID, importWorkId) }
+            .build()
+        return Result.success(output)
     }
 
     private fun writeConsolidatedResults(resultDirectory: File, finalResultFile: File): Int {
@@ -821,6 +987,8 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_URI = "title_uri"
         const val KEY_TITLES_FILE = "title_file"
         const val KEY_AUTO_IMPORT = "auto_import"
+        const val KEY_TITLES_RESULT_FILE = "titles_result_file"
+        const val KEY_IMPORT_WORK_ID = "import_work_id"
         const val KEY_RESULT_FILE = "result_file"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
@@ -862,6 +1030,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             uri: Uri,
             sourceIds: Set<Long>,
             speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
+            autoImport: Boolean = false,
         ): UUID = withContext(Dispatchers.IO) {
             val workManager = context.workManager
             val uniqueName = uniqueUriWorkName(uri)
@@ -879,6 +1048,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                         KEY_URI to uri.toString(),
                         KEY_SOURCE_IDS to sourceIds.toLongArray(),
                         KEY_SPEED_PRESET to speedPreset.name,
+                        KEY_AUTO_IMPORT to autoImport,
                     ),
                 )
                 .addTag("batch_title_search")
@@ -912,6 +1082,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             context.workManager.enqueue(request)
             return id
         }
+        fun readInputTitles(context: Context, path: String?): List<String> = runCatching {
+            val file = path?.let(::File) ?: return@runCatching emptyList()
+            if (!file.isFile) return@runCatching emptyList()
+            file.readLines().mapNotNull { line ->
+                runCatching { String(Base64.decode(line, Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()?.takeIf(String::isNotBlank)
+            }
+        }.getOrDefault(emptyList())
+
         fun readResults(context: Context, path: String?): List<TitleSearchCandidate> = runCatching {
             val result = path?.let(::File) ?: return@runCatching emptyList()
             val lines = if (result.isDirectory) {

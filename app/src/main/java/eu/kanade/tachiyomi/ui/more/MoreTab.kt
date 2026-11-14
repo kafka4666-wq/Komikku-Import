@@ -95,7 +95,7 @@ data object MoreTab : Tab {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString()))
+            navigator.push(BatchTitleSearchScreen(uri.toString(), autoImport = true))
         }
         fun openQuickTitleSearch() {
             if (openingTitleSearch) return
@@ -105,7 +105,7 @@ data object MoreTab : Tab {
                 withContext(Dispatchers.Main.immediate) {
                     openingTitleSearch = false
                     if (activeJobId != null) {
-                        navigator.push(BatchTitleSearchScreen("", activeJobId))
+                        navigator.push(BatchTitleSearchScreen("", activeJobId, autoImport = true))
                     } else {
                         quickTitleSearchPicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
                     }

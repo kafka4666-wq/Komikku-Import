@@ -7,8 +7,10 @@ import android.net.Uri
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.PowerManager
+import android.util.Base64
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
@@ -88,6 +90,7 @@ class BatchImportJob(
         val checkpointFile = File("$inputPath.progress")
         val failedFile = File("$inputPath.failed")
         val eventsFile = File("$inputPath.events")
+        val titleImportResultsFile = if (fastTitleImport) File(applicationContext.filesDir, "batch-title-import-results-$id.tsv") else null
         val doneFile = File("$inputPath.done")
         var urls = inputFile.readCompleteLinesSafely().toMutableList()
         if (urls.isEmpty() && !inputFile.exists()) return Result.failure()
@@ -133,6 +136,7 @@ class BatchImportJob(
                     }
                     val event = if (wasAdded) "[ADDED] $url" else "[FAILED] $url${detail?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}"
                     eventsFile.appendLineSafely(event)
+                    titleImportResultsFile?.appendTitleImportAttempt(wasAdded, url, detail)
                     nextIndex++
                     checkpointFile.writeText(nextIndex.toString())
                     status.record(url, wasAdded, detail)
@@ -147,7 +151,10 @@ class BatchImportJob(
 
             writeLinksFile("batch_import_failed_links", failedLinks)
             showComplete(nextIndex, urls.size, added, failed)
-            Result.success(progressData(nextIndex, urls.size, added, failed))
+            val output = Data.Builder().putAll(progressData(nextIndex, urls.size, added, failed))
+                .apply { titleImportResultsFile?.let { putString(KEY_TITLE_IMPORT_RESULTS_FILE, it.absolutePath) } }
+                .build()
+            Result.success(output)
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
                 val currentUrls = inputFile.readCompleteLinesSafely()
@@ -345,6 +352,13 @@ class BatchImportJob(
             .toList()
     }.getOrDefault(emptyList())
 
+    private fun File.appendTitleImportAttempt(added: Boolean, url: String, detail: String?) {
+        parentFile?.mkdirs()
+        val encodedUrl = Base64.encodeToString(url.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        val encodedDetail = Base64.encodeToString((detail.orEmpty()).toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        appendText("${if (added) "ADDED" else "FAILED"}\t$encodedUrl\t$encodedDetail\n")
+    }
+
     private fun File.appendLineSafely(value: String) {
         parentFile?.mkdirs()
         appendText(value + "\n")
@@ -448,5 +462,6 @@ class BatchImportJob(
         const val KEY_ADDED = "added"
         const val KEY_FAILED = "failed"
         private const val KEY_FAST_TITLE_IMPORT = "fast_title_import"
+        const val KEY_TITLE_IMPORT_RESULTS_FILE = "title_import_results_file"
     }
 }
