@@ -107,6 +107,7 @@ class BatchTitleSearchScreen(
         val availableSources = remember {
             sourceManager.getVisibleSources()
                 .filterIsInstance<HttpSource>()
+                .filter { it.lang.equals("en", ignoreCase = true) || it.lang.equals("all", ignoreCase = true) }
                 .sortedBy { it.name.lowercase() }
         }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
