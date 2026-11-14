@@ -10,6 +10,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import cafe.adriel.voyager.core.model.ScreenModel
@@ -41,6 +43,7 @@ import eu.kanade.tachiyomi.ui.stats.StatsScreen
 import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import exh.ui.batchadd.BatchAddScreen
 import exh.ui.batchadd.BatchTitleSearchScreen
+import exh.ui.batchadd.BatchTitleSearchWorker
 import exh.ui.batchimage.BatchImageScreen
 import exh.ui.reverse.ReverseSearchScreen
 import exh.ui.nhentaidate.NhentaiDateImportScreen
@@ -51,6 +54,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.i18n.stringResource
@@ -81,12 +87,29 @@ data object MoreTab : Tab {
         val context = LocalContext.current
         val navigator = LocalNavigator.current ?: return
         val tabNavigator = LocalTabNavigator.current
+        val titleSearchScope = rememberCoroutineScope()
+        var openingTitleSearch by remember { mutableStateOf(false) }
         val quickTitleSearchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri ?: return@rememberLauncherForActivityResult
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             navigator.push(BatchTitleSearchScreen(uri.toString()))
+        }
+        fun openQuickTitleSearch() {
+            if (openingTitleSearch) return
+            openingTitleSearch = true
+            titleSearchScope.launch(Dispatchers.IO) {
+                val activeJobId = BatchTitleSearchWorker.activeSavedJobId(context.applicationContext)
+                withContext(Dispatchers.Main.immediate) {
+                    openingTitleSearch = false
+                    if (activeJobId != null) {
+                        navigator.push(BatchTitleSearchScreen("", activeJobId))
+                    } else {
+                        quickTitleSearchPicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
+                    }
+                }
+            }
         }
         val screenModel = rememberScreenModel { MoreScreenModel() }
         val downloadQueueState by screenModel.downloadQueueState.collectAsState()
@@ -111,9 +134,7 @@ data object MoreTab : Tab {
             onClickAbout = { navigator.push(SettingsScreen(SettingsScreen.Destination.About)) },
             // SY -->
             onClickBatchAdd = { navigator.push(BatchAddScreen()) },
-            onClickQuickTitleSearch = {
-                quickTitleSearchPicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
-            },
+            onClickQuickTitleSearch = ::openQuickTitleSearch,
             onClickNhentaiDateImport = { navigator.push(NhentaiDateImportScreen()) },
             onClickBatchImage = { navigator.push(BatchImageScreen()) },
             onClickReverseSearch = { navigator.push(ReverseSearchScreen()) },

@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -45,6 +46,9 @@ import tachiyomi.presentation.core.components.material.Scaffold
 import tachiyomi.presentation.core.components.material.padding
 import tachiyomi.presentation.core.i18n.stringResource
 import tachiyomi.presentation.core.util.plus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class BatchAddScreen : Screen() {
 
@@ -54,6 +58,8 @@ class BatchAddScreen : Screen() {
         val state by screenModel.state.collectAsState()
         val navigator = LocalNavigator.currentOrThrow
         val context = LocalContext.current
+        val titleSearchScope = rememberCoroutineScope()
+        var openingTitleSearch by rememberSaveable { mutableStateOf(false) }
         var titleSearchSpeedName by rememberSaveable { mutableStateOf(TitleSearchSpeedPreset.FAST.name) }
         var showTitleSearchSpeedDialog by rememberSaveable { mutableStateOf(false) }
         val titleSearchSpeed = TitleSearchSpeedPreset.fromName(titleSearchSpeedName)
@@ -70,6 +76,21 @@ class BatchAddScreen : Screen() {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             navigator.push(BatchTitleSearchScreen(uri.toString(), speedPresetName = titleSearchSpeed.name))
+        }
+        fun openTitleSearch() {
+            if (openingTitleSearch) return
+            openingTitleSearch = true
+            titleSearchScope.launch(Dispatchers.IO) {
+                val activeJobId = BatchTitleSearchWorker.activeSavedJobId(context.applicationContext)
+                withContext(Dispatchers.Main.immediate) {
+                    openingTitleSearch = false
+                    if (activeJobId != null) {
+                        navigator.push(BatchTitleSearchScreen("", activeJobId))
+                    } else {
+                        titleFilePicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
+                    }
+                }
+            }
         }
 
         Scaffold(
@@ -139,9 +160,10 @@ class BatchAddScreen : Screen() {
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { titleFilePicker.launch(arrayOf("text/plain", "text/csv", "text/*")) },
+                            enabled = !openingTitleSearch,
+                            onClick = ::openTitleSearch,
                         ) {
-                            Text(text = "Find titles from TXT in all enabled sources")
+                            Text(text = if (openingTitleSearch) "Checking title search status…" else "Find titles from TXT")
                         }
                         // KMK -->
                         Spacer(Modifier.height(8.dp))

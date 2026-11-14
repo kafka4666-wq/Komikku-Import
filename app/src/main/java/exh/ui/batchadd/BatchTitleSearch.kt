@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -39,7 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -86,7 +84,6 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import android.util.AtomicFile
 import android.util.Base64
-import coil3.compose.AsyncImage
 
 class BatchTitleSearchScreen(
     private val inputUriString: String,
@@ -102,17 +99,32 @@ class BatchTitleSearchScreen(
         var jobId by rememberSaveable(inputUriString, existingJobId) {
             mutableStateOf(existingJobId ?: inputUriString.takeIf(String::isBlank)?.let { BatchTitleSearchWorker.savedJobId(context.applicationContext) })
         }
+        var sourceSelectionConfirmed by rememberSaveable(inputUriString, existingJobId) {
+            mutableStateOf(inputUriString.isBlank() || existingJobId != null)
+        }
+        var selectedSourceIds by remember(inputUriString, existingJobId) { mutableStateOf<Set<Long>>(emptySet()) }
+        val sourceManager = remember { Injekt.get<SourceManager>() }
+        val availableSources = remember {
+            sourceManager.getVisibleSources()
+                .filterIsInstance<HttpSource>()
+                .sortedBy { it.name.lowercase() }
+        }
         var info by remember { mutableStateOf<WorkInfo?>(null) }
         var results by remember { mutableStateOf<List<TitleSearchCandidate>>(emptyList()) }
         val selected = remember { mutableStateListOf<String>() }
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
-        LaunchedEffect(inputUriString, existingJobId, speedPresetName) {
+        LaunchedEffect(inputUriString, existingJobId, speedPresetName, sourceSelectionConfirmed, selectedSourceIds) {
             if (jobId != null) return@LaunchedEffect
-            if (inputUriString.isBlank()) return@LaunchedEffect
+            if (inputUriString.isBlank() || !sourceSelectionConfirmed || selectedSourceIds.isEmpty()) return@LaunchedEffect
             runCatching { context.contentResolver.takePersistableUriPermission(inputUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            jobId = BatchTitleSearchWorker.enqueue(context.applicationContext, inputUri, speedPreset).toString()
+            jobId = BatchTitleSearchWorker.enqueue(
+                context.applicationContext,
+                inputUri,
+                selectedSourceIds,
+                speedPreset,
+            ).toString()
         }
         LaunchedEffect(jobId) {
             val id = jobId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return@LaunchedEffect
@@ -170,7 +182,61 @@ class BatchTitleSearchScreen(
             AppBar(title = "Find titles in enabled sources", navigateUp = { navigator?.pop() }, scrollBehavior = scroll)
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                if (running) {
+                val selectingSources = inputUriString.isNotBlank() && existingJobId == null && jobId == null && !sourceSelectionConfirmed
+                if (selectingSources) {
+                    Text(
+                        "Choose the installed sources to search. Selecting fewer sources reduces data use, time, and device load.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TextButton(onClick = { selectedSourceIds = availableSources.map { it.id }.toSet() }) {
+                            Text("Select all")
+                        }
+                        TextButton(onClick = { selectedSourceIds = emptySet() }) {
+                            Text("Clear")
+                        }
+                        Text(
+                            "${selectedSourceIds.size}/${availableSources.size}",
+                            modifier = Modifier.weight(1f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                        )
+                    }
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                    ) {
+                        items(availableSources, key = { it.id }) { source ->
+                            val checked = source.id in selectedSourceIds
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { value ->
+                                        selectedSourceIds = if (value) selectedSourceIds + source.id else selectedSourceIds - source.id
+                                    },
+                                )
+                                Column {
+                                    Text(source.name, style = MaterialTheme.typography.bodyLarge)
+                                    Text(source.lang.toString(), style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                    Button(
+                        enabled = selectedSourceIds.isNotEmpty(),
+                        onClick = { sourceSelectionConfirmed = true },
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    ) {
+                        Text("Start search with ${selectedSourceIds.size} source${if (selectedSourceIds.size == 1) "" else "s"}")
+                    }
+                }
+                if (!selectingSources && running) {
                     Column(
                         Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -196,7 +262,7 @@ class BatchTitleSearchScreen(
                         if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                if (results.isNotEmpty()) {
+                if (!selectingSources && results.isNotEmpty()) {
                     TabRow(selectedTabIndex = selectedTab) {
                         Tab(
                             selected = selectedTab == 0,
@@ -271,13 +337,13 @@ class BatchTitleSearchScreen(
                             )
                         }
                     }
-                } else if (!running && info?.state?.isFinished == true) {
+                } else if (!selectingSources && !running && info?.state?.isFinished == true) {
                     Text(
                         "No matching titles were found across the enabled installed sources.",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(16.dp),
                     )
-                } else if (!running) {
+                } else if (!selectingSources && !running) {
                     Text(
                         "Preparing title search…",
                         style = MaterialTheme.typography.bodyMedium,
@@ -298,12 +364,6 @@ private fun CandidateCard(
     Card(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
             Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-            AsyncImage(
-                model = candidate.thumbnailUrl,
-                contentDescription = candidate.matchedTitle,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(64.dp),
-            )
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
                 Text(candidate.matchedTitle, style = MaterialTheme.typography.titleSmall)
                 Text("${candidate.sourceName} · from: ${candidate.inputTitle}", style = MaterialTheme.typography.bodySmall)
@@ -462,9 +522,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         }.getOrElse { xLogE("Title file read failed", it); return Result.failure() }
         val enabledLanguages = sourcePreferences.enabledLanguages().get()
         val disabled = sourcePreferences.disabledSources().get()
+        val requestedSourceIds = inputData.getLongArray(KEY_SOURCE_IDS)?.toSet()
         val sources = sourceManager.getVisibleSources()
             .filterIsInstance<HttpSource>()
-            .filter { it.lang in enabledLanguages && it.id.toString() !in disabled }
+            .filter { requestedSourceIds?.contains(it.id) ?: (it.lang in enabledLanguages && it.id.toString() !in disabled) }
         if (!resultDirectory.exists() && !resultDirectory.mkdirs()) return Result.failure()
         resultDirectory.listFiles().orEmpty()
             .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
@@ -513,18 +574,26 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                         titleSemaphore.withPermit {
                             awaitNotPaused(workId)
                             val candidates = coroutineScope {
-                                sources.map { source ->
-                                    async {
-                                        searchSource(
-                                            source,
-                                            title,
-                                            sourceSearchSemaphore,
-                                            perSourceSemaphores.getValue(source.id),
-                                            limits.timeoutMillis,
-                                            workId,
+                                // Do not create one coroutine for every installed source at once.
+                                // A small source batch keeps the worker responsive on large source lists.
+                                buildList {
+                                    for (sourceBatch in sources.chunked(8)) {
+                                        addAll(
+                                            sourceBatch.map { source ->
+                                                async {
+                                                    searchSource(
+                                                        source,
+                                                        title,
+                                                        sourceSearchSemaphore,
+                                                        perSourceSemaphores.getValue(source.id),
+                                                        limits.timeoutMillis,
+                                                        workId,
+                                                    )
+                                                }
+                                            }.awaitAll().flatten(),
                                         )
                                     }
-                                }.awaitAll().flatten()
+                                }
                             }
                             val outputFile = rowFile(index)
                             val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
@@ -553,19 +622,21 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                             } else {
                                 -1
                             }
-                            setProgress(
-                                workDataOf(
-                                    KEY_COMPLETED to done,
-                                    KEY_TOTAL to titles.size,
-                                    KEY_FOUND to found.get(),
-                                    KEY_FOUND_STRONG to foundStrong.get(),
-                                    KEY_FOUND_WEAK to foundWeak.get(),
-                                    KEY_ETA_SECONDS to etaSeconds,
-                                    KEY_SPEED_PRESET to speedPreset.name,
-                                    KEY_PAUSED to isPaused(applicationContext, workId),
-                                ),
-                            )
-                            updateNotification(done, titles.size, "Finished $done/${titles.size} · ${found.get()} matches")
+                            if (done == titles.size || done % 5 == 0) {
+                                setProgress(
+                                    workDataOf(
+                                        KEY_COMPLETED to done,
+                                        KEY_TOTAL to titles.size,
+                                        KEY_FOUND to found.get(),
+                                        KEY_FOUND_STRONG to foundStrong.get(),
+                                        KEY_FOUND_WEAK to foundWeak.get(),
+                                        KEY_ETA_SECONDS to etaSeconds,
+                                        KEY_SPEED_PRESET to speedPreset.name,
+                                        KEY_PAUSED to isPaused(applicationContext, workId),
+                                    ),
+                                )
+                                updateNotification(done, titles.size, "Finished $done/${titles.size} · ${found.get()} matches")
+                            }
                         }
                     }
                 }.awaitAll()
@@ -705,6 +776,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_FOUND_WEAK = "found_weak"
         const val KEY_ETA_SECONDS = "eta_seconds"
         const val KEY_SPEED_PRESET = "speed_preset"
+        const val KEY_SOURCE_IDS = "source_ids"
         const val NOTIFICATION_ID = -1810
         const val ACTION_OPEN_BATCH_TITLE_SEARCH = "com.manus.komikku.OPEN_BATCH_TITLE_SEARCH"
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
@@ -716,6 +788,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         fun isPaused(context: Context, workId: String? = null): Boolean = prefs(context).getBoolean(pauseKey(workId), false)
         fun setPaused(context: Context, value: Boolean, workId: String? = null) { prefs(context).edit().putBoolean(pauseKey(workId), value).apply() }
         fun savedJobId(context: Context): String? = prefs(context).getString(ACTIVE_JOB_ID, null)
+        fun activeSavedJobId(context: Context): String? {
+            val value = savedJobId(context) ?: return null
+            val id = runCatching { UUID.fromString(value) }.getOrNull() ?: return null
+            val info = runCatching { context.workManager.getWorkInfoById(id).get() }.getOrNull()
+            if (info != null && !info.state.isFinished) return value
+            clearSavedJob(context, value)
+            return null
+        }
         private fun saveJobId(context: Context, workId: String) { prefs(context).edit().putString(ACTIVE_JOB_ID, workId).apply() }
         internal fun clearSavedJob(context: Context, workId: String) {
             if (savedJobId(context) == workId) prefs(context).edit().remove(ACTIVE_JOB_ID).apply()
@@ -726,6 +806,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         internal suspend fun enqueue(
             context: Context,
             uri: Uri,
+            sourceIds: Set<Long>,
             speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
         ): UUID = withContext(Dispatchers.IO) {
             val workManager = context.workManager
@@ -739,7 +820,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             }
 
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
-                .setInputData(workDataOf(KEY_URI to uri.toString(), KEY_SPEED_PRESET to speedPreset.name))
+                .setInputData(
+                    workDataOf(
+                        KEY_URI to uri.toString(),
+                        KEY_SOURCE_IDS to sourceIds.toLongArray(),
+                        KEY_SPEED_PRESET to speedPreset.name,
+                    ),
+                )
                 .addTag("batch_title_search")
                 .build()
             setPaused(context, false, request.id.toString())
