@@ -1305,7 +1305,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             val actualId = actual?.id ?: request.id
             saveJobId(context, actualId.toString(), manifest.sessionId)
             prefs(context).edit().remove("failure:${manifest.sessionId}").apply()
-            actualId
+            return actualId
         }
 
         suspend fun resume(context: Context, previousWorkId: String): UUID? = withContext(Dispatchers.IO) {
