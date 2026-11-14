@@ -149,6 +149,23 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
+    fun `checkpoint marker only completes the matching input title`() {
+        val otherTitle = candidate("id", "Title B", "Title B", "Source", "https://example.com/b")
+
+        assertTrue(TitleSearchCheckpoint.isComplete(listOf(TitleSearchCheckpoint.marker("Title A")), "Title A", emptyList()))
+        assertTrue(!TitleSearchCheckpoint.isComplete(listOf(TitleSearchCheckpoint.marker("Title A")), "Title B", listOf(otherTitle)))
+    }
+
+    @Test
+    fun `legacy checkpoint results only complete their own input title`() {
+        val otherTitle = candidate("id", "Title B", "Title B", "Source", "https://example.com/b")
+        val matchingTitle = candidate("id2", "Title A", "Title A", "Source", "https://example.com/a")
+
+        assertTrue(!TitleSearchCheckpoint.isComplete(listOf("legacy-row"), "Title A", listOf(otherTitle)))
+        assertTrue(TitleSearchCheckpoint.isComplete(listOf("legacy-row"), "Title A", listOf(matchingTitle)))
+    }
+
+    @Test
     fun `speed presets trade request concurrency for source load`() {
         val fast = TitleSearchSpeedPreset.FAST.concurrencyLimits(throttled = false)
         val balanced = TitleSearchSpeedPreset.BALANCED.concurrencyLimits(throttled = false)

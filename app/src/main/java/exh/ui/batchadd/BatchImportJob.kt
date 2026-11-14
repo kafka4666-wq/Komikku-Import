@@ -394,18 +394,27 @@ class BatchImportJob(
             return enqueue(context, input, TAG, androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE, saveJobId = true)
         }
 
-        fun startTitleMatches(context: Context, urls: List<String>): UUID {
+        fun startTitleMatches(context: Context, urls: List<String>, titleSearchWorkId: String? = null): UUID {
+            val workName = titleSearchWorkId?.let { "$TAG-title-matches-$it" } ?: "$TAG-title-matches"
+            if (titleSearchWorkId != null) {
+                val existing = runCatching { context.workManager.getWorkInfosForUniqueWork(workName).get().lastOrNull() }.getOrNull()
+                if (existing != null) return existing.id
+            }
             val input = File(context.cacheDir, "batch-title-import-${System.currentTimeMillis()}.txt")
             input.writeText(if (urls.isEmpty()) "" else urls.joinToString("\n") + "\n")
             File("${input.absolutePath}.done").writeText("done")
-            return enqueue(
+            val requestId = enqueue(
                 context,
                 input,
-                "$TAG-title-matches",
-                androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE,
-                saveJobId = true,
+                workName,
+                if (titleSearchWorkId == null) androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE else androidx.work.ExistingWorkPolicy.KEEP,
+                saveJobId = titleSearchWorkId == null,
                 fastTitleImport = true,
             )
+            if (titleSearchWorkId == null) return requestId
+            val actualId = runCatching { context.workManager.getWorkInfosForUniqueWork(workName).get().lastOrNull()?.id }.getOrNull() ?: requestId
+            prefs(context).edit().putString(PREF_JOB_ID, actualId.toString()).apply()
+            return actualId
         }
 
         fun startFromFile(context: Context, input: File) {

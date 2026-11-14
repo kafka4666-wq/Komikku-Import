@@ -120,10 +120,17 @@ class BatchTitleSearchScreen(
         var inputTitles by remember { mutableStateOf<List<String>>(emptyList()) }
         var importInfo by remember { mutableStateOf<WorkInfo?>(null) }
         var importedRows by remember { mutableStateOf<List<AutoImportedTitleResult>>(emptyList()) }
+        var searchResultsLoaded by remember(jobId) { mutableStateOf(false) }
+        var fallbackImportWorkId by remember(jobId) {
+            mutableStateOf(jobId?.let { BatchTitleSearchWorker.savedAutoImportWorkId(context, it) })
+        }
         val selected = remember { mutableStateListOf<String>() }
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
         val inputUri = remember(inputUriString) { Uri.parse(inputUriString) }
 
+        LaunchedEffect(jobId, autoImport) {
+            if (autoImport) jobId?.let { BatchTitleSearchWorker.saveAutoImportRequested(context.applicationContext, it, true) }
+        }
         LaunchedEffect(inputUriString, existingJobId, speedPresetName, sourceSelectionConfirmed, selectedSourceIds) {
             if (jobId != null) return@LaunchedEffect
             if (inputUriString.isBlank() || !sourceSelectionConfirmed || selectedSourceIds.isEmpty()) return@LaunchedEffect
@@ -152,17 +159,32 @@ class BatchTitleSearchScreen(
                             workInfo.outputData.getString(BatchTitleSearchWorker.KEY_TITLES_RESULT_FILE),
                         )
                     }
+                    searchResultsLoaded = true
                 }
             }
         }
-        val autoImportRequested =
-            info?.inputData?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true ||
+        val autoImportRequested = autoImport ||
+            jobId?.let { BatchTitleSearchWorker.isAutoImportRequested(context, it) } == true ||
             info?.progress?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true ||
-            info?.outputData?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true
-        val importWorkId = info?.outputData?.getString(BatchTitleSearchWorker.KEY_IMPORT_WORK_ID)
-        LaunchedEffect(jobId, importWorkId, info?.state, results, inputTitles, autoImportRequested) {
+            info?.outputData?.getBoolean(BatchTitleSearchWorker.KEY_AUTO_IMPORT, false) == true ||
+            fallbackImportWorkId != null
+        val importWorkId = info?.outputData?.getString(BatchTitleSearchWorker.KEY_IMPORT_WORK_ID) ?: fallbackImportWorkId
+        LaunchedEffect(jobId, importWorkId, fallbackImportWorkId, info?.state, results, inputTitles, autoImportRequested) {
             if (!autoImportRequested || info?.state != WorkInfo.State.SUCCEEDED) return@LaunchedEffect
-            val importId = importWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            var resolvedImportWorkId = importWorkId
+            if (resolvedImportWorkId == null && searchResultsLoaded && results.isNotEmpty() && jobId != null) {
+                val urls = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(results)
+                    .map { it.url }.distinctBy(::canonicalImportUrl)
+                if (urls.isNotEmpty()) {
+                    val started = withContext(Dispatchers.IO) {
+                        BatchImportJob.startTitleMatches(context.applicationContext, urls, titleSearchWorkId = jobId)
+                    }
+                    resolvedImportWorkId = started.toString()
+                    BatchTitleSearchWorker.saveAutoImportWorkId(context.applicationContext, jobId, resolvedImportWorkId)
+                    fallbackImportWorkId = resolvedImportWorkId
+                }
+            }
+            val importId = resolvedImportWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             if (importId == null) {
                 importInfo = null
                 importedRows = buildAutomaticTitleResults(inputTitles, results, emptyMap())
@@ -178,7 +200,8 @@ class BatchTitleSearchScreen(
                 }
             }
         }
-        LaunchedEffect(jobId, info?.state) {
+        LaunchedEffect(jobId, info?.state, autoImportRequested) {
+            if (autoImportRequested) return@LaunchedEffect
             if (info?.state != WorkInfo.State.RUNNING && info?.state != WorkInfo.State.ENQUEUED) return@LaunchedEffect
             val id = jobId ?: return@LaunchedEffect
             val path = BatchTitleSearchWorker.partialResultsPath(context, id)
@@ -219,8 +242,12 @@ class BatchTitleSearchScreen(
         val visibleResults = if (selectedTab == 0) strongResults else weakResults
         val searchFinished = info?.state?.isFinished == true
         val searchSucceeded = info?.state == WorkInfo.State.SUCCEEDED
-        val autoImportPending = autoImportRequested && searchSucceeded && importWorkId != null && importInfo?.state?.isFinished != true
-        val autoImportComplete = autoImportRequested && searchSucceeded && (importWorkId == null || importInfo?.state?.isFinished == true)
+        val fallbackImportPending = autoImportRequested && searchSucceeded && searchResultsLoaded && importWorkId == null &&
+            (results.isNotEmpty() || (inputTitles.isNotEmpty() && importedRows.isEmpty()))
+        val autoImportPending = autoImportRequested && searchSucceeded &&
+            (!searchResultsLoaded || (importWorkId != null && importInfo?.state?.isFinished != true) || fallbackImportPending)
+        val autoImportComplete = autoImportRequested && searchSucceeded && searchResultsLoaded &&
+            (importWorkId == null || importInfo?.state?.isFinished == true) && !fallbackImportPending
         val visibleImportRows = if (selectedTab == 0) importedRows.filter { it.added } else importedRows.filterNot { it.added }
         val selectedUrls = results.filter { it.id in selected }.map { it.url }.distinct()
 
@@ -437,7 +464,7 @@ class BatchTitleSearchScreen(
                             )
                         }
                     }
-                } else if (!selectingSources && autoImportRequested && searchFinished && !autoImportComplete) {
+                } else if (!selectingSources && autoImportRequested && searchSucceeded && !autoImportComplete) {
                     Text("Preparing title search results…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
                 } else if (!selectingSources && !running && info?.state?.isFinished == true) {
                     Text(
@@ -655,6 +682,22 @@ internal object TitleSearchCandidateDeduplicator {
         .filter { it.isLetterOrDigit() }
 }
 
+internal object TitleSearchCheckpoint {
+    private const val PREFIX = "#batch-title-search-complete:"
+
+    fun marker(title: String): String = PREFIX + Base64.encodeToString(title.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+
+    fun isMarker(line: String): Boolean = line.startsWith(PREFIX)
+
+    fun isComplete(lines: List<String>, title: String, decodedCandidates: List<TitleSearchCandidate>): Boolean {
+        val firstLine = lines.firstOrNull()
+        if (firstLine != null && isMarker(firstLine)) return firstLine == marker(title)
+        // Legacy checkpoints had no marker. Only accept them when a result explicitly
+        // belongs to this input title; a row for another index/title must be searched.
+        return decodedCandidates.any { it.inputTitle.trim().equals(title.trim(), ignoreCase = true) }
+    }
+}
+
 internal data class TitleSearchConcurrencyLimits(
     val parallelTitles: Int,
     val globalSourceSearches: Int,
@@ -732,10 +775,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
             .forEach { it.delete() }
         fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
-        val checkpointCandidates = resultDirectory.listFiles().orEmpty()
-            .filter { it.isFile && it.name.endsWith(".row") }
-            .sortedBy { it.name }
-            .flatMap { it.readLines().filterNot(::isCheckpointMarker) }
+        val checkpointCandidates = titles.indices
+            .filter { index -> isCompletedCheckpoint(rowFile(index), titles[index]) }
+            .flatMap { index -> rowFile(index).readLines().filterNot(TitleSearchCheckpoint::isMarker) }
             .mapNotNull(::decode)
             .distinctBy { it.id }
         val checkpointResults = TitleSearchCandidateDeduplicator.collapse(checkpointCandidates)
@@ -801,7 +843,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                             val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
                             val titleCandidates = TitleSearchCandidateDeduplicator.collapse(candidates)
                             val rows = buildString {
-                                append(checkpointMarker(title))
+                                append(TitleSearchCheckpoint.marker(title))
                                 if (titleCandidates.isNotEmpty()) {
                                     append('\n')
                                     append(titleCandidates.joinToString("\n") { encode(it) })
@@ -851,7 +893,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 }.awaitAll()
             }
         }
-        val uniqueTitleCount = writeConsolidatedResults(resultDirectory, finalResultFile)
+        val uniqueTitleCount = writeConsolidatedResults(resultDirectory, finalResultFile, titles)
         updateNotification(titles.size, titles.size, "Search complete · $uniqueTitleCount unique title matches")
         val autoImport = inputData.getBoolean(KEY_AUTO_IMPORT, false)
         val titlesResultFile = File(applicationContext.filesDir, "batch-title-search-$id.titles")
@@ -861,7 +903,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 readResults(applicationContext, finalResultFile.absolutePath),
             ).map { it.url }.distinctBy(::canonicalImportUrl)
             if (urls.isEmpty()) null else runCatching {
-                BatchImportJob.startTitleMatches(applicationContext, urls).toString()
+                BatchImportJob.startTitleMatches(applicationContext, urls, titleSearchWorkId = workId).toString()
             }.onFailure { xLogE("Automatic title import could not be queued", it) }.getOrNull()
         } else null
         clearSavedJob(applicationContext, workId)
@@ -876,12 +918,14 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         return Result.success(output)
     }
 
-    private fun writeConsolidatedResults(resultDirectory: File, finalResultFile: File): Int {
+    private fun writeConsolidatedResults(resultDirectory: File, finalResultFile: File, titles: List<String>): Int {
+        val validTitleKeys = titles.map { it.trim().lowercase() }.toSet()
         val candidates = resultDirectory.listFiles().orEmpty()
             .filter { it.isFile && it.name.endsWith(".row") }
             .sortedBy { it.name }
             .flatMap { it.readLines() }
             .mapNotNull(::decode)
+            .filter { it.inputTitle.trim().lowercase() in validTitleKeys }
             .distinctBy { it.id }
         val uniqueCandidates = TitleSearchCandidateDeduplicator.collapse(candidates)
         val atomicFile = AtomicFile(finalResultFile)
@@ -1005,11 +1049,23 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
         private const val ACTIVE_JOB_ID = "active_job_id"
+        private const val AUTO_IMPORT_JOB_PREFIX = "auto_import_job:"
+        private const val AUTO_IMPORT_REQUESTED_PREFIX = "auto_import_requested:"
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         private fun pauseKey(workId: String?) = "$PAUSED:${workId ?: "legacy"}"
         fun isPaused(context: Context, workId: String? = null): Boolean = prefs(context).getBoolean(pauseKey(workId), false)
         fun setPaused(context: Context, value: Boolean, workId: String? = null) { prefs(context).edit().putBoolean(pauseKey(workId), value).apply() }
         fun savedJobId(context: Context): String? = prefs(context).getString(ACTIVE_JOB_ID, null)
+        fun savedAutoImportWorkId(context: Context, titleSearchWorkId: String): String? =
+            prefs(context).getString(AUTO_IMPORT_JOB_PREFIX + titleSearchWorkId, null)
+        fun isAutoImportRequested(context: Context, titleSearchWorkId: String): Boolean =
+            prefs(context).getBoolean(AUTO_IMPORT_REQUESTED_PREFIX + titleSearchWorkId, false)
+        fun saveAutoImportRequested(context: Context, titleSearchWorkId: String, requested: Boolean) {
+            prefs(context).edit().putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + titleSearchWorkId, requested).apply()
+        }
+        fun saveAutoImportWorkId(context: Context, titleSearchWorkId: String, importWorkId: String) {
+            prefs(context).edit().putString(AUTO_IMPORT_JOB_PREFIX + titleSearchWorkId, importWorkId).apply()
+        }
         fun activeSavedJobId(context: Context): String? {
             val value = savedJobId(context) ?: return null
             val id = runCatching { UUID.fromString(value) }.getOrNull() ?: return null
@@ -1039,6 +1095,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             }.getOrNull()
             if (activeWork != null) {
                 saveJobId(context, activeWork.id.toString())
+                if (autoImport) saveAutoImportRequested(context, activeWork.id.toString(), true)
                 return@withContext activeWork.id
             }
 
@@ -1054,6 +1111,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 .addTag("batch_title_search")
                 .build()
             setPaused(context, false, request.id.toString())
+            saveAutoImportRequested(context, request.id.toString(), autoImport)
             saveJobId(context, request.id.toString())
             workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request).result.get()
             val enqueuedId = runCatching {
@@ -1078,6 +1136,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 .addTag("batch_title_search")
                 .build()
             setPaused(context, false, id.toString())
+            saveAutoImportRequested(context, id.toString(), autoImport)
             saveJobId(context, id.toString())
             context.workManager.enqueue(request)
             return id
@@ -1116,13 +1175,11 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
 
         private fun encode(value: TitleSearchCandidate): String = listOf(value.id, value.inputTitle, value.matchedTitle, value.sourceName, value.url, value.thumbnailUrl.orEmpty()).joinToString("\t") { Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP) }
         private fun decode(line: String): TitleSearchCandidate? = runCatching { val v = line.split('\t').map { String(Base64.decode(it, Base64.DEFAULT)) }; TitleSearchCandidate(v[0], v[1], v[2], v[3], v[4], v.getOrNull(5)?.ifBlank { null }) }.getOrNull()
-        private const val CHECKPOINT_PREFIX = "#batch-title-search-complete:"
-        private fun checkpointMarker(title: String): String = CHECKPOINT_PREFIX + Base64.encodeToString(title.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-        private fun isCheckpointMarker(line: String): Boolean = line.startsWith(CHECKPOINT_PREFIX)
         private fun isCompletedCheckpoint(file: File, title: String): Boolean = runCatching {
             if (!file.isFile) return@runCatching false
             val lines = file.readLines()
-            lines.firstOrNull() == checkpointMarker(title) || lines.any { !isCheckpointMarker(it) && decode(it) != null }
+            val decodedCandidates = lines.mapNotNull(::decode)
+            TitleSearchCheckpoint.isComplete(lines, title, decodedCandidates)
         }.getOrDefault(false)
         private fun cleanTitle(value: String): String = value.replace(Regex("\\([^)]*\\)|\\[[^]]*\\]"), " ").replace(Regex("\\s+"), " ").trim()
         private fun absoluteUrl(source: Source, value: String): String {
