@@ -685,8 +685,24 @@ internal object TitleSearchCandidateDeduplicator {
 
 internal object TitleSearchCheckpoint {
     private const val PREFIX = "#batch-title-search-complete:"
+    private const val BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
-    fun marker(title: String): String = PREFIX + Base64.encodeToString(title.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    fun marker(title: String): String {
+        val bytes = title.toByteArray(Charsets.UTF_8)
+        val encoded = StringBuilder(((bytes.size + 2) / 3) * 4)
+        var index = 0
+        while (index < bytes.size) {
+            val first = bytes[index].toInt() and 0xff
+            val second = if (index + 1 < bytes.size) bytes[index + 1].toInt() and 0xff else 0
+            val third = if (index + 2 < bytes.size) bytes[index + 2].toInt() and 0xff else 0
+            encoded.append(BASE64_ALPHABET[first ushr 2])
+            encoded.append(BASE64_ALPHABET[((first and 0x03) shl 4) or (second ushr 4)])
+            encoded.append(if (index + 1 < bytes.size) BASE64_ALPHABET[((second and 0x0f) shl 2) or (third ushr 6)] else '=')
+            encoded.append(if (index + 2 < bytes.size) BASE64_ALPHABET[third and 0x3f] else '=')
+            index += 3
+        }
+        return PREFIX + encoded
+    }
 
     fun isMarker(line: String): Boolean = line.startsWith(PREFIX)
 

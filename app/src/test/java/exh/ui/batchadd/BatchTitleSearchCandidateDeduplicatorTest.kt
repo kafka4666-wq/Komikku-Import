@@ -152,6 +152,7 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     fun `checkpoint marker only completes the matching input title`() {
         val otherTitle = candidate("id", "Title B", "Title B", "Source", "https://example.com/b")
 
+        assertEquals("#batch-title-search-complete:VGl0bGUgQQ==", TitleSearchCheckpoint.marker("Title A"))
         assertTrue(TitleSearchCheckpoint.isComplete(listOf(TitleSearchCheckpoint.marker("Title A")), "Title A", emptyList()))
         assertTrue(!TitleSearchCheckpoint.isComplete(listOf(TitleSearchCheckpoint.marker("Title A")), "Title B", listOf(otherTitle)))
     }
