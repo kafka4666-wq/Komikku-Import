@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,6 +73,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import tachiyomi.core.common.util.QuerySanitizer.sanitize
 import mihon.domain.manga.model.toDomainManga
 import tachiyomi.domain.source.service.SourceManager
@@ -89,6 +91,41 @@ import android.util.AtomicFile
 import android.util.Base64
 import coil3.compose.AsyncImage
 
+internal data class TitleSearchSessionManifest(
+    val sessionId: String,
+    val titleFilePath: String,
+    val sourceIds: Set<Long>?,
+    val speedPresetName: String,
+    val autoImport: Boolean,
+    val uniqueWorkName: String,
+) {
+    fun serialize(): String {
+        return listOf(
+            sessionId,
+            titleFilePath,
+            sourceIds?.sorted()?.joinToString(",") ?: "*",
+            speedPresetName,
+            autoImport.toString(),
+            uniqueWorkName,
+        ).joinToString("\n") { java.net.URLEncoder.encode(it, Charsets.UTF_8.name()) }
+    }
+
+    companion object {
+        fun parse(value: String): TitleSearchSessionManifest? = runCatching {
+            val fields = value.lineSequence().map { java.net.URLDecoder.decode(it, Charsets.UTF_8.name()) }.toList()
+            require(fields.size == 6)
+            TitleSearchSessionManifest(
+                sessionId = fields[0],
+                titleFilePath = fields[1],
+                sourceIds = if (fields[2] == "*") null else fields[2].split(',').filter(String::isNotBlank).map(String::toLong).toSet(),
+                speedPresetName = fields[3],
+                autoImport = fields[4].toBooleanStrict(),
+                uniqueWorkName = fields[5],
+            )
+        }.getOrNull()
+    }
+}
+
 class BatchTitleSearchScreen(
     private val inputUriString: String,
     private val existingJobId: String? = null,
@@ -100,6 +137,7 @@ class BatchTitleSearchScreen(
         val context = LocalContext.current
         val navigator = LocalNavigator.current
         val manager = remember { context.applicationContext.workManager }
+        val titleSearchScope = rememberCoroutineScope()
         val speedPreset = TitleSearchSpeedPreset.fromName(speedPresetName)
         var jobId by rememberSaveable(inputUriString, existingJobId) {
             mutableStateOf(existingJobId ?: inputUriString.takeIf(String::isBlank)?.let { BatchTitleSearchWorker.savedJobId(context.applicationContext) })
@@ -161,6 +199,15 @@ class BatchTitleSearchScreen(
                     }
                     searchResultsLoaded = true
                 }
+            }
+        }
+        LaunchedEffect(jobId, info) {
+            val previousWorkId = jobId ?: return@LaunchedEffect
+            if (info != null) return@LaunchedEffect
+            delay(2_000)
+            if (info == null) {
+                val recovered = BatchTitleSearchWorker.resume(context.applicationContext, previousWorkId)
+                if (recovered != null && recovered.toString() != previousWorkId) jobId = recovered.toString()
             }
         }
         val autoImportRequested = autoImport ||
@@ -329,11 +376,14 @@ class BatchTitleSearchScreen(
                             Text("Estimated time remaining: ${formatTitleSearchEta(etaSeconds)}", style = MaterialTheme.typography.bodySmall)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { BatchTitleSearchWorker.setPaused(context, true, jobId) }) { Text("Pause") }
-                            Button(onClick = { BatchTitleSearchWorker.setPaused(context, false, jobId) }) { Text("Resume") }
+                            if (!paused) {
+                                Button(onClick = { BatchTitleSearchWorker.setPaused(context, true, jobId) }) { Text("Pause") }
+                            } else {
+                                Text("Pausing safely…", modifier = Modifier.weight(1f))
+                            }
                             TextButton(onClick = { jobId?.let { BatchTitleSearchWorker.clearSavedJob(context, it); manager.cancelWorkById(UUID.fromString(it)) } }) { Text("Cancel") }
                         }
-                        if (paused) Text("Paused · no new source searches will start", style = MaterialTheme.typography.bodySmall)
+                        if (paused) Text("Paused · completed title checkpoints are saved", style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 if (!selectingSources && autoImportComplete) {
@@ -468,15 +518,31 @@ class BatchTitleSearchScreen(
                 } else if (!selectingSources && autoImportRequested && searchSucceeded && !autoImportComplete) {
                     Text("Preparing title search results…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
                 } else if (!selectingSources && !running && info?.state?.isFinished == true) {
-                    Text(
-                        when (info?.state) {
-                            WorkInfo.State.FAILED -> "Title search failed before completing; no titles were added automatically."
-                            WorkInfo.State.CANCELLED -> "Title search was cancelled; no titles were added automatically."
-                            else -> "No matching titles were found across the enabled installed sources."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp),
-                    )
+                    val failed = info?.state == WorkInfo.State.FAILED
+                    val failureDetail = info?.outputData?.getString(BatchTitleSearchWorker.KEY_FAILURE_REASON)
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            when {
+                                paused -> "Search paused. Completed title checkpoints and the original input/settings are saved."
+                                failed -> "Title search stopped before completing. Only fully searched titles are checkpointed; no titles were automatically added from this incomplete run."
+                                info?.state == WorkInfo.State.CANCELLED -> "Title search was cancelled. Completed title checkpoints are saved."
+                                else -> "No matching titles were found across the enabled installed sources."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (failed && !failureDetail.isNullOrBlank()) Text(failureDetail, style = MaterialTheme.typography.bodySmall)
+                        if (paused || failed || info?.state == WorkInfo.State.CANCELLED) {
+                            Button(
+                                onClick = {
+                                    val previousWorkId = jobId ?: return@Button
+                                    titleSearchScope.launch {
+                                        val resumed = BatchTitleSearchWorker.resume(context.applicationContext, previousWorkId)
+                                        if (resumed != null) jobId = resumed.toString()
+                                    }
+                                },
+                            ) { Text("Resume from last completed title") }
+                        }
+                    }
                 } else if (!selectingSources && !running) {
                     Text(
                         "Preparing title search…",
@@ -769,9 +835,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     private val sourceManager: SourceManager = Injekt.get()
     private val sourcePreferences: eu.kanade.domain.source.service.SourcePreferences = Injekt.get()
     override suspend fun doWork(): Result {
-        val workId = id.toString()
-        val resultDirectory = File(applicationContext.filesDir, "batch-title-search-${id}.result-rows")
-        val finalResultFile = File(applicationContext.filesDir, "batch-title-search-${id}.final-results")
+        val workId = inputData.getString(KEY_SESSION_ID) ?: id.toString()
+        try {
+        val resultDirectory = File(applicationContext.filesDir, "batch-title-search-$workId.result-rows")
+        val finalResultFile = File(applicationContext.filesDir, "batch-title-search-$workId.final-results")
         val titles = runCatching {
             inputData.getString(KEY_TITLES_FILE)?.let { File(it).readLines() }
                 ?: inputData.getString(KEY_URI)?.let(Uri::parse)?.let { uri ->
@@ -787,6 +854,10 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val sources = sourceManager.getVisibleSources()
             .filterIsInstance<HttpSource>()
             .filter { requestedSourceIds?.contains(it.id) ?: (it.lang in enabledLanguages && it.id.toString() !in disabled) }
+        if (requestedSourceIds != null && sources.map { it.id }.toSet() != requestedSourceIds) {
+            throw IOException("One or more selected sources are no longer installed. Reinstall them, then resume this search.")
+        }
+        if (sources.isEmpty()) throw IOException("No selected online sources are currently available.")
         if (!resultDirectory.exists() && !resultDirectory.mkdirs()) return Result.failure()
         resultDirectory.listFiles().orEmpty()
             .filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }
@@ -913,7 +984,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         val uniqueTitleCount = writeConsolidatedResults(resultDirectory, finalResultFile, titles)
         updateNotification(titles.size, titles.size, "Search complete · $uniqueTitleCount unique title matches")
         val autoImport = inputData.getBoolean(KEY_AUTO_IMPORT, false)
-        val titlesResultFile = File(applicationContext.filesDir, "batch-title-search-$id.titles")
+        val titlesResultFile = File(applicationContext.filesDir, "batch-title-search-$workId.titles")
         titlesResultFile.writeText(titles.joinToString("\n") { Base64.encodeToString(it.toByteArray(Charsets.UTF_8), Base64.NO_WRAP) })
         val importWorkId = if (autoImport) {
             val urls = TitleSearchCandidateDeduplicator.bestPerInputPreferringStrong(
@@ -923,7 +994,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 BatchImportJob.startTitleMatches(applicationContext, urls, titleSearchWorkId = workId).toString()
             }.onFailure { xLogE("Automatic title import could not be queued", it) }.getOrNull()
         } else null
-        clearSavedJob(applicationContext, workId)
+        clearSavedJob(applicationContext, id.toString())
         val output = Data.Builder()
             .putString(KEY_RESULT_FILE, finalResultFile.absolutePath)
             .putString(KEY_TITLES_RESULT_FILE, titlesResultFile.absolutePath)
@@ -933,6 +1004,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .apply { if (importWorkId != null) putString(KEY_IMPORT_WORK_ID, importWorkId) }
             .build()
         return Result.success(output)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            xLogE("Title search session failed before all selected sources completed", error)
+            val reason = error.message?.take(500) ?: error.javaClass.simpleName
+            return Result.failure(workDataOf(KEY_FAILURE_REASON to reason))
+        }
     }
 
     private fun writeConsolidatedResults(resultDirectory: File, finalResultFile: File, titles: List<String>): Int {
@@ -978,14 +1056,13 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
     ): List<TitleSearchCandidate> {
         return try {
             awaitNotPaused(workId)
-            suspend fun query() =
-                sourceSemaphore.withPermit {
-                    globalSemaphore.withPermit {
-                        withTimeoutOrNull(timeoutMillis) { source.getSearchManga(1, title.sanitize(), source.getFilterList()) }
+            val page = sourceSemaphore.withPermit {
+                globalSemaphore.withPermit {
+                    withTimeoutOrNull(timeoutMillis) {
+                        source.getSearchManga(1, title.sanitize(), source.getFilterList())
                     }
                 }
-            val page = query()
-                ?: return emptyList()
+            } ?: throw IOException("Search timed out for ${source.name} while checking '$title'.")
             page.mangas.map { manga ->
                 val local = manga.toDomainManga(source.id)
                 val mangaUrl = absoluteUrl(source, manga.url)
@@ -1000,14 +1077,12 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             }
         } catch (cancel: CancellationException) {
             throw cancel
-        } catch (_: Exception) {
-            emptyList()
+        } catch (error: Exception) {
+            throw IOException("Search failed for ${source.name} while checking '$title'.", error)
         }
     }
     private suspend fun awaitNotPaused(workId: String) {
-        while (isPaused(applicationContext, workId) && !isStopped) {
-            delay(750)
-        }
+        if (isPaused(applicationContext, workId) || isStopped) throw CancellationException("Title search paused or stopped")
     }
     override suspend fun getForegroundInfo(): ForegroundInfo = ForegroundInfo(
         NOTIFICATION_ID,
@@ -1060,43 +1135,97 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         const val KEY_ETA_SECONDS = "eta_seconds"
         const val KEY_SPEED_PRESET = "speed_preset"
         const val KEY_SOURCE_IDS = "source_ids"
+        const val KEY_SESSION_ID = "session_id"
+        const val KEY_FAILURE_REASON = "failure_reason"
         const val NOTIFICATION_ID = -1810
         const val ACTION_OPEN_BATCH_TITLE_SEARCH = "com.manus.komikku.OPEN_BATCH_TITLE_SEARCH"
         const val EXTRA_WORK_ID = "batch_title_search_work_id"
         private const val PREFS = "batch_title_search_controls"
         private const val PAUSED = "paused"
         private const val ACTIVE_JOB_ID = "active_job_id"
+        private const val WORK_SESSION_PREFIX = "work_session:"
         private const val AUTO_IMPORT_JOB_PREFIX = "auto_import_job:"
         private const val AUTO_IMPORT_REQUESTED_PREFIX = "auto_import_requested:"
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        private fun pauseKey(workId: String?) = "$PAUSED:${workId ?: "legacy"}"
-        fun isPaused(context: Context, workId: String? = null): Boolean = prefs(context).getBoolean(pauseKey(workId), false)
-        fun setPaused(context: Context, value: Boolean, workId: String? = null) { prefs(context).edit().putBoolean(pauseKey(workId), value).apply() }
+        private fun sessionDirectory(context: Context) = File(context.filesDir, "batch-title-search-sessions").apply { mkdirs() }
+        private fun manifestFile(context: Context, sessionId: String) = File(sessionDirectory(context), "$sessionId.session")
+        private fun saveManifest(context: Context, manifest: TitleSearchSessionManifest) {
+            val target = manifestFile(context, manifest.sessionId)
+            val atomic = AtomicFile(target)
+            val stream = atomic.startWrite()
+            try {
+                stream.write(manifest.serialize().toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+                atomic.finishWrite(stream)
+            } catch (error: Throwable) {
+                atomic.failWrite(stream)
+                throw error
+            }
+        }
+        internal fun loadManifest(context: Context, sessionId: String): TitleSearchSessionManifest? = runCatching {
+            val file = manifestFile(context, sessionId)
+            if (!file.isFile) return@runCatching null
+            TitleSearchSessionManifest.parse(file.readText())
+        }.getOrNull()
+        private fun sessionForWork(context: Context, workId: String?): String? {
+            if (workId.isNullOrBlank()) return null
+            return prefs(context).getString(WORK_SESSION_PREFIX + workId, null)
+                ?: workId.takeIf { loadManifest(context, it) != null }
+        }
+        private fun pauseKey(sessionId: String?) = "$PAUSED:${sessionId ?: "legacy"}"
+        fun isPaused(context: Context, workId: String? = null): Boolean {
+            val sessionId = sessionForWork(context, workId) ?: workId
+            return prefs(context).getBoolean(pauseKey(sessionId), false)
+        }
+        fun setPaused(context: Context, value: Boolean, workId: String? = null) {
+            val sessionId = sessionForWork(context, workId) ?: workId ?: return
+            prefs(context).edit().putBoolean(pauseKey(sessionId), value).apply()
+            if (value && workId != null) runCatching { context.workManager.cancelWorkById(UUID.fromString(workId)) }
+        }
         fun savedJobId(context: Context): String? = prefs(context).getString(ACTIVE_JOB_ID, null)
-        fun savedAutoImportWorkId(context: Context, titleSearchWorkId: String): String? =
-            prefs(context).getString(AUTO_IMPORT_JOB_PREFIX + titleSearchWorkId, null)
-        fun isAutoImportRequested(context: Context, titleSearchWorkId: String): Boolean =
-            prefs(context).getBoolean(AUTO_IMPORT_REQUESTED_PREFIX + titleSearchWorkId, false)
+        fun savedAutoImportWorkId(context: Context, titleSearchWorkId: String): String? {
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            return prefs(context).getString(AUTO_IMPORT_JOB_PREFIX + session, null)
+        }
+        fun isAutoImportRequested(context: Context, titleSearchWorkId: String): Boolean {
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            return prefs(context).getBoolean(AUTO_IMPORT_REQUESTED_PREFIX + session, false)
+        }
         fun saveAutoImportRequested(context: Context, titleSearchWorkId: String, requested: Boolean) {
-            prefs(context).edit().putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + titleSearchWorkId, requested).apply()
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            prefs(context).edit().putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + session, requested).apply()
         }
         fun saveAutoImportWorkId(context: Context, titleSearchWorkId: String, importWorkId: String) {
-            prefs(context).edit().putString(AUTO_IMPORT_JOB_PREFIX + titleSearchWorkId, importWorkId).apply()
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            prefs(context).edit().putString(AUTO_IMPORT_JOB_PREFIX + session, importWorkId).apply()
         }
         fun activeSavedJobId(context: Context): String? {
             val value = savedJobId(context) ?: return null
             val id = runCatching { UUID.fromString(value) }.getOrNull() ?: return null
             val info = runCatching { context.workManager.getWorkInfoById(id).get() }.getOrNull()
-            if (info != null && !info.state.isFinished) return value
+            if (info == null) {
+                if (sessionForWork(context, value) != null) return value
+                clearSavedJob(context, value)
+                return null
+            }
+            if (!info.state.isFinished) return value
+            if (info.state != WorkInfo.State.SUCCEEDED) return value
             clearSavedJob(context, value)
             return null
         }
-        private fun saveJobId(context: Context, workId: String) { prefs(context).edit().putString(ACTIVE_JOB_ID, workId).apply() }
+        private fun saveJobId(context: Context, workId: String, sessionId: String) {
+            prefs(context).edit()
+                .putString(ACTIVE_JOB_ID, workId)
+                .putString(WORK_SESSION_PREFIX + workId, sessionId)
+                .apply()
+        }
         internal fun clearSavedJob(context: Context, workId: String) {
             if (savedJobId(context) == workId) prefs(context).edit().remove(ACTIVE_JOB_ID).apply()
         }
-        fun partialResultsPath(context: Context, workId: String): String =
-            File(context.filesDir, "batch-title-search-$workId.result-rows").absolutePath
+        fun partialResultsPath(context: Context, workId: String): String {
+            val sessionId = sessionForWork(context, workId) ?: workId
+            return File(context.filesDir, "batch-title-search-$sessionId.result-rows").absolutePath
+        }
 
         internal suspend fun enqueue(
             context: Context,
@@ -1105,57 +1234,142 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             speedPreset: TitleSearchSpeedPreset = TitleSearchSpeedPreset.FAST,
             autoImport: Boolean = false,
         ): UUID = withContext(Dispatchers.IO) {
-            val workManager = context.workManager
-            val uniqueName = uniqueUriWorkName(uri)
-            val activeWork = runCatching {
-                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }
-            }.getOrNull()
-            if (activeWork != null) {
-                saveJobId(context, activeWork.id.toString())
-                if (autoImport) saveAutoImportRequested(context, activeWork.id.toString(), true)
-                return@withContext activeWork.id
-            }
+            val sessionId = UUID.randomUUID().toString()
+            val titlesFile = File(context.filesDir, "batch-title-search-$sessionId.txt")
+            val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Unable to read the selected title file.")
+            input.use { source -> titlesFile.outputStream().use { output -> source.copyTo(output) } }
+            val manifest = TitleSearchSessionManifest(
+                sessionId = sessionId,
+                titleFilePath = titlesFile.absolutePath,
+                sourceIds = sourceIds,
+                speedPresetName = speedPreset.name,
+                autoImport = autoImport,
+                uniqueWorkName = "batch_title_search_session_$sessionId",
+            )
+            saveManifest(context, manifest)
+            enqueueManifest(context, manifest)
+        }
 
+        private suspend fun enqueueManifest(context: Context, manifest: TitleSearchSessionManifest): UUID {
+            val workManager = context.workManager
+            val active = runCatching {
+                workManager.getWorkInfosForUniqueWork(manifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+            }.getOrNull()
+            if (active != null) {
+                saveJobId(context, active.id.toString(), manifest.sessionId)
+                if (manifest.autoImport) saveAutoImportRequested(context, manifest.sessionId, true)
+                return active.id
+            }
+            val input = workDataOf(
+                KEY_TITLES_FILE to manifest.titleFilePath,
+                KEY_SPEED_PRESET to manifest.speedPresetName,
+                KEY_AUTO_IMPORT to manifest.autoImport,
+                KEY_SESSION_ID to manifest.sessionId,
+            )
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
-                .setInputData(
-                    workDataOf(
-                        KEY_URI to uri.toString(),
-                        KEY_SOURCE_IDS to sourceIds.toLongArray(),
-                        KEY_SPEED_PRESET to speedPreset.name,
-                        KEY_AUTO_IMPORT to autoImport,
-                    ),
-                )
+                .setInputData(if (manifest.sourceIds == null) input else workDataOf(
+                    KEY_TITLES_FILE to manifest.titleFilePath,
+                    KEY_SOURCE_IDS to manifest.sourceIds.toLongArray(),
+                    KEY_SPEED_PRESET to manifest.speedPresetName,
+                    KEY_AUTO_IMPORT to manifest.autoImport,
+                    KEY_SESSION_ID to manifest.sessionId,
+                ))
                 .addTag("batch_title_search")
                 .build()
-            setPaused(context, false, request.id.toString())
-            saveAutoImportRequested(context, request.id.toString(), autoImport)
-            saveJobId(context, request.id.toString())
-            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.KEEP, request).result.get()
-            val enqueuedId = runCatching {
-                workManager.getWorkInfosForUniqueWork(uniqueName).get().firstOrNull { !it.state.isFinished }?.id
-            }.getOrNull() ?: request.id
-            saveJobId(context, enqueuedId.toString())
-            enqueuedId
+            prefs(context).edit().putBoolean(pauseKey(manifest.sessionId), false).apply()
+            prefs(context).edit().putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + manifest.sessionId, manifest.autoImport).apply()
+            saveJobId(context, request.id.toString(), manifest.sessionId)
+            workManager.enqueueUniqueWork(manifest.uniqueWorkName, ExistingWorkPolicy.KEEP, request).result.get()
+            val actual = runCatching {
+                workManager.getWorkInfosForUniqueWork(manifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+            }.getOrNull()
+            val actualId = actual?.id ?: request.id
+            saveJobId(context, actualId.toString(), manifest.sessionId)
+            prefs(context).edit().remove("failure:${manifest.sessionId}").apply()
+            actualId
         }
+
+        suspend fun resume(context: Context, previousWorkId: String): UUID? = withContext(Dispatchers.IO) {
+            val sessionId = sessionForWork(context, previousWorkId) ?: previousWorkId
+            var manifest = loadManifest(context, sessionId)
+            if (manifest == null) {
+                val oldId = runCatching { UUID.fromString(previousWorkId) }.getOrNull() ?: return@withContext null
+                val oldWork = runCatching { context.workManager.getWorkInfoById(oldId).get() }.getOrNull() ?: return@withContext null
+                val oldInput = oldWork.inputData
+                val inputFile = oldInput.getString(KEY_TITLES_FILE)?.let(::File)
+                val titleText = when {
+                    inputFile?.isFile == true -> runCatching { inputFile.readText() }.getOrNull()
+                    oldInput.getString(KEY_URI) != null -> runCatching {
+                        context.contentResolver.openInputStream(Uri.parse(oldInput.getString(KEY_URI)))?.bufferedReader()?.use { it.readText() }
+                    }.getOrNull()
+                    else -> null
+                } ?: return@withContext null
+                val copiedTitles = File(context.filesDir, "batch-title-search-$sessionId.txt")
+                copiedTitles.writeText(titleText)
+                val migratedManifest = TitleSearchSessionManifest(
+                    sessionId = sessionId,
+                    titleFilePath = copiedTitles.absolutePath,
+                    sourceIds = oldInput.getLongArray(KEY_SOURCE_IDS)?.toSet(),
+                    speedPresetName = oldInput.getString(KEY_SPEED_PRESET) ?: TitleSearchSpeedPreset.FAST.name,
+                    autoImport = oldInput.getBoolean(KEY_AUTO_IMPORT, false) || isAutoImportRequested(context, previousWorkId),
+                    uniqueWorkName = "batch_title_search_session_$sessionId",
+                )
+                saveManifest(context, migratedManifest)
+                prefs(context).edit().putString(WORK_SESSION_PREFIX + previousWorkId, sessionId).apply()
+                manifest = migratedManifest
+            }
+            val sessionManifest = manifest ?: return@withContext null
+            var active = runCatching {
+                context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+            }.getOrNull()
+            if (active != null && !isPaused(context, sessionId)) {
+                saveJobId(context, active.id.toString(), sessionId)
+                return@withContext active.id
+            }
+            if (active != null) {
+                context.workManager.cancelWorkById(active.id)
+                for (attempt in 0 until 50) {
+                    delay(100)
+                    active = runCatching {
+                        context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+                    }.getOrNull()
+                    if (active == null) break
+                }
+                active = runCatching {
+                    context.workManager.getWorkInfosForUniqueWork(sessionManifest.uniqueWorkName).get().firstOrNull { !it.state.isFinished }
+                }.getOrNull()
+                if (active != null && !isPaused(context, sessionId)) {
+                    saveJobId(context, active.id.toString(), sessionId)
+                    return@withContext active.id
+                }
+                if (active != null) return@withContext null
+            }
+            enqueueManifest(context, sessionManifest)
+        }
+
         fun enqueueTitles(context: Context, titles: List<String>, autoImport: Boolean = false): UUID {
-            val id = UUID.randomUUID()
-            val file = File(context.filesDir, "batch-title-search-$id.txt")
+            val sessionId = UUID.randomUUID().toString()
+            val file = File(context.filesDir, "batch-title-search-$sessionId.txt")
             file.writeText(titles.joinToString("\n"))
+            val manifest = TitleSearchSessionManifest(
+                sessionId, file.absolutePath, null, TitleSearchSpeedPreset.FAST.name, autoImport,
+                "batch_title_search_session_$sessionId",
+            )
+            saveManifest(context, manifest)
+            val id = UUID.randomUUID()
             val request = OneTimeWorkRequestBuilder<BatchTitleSearchWorker>()
                 .setId(id)
-                .setInputData(
-                    workDataOf(
-                        KEY_TITLES_FILE to file.absolutePath,
-                        KEY_AUTO_IMPORT to autoImport,
-                        KEY_SPEED_PRESET to TitleSearchSpeedPreset.FAST.name,
-                    ),
-                )
+                .setInputData(workDataOf(
+                    KEY_TITLES_FILE to file.absolutePath,
+                    KEY_AUTO_IMPORT to autoImport,
+                    KEY_SPEED_PRESET to TitleSearchSpeedPreset.FAST.name,
+                    KEY_SESSION_ID to sessionId,
+                ))
                 .addTag("batch_title_search")
                 .build()
-            setPaused(context, false, id.toString())
-            saveAutoImportRequested(context, id.toString(), autoImport)
-            saveJobId(context, id.toString())
-            context.workManager.enqueue(request)
+            prefs(context).edit().putBoolean(pauseKey(sessionId), false).putBoolean(AUTO_IMPORT_REQUESTED_PREFIX + sessionId, autoImport).apply()
+            saveJobId(context, id.toString(), sessionId)
+            context.workManager.enqueueUniqueWork(manifest.uniqueWorkName, ExistingWorkPolicy.KEEP, request)
             return id
         }
         fun readInputTitles(context: Context, path: String?): List<String> = runCatching {
@@ -1180,11 +1394,6 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             }
             TitleSearchCandidateDeduplicator.collapse(lines.mapNotNull(::decode).distinctBy { it.id })
         }.getOrDefault(emptyList())
-        private fun uniqueUriWorkName(uri: Uri): String {
-            val digest = MessageDigest.getInstance("SHA-256").digest(uri.toString().toByteArray())
-            val key = digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-            return "batch_title_search_uri_$key"
-        }
         private fun candidateId(title: String, sourceId: Long, url: String): String =
             MessageDigest.getInstance("SHA-256")
                 .digest("$title\u0000$sourceId\u0000$url".toByteArray(Charsets.UTF_8))

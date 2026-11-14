@@ -196,6 +196,36 @@ class BatchTitleSearchCandidateDeduplicatorTest {
         assertEquals(TitleSearchSpeedPreset.FAST, TitleSearchSpeedPreset.fromName("UNKNOWN"))
     }
 
+    @Test
+    fun `durable session manifest round trips input source settings and automatic import`() {
+        val manifest = TitleSearchSessionManifest(
+            sessionId = "session-123",
+            titleFilePath = "/private/files/titles with spaces.txt",
+            sourceIds = setOf(9L, 2L, 41L),
+            speedPresetName = "BALANCED",
+            autoImport = true,
+            uniqueWorkName = "batch_title_search_session_session-123",
+        )
+
+        val restored = TitleSearchSessionManifest.parse(manifest.serialize())
+
+        assertEquals(manifest, restored)
+    }
+
+    @Test
+    fun `durable session manifest preserves the default enabled-source selection`() {
+        val manifest = TitleSearchSessionManifest(
+            sessionId = "session-default",
+            titleFilePath = "/private/titles.txt",
+            sourceIds = null,
+            speedPresetName = "FAST",
+            autoImport = false,
+            uniqueWorkName = "batch_title_search_session_session-default",
+        )
+
+        assertEquals(manifest, TitleSearchSessionManifest.parse(manifest.serialize()))
+    }
+
     private fun candidate(
         id: String,
         inputTitle: String,
