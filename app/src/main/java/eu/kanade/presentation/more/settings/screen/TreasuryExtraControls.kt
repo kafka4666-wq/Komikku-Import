@@ -200,10 +200,9 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    enabled = !hasCacheToday,
                     onClick = { showConfirmation = true },
                 ) {
-                    Text(if (hasCacheToday) "Cached" else "Cache now")
+                    Text(if (hasCacheToday) "Cache 30 more" else "Cache now")
                 }
             }
             val visibleStatus = cacheStatus.ifBlank { status }
@@ -239,10 +238,10 @@ internal fun DailyOfflineCachePreference(preferences: KodamiTreasuryPreferences)
     if (showConfirmation) {
         AlertDialog(
             onDismissRequest = { showConfirmation = false },
-            title = { Text("Cache 30 random titles?") },
+            title = { Text(if (hasCacheToday) "Cache up to 30 more titles?" else "Cache up to 30 random titles?") },
             text = {
                 Text(
-                    "This queues all available chapters for up to 30 random titles in your library. It can use substantial storage and mobile data. Existing downloads are kept. Chapters added by this cache are removed at local midnight.",
+                    "This queues all available chapters for up to 30 library titles not already included in this cache period. You can run it again for another batch. It can use substantial storage and mobile data. Existing downloads are kept. Chapters added by these cache runs are removed at local midnight unless you choose Keep.",
                 )
             },
             confirmButton = {

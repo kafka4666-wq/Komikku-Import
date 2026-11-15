@@ -41,7 +41,7 @@ object DailyOfflineCacheJob {
         val request = OneTimeWorkRequestBuilder<DailyOfflineCacheWorker>().build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "$CACHE_WORK_PREFIX$today",
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             request,
         )
         return true
@@ -233,17 +233,13 @@ class DailyOfflineCacheManager(
     suspend fun cacheToday(): CacheResult = withContext(Dispatchers.IO) {
         expireIfNeeded()
         val today = LocalDate.now().toString()
-        val existingDate = preferences.dailyCacheDate().get()
         val existingIds = parseIds(preferences.dailyCacheMangaIds().get())
-        if (existingDate == today && existingIds.isNotEmpty()) {
-            preferences.dailyCacheStatus().set("Today's cache is already ready (${existingIds.size} titles).")
-            return@withContext CacheResult(existingIds.size, 0)
-        }
+        val existingIdSet = existingIds.toHashSet()
 
         val selected = mutableListOf<CachedTitle>()
         val library: List<LibraryManga> = getLibraryManga.await()
-        for (entry in library.filter { it.totalChapters > 0 }.shuffled()) {
-            if (selected.size >= TITLES_PER_DAY) break
+        for (entry in library.filter { it.totalChapters > 0 && it.manga.id !in existingIdSet }.shuffled()) {
+            if (selected.size >= TITLES_PER_RUN) break
             val manga = entry.manga
             if (sourceManager.get(manga.source) !is HttpSource) continue
             val chapters = getChaptersByMangaId.await(manga.id, applyFilter = false)
@@ -251,7 +247,13 @@ class DailyOfflineCacheManager(
             if (chapters.isNotEmpty()) selected += CachedTitle(manga, chapters)
         }
         if (selected.isEmpty()) {
-            preferences.dailyCacheStatus().set("No eligible library titles with available chapters were found.")
+            preferences.dailyCacheStatus().set(
+                if (existingIds.isEmpty()) {
+                    "No eligible library titles with available chapters were found."
+                } else {
+                    "No additional eligible titles remain; all available titles are already cached for this cache period."
+                },
+            )
             return@withContext CacheResult(0, 0)
         }
 
@@ -271,7 +273,9 @@ class DailyOfflineCacheManager(
         )
         if (historySaved) preferences.dailyCacheHistoryRevision().set(System.currentTimeMillis().toString())
         val retainedIds = readRecords().map { it.first }.distinct()
-        preferences.dailyCacheMangaIds().set((retainedIds + selected.map { it.manga.id }).distinct().joinToString(","))
+        preferences.dailyCacheMangaIds().set(
+            (existingIds + retainedIds + selected.map { it.manga.id }).distinct().joinToString(","),
+        )
         preferences.dailyCacheDate().set(today)
         downloadManager.startDownloads()
         preferences.dailyCacheStatus().set(
@@ -390,6 +394,6 @@ class DailyOfflineCacheManager(
     private companion object {
         val RECORDS_LOCK = Any()
         val HISTORY_LOCK = Any()
-        const val TITLES_PER_DAY = 30
+        const val TITLES_PER_RUN = 30
     }
 }
