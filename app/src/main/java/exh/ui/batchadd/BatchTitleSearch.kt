@@ -1466,7 +1466,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             }
         }
 
-        fun checkpointProgress(context: Context, workId: String): TitleSearchDurableProgress? = runCatching {
+        internal fun checkpointProgress(context: Context, workId: String): TitleSearchDurableProgress? = runCatching {
             val sessionId = sessionForWork(context, workId) ?: return@runCatching null
             val manifest = loadManifest(context, sessionId) ?: return@runCatching null
             val titlesFile = File(manifest.titleFilePath)
