@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Base64
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -137,6 +138,13 @@ class DailyOfflineCacheCleanupWorker(
     }
 }
 
+data class DailyCacheHistoryEntry(
+    val date: String,
+    val mangaId: Long,
+    val title: String,
+    val thumbnailUrl: String,
+)
+
 class DailyOfflineCacheManager(
     private val context: Context,
     private val preferences: KodamiTreasuryPreferences = KodamiTreasuryPreferences(Injekt.get()),
@@ -148,6 +156,79 @@ class DailyOfflineCacheManager(
 ) {
     private val recordsFile: File
         get() = File(context.filesDir, "komikku-daily-cache-owned-chapters.txt")
+    private val historyFile: File
+        get() = File(context.filesDir, "komikku-daily-cache-history.tsv")
+
+    suspend fun getHistory(): List<DailyCacheHistoryEntry> = withContext(Dispatchers.IO) {
+        backfillCurrentCacheHistory()
+        readHistory()
+    }
+
+    private suspend fun backfillCurrentCacheHistory() {
+        val today = LocalDate.now().toString()
+        if (preferences.dailyCacheDate().get() != today) return
+        val currentIds = parseIds(preferences.dailyCacheMangaIds().get())
+        if (currentIds.isEmpty()) return
+        val existing = readHistory().mapTo(hashSetOf()) { it.date to it.mangaId }
+        val missing = currentIds.filter { (today to it) !in existing }.mapNotNull { id ->
+            getManga.await(id)?.let { DailyCacheHistoryEntry(today, id, it.title, it.thumbnailUrl.orEmpty()) }
+        }
+        if (missing.isNotEmpty() && writeHistory(missing)) {
+            preferences.dailyCacheHistoryRevision().set(System.currentTimeMillis().toString())
+        }
+    }
+
+    private fun readHistory(): List<DailyCacheHistoryEntry> = synchronized(HISTORY_LOCK) {
+        if (!historyFile.exists()) return@synchronized emptyList()
+        runCatching {
+            historyFile.useLines { lines ->
+                lines.mapNotNull { line ->
+                    val fields = line.split('\t', limit = 4)
+                    val date = fields.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val mangaId = fields.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
+                    val title = decodeHistoryText(fields.getOrNull(2).orEmpty()) ?: return@mapNotNull null
+                    val thumbnailUrl = decodeHistoryText(fields.getOrNull(3).orEmpty()) ?: return@mapNotNull null
+                    DailyCacheHistoryEntry(date, mangaId, title, thumbnailUrl)
+                }.distinctBy { it.date to it.mangaId }
+                    .sortedWith(compareByDescending<DailyCacheHistoryEntry> { it.date }.thenBy { it.title.lowercase() })
+                    .toList()
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun writeHistory(entries: List<DailyCacheHistoryEntry>): Boolean = synchronized(HISTORY_LOCK) {
+        val merged = (readHistory() + entries)
+            .distinctBy { it.date to it.mangaId }
+            .sortedWith(compareByDescending<DailyCacheHistoryEntry> { it.date }.thenBy { it.title.lowercase() })
+        val tempFile = File(context.filesDir, "komikku-daily-cache-history.tmp")
+        runCatching {
+            tempFile.writeText(merged.joinToString("\n") { entry ->
+                listOf(
+                    entry.date,
+                    entry.mangaId.toString(),
+                    encodeHistoryText(entry.title),
+                    encodeHistoryText(entry.thumbnailUrl),
+                ).joinToString("\t")
+            })
+            if (!tempFile.renameTo(historyFile)) {
+                tempFile.copyTo(historyFile, overwrite = true)
+                tempFile.delete()
+            }
+            true
+        }.getOrElse {
+            tempFile.delete()
+            false
+        }
+    }
+
+    private fun encodeHistoryText(value: String): String = Base64.encodeToString(
+        value.toByteArray(Charsets.UTF_8),
+        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+    )
+
+    private fun decodeHistoryText(value: String): String? = runCatching {
+        String(Base64.decode(value, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Charsets.UTF_8)
+    }.getOrNull()
 
     suspend fun cacheToday(): CacheResult = withContext(Dispatchers.IO) {
         expireIfNeeded()
@@ -183,12 +264,19 @@ class DailyOfflineCacheManager(
         // Persist ownership before starting the queue. At midnight, only chapters newly
         // admitted by this job are deleted; favorited titles are retained explicitly.
         writeRecords(newlyQueued)
+        val historySaved = writeHistory(
+            selected.map { title ->
+                DailyCacheHistoryEntry(today, title.manga.id, title.manga.title, title.manga.thumbnailUrl.orEmpty())
+            },
+        )
+        if (historySaved) preferences.dailyCacheHistoryRevision().set(System.currentTimeMillis().toString())
         val retainedIds = readRecords().map { it.first }.distinct()
         preferences.dailyCacheMangaIds().set((retainedIds + selected.map { it.manga.id }).distinct().joinToString(","))
         preferences.dailyCacheDate().set(today)
         downloadManager.startDownloads()
         preferences.dailyCacheStatus().set(
-            "Prepared ${selected.size} titles; queued ${newlyQueued.size} new chapters.",
+            "Prepared ${selected.size} titles; queued ${newlyQueued.size} new chapters." +
+                if (historySaved) "" else " Cache history could not be saved.",
         )
         CacheResult(selected.size, newlyQueued.size)
     }
@@ -301,6 +389,7 @@ class DailyOfflineCacheManager(
 
     private companion object {
         val RECORDS_LOCK = Any()
+        val HISTORY_LOCK = Any()
         const val TITLES_PER_DAY = 30
     }
 }

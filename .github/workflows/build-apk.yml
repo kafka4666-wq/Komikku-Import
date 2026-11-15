@@ -56,6 +56,10 @@ jobs:
           grep -Fq 'TitleSearchConcurrencyLimits(2, 16, 3, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchSpeedPreset.FAST' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'Quick Title Search' app/src/main/java/eu/kanade/presentation/more/MoreScreen.kt
+          grep -Fq 'DailyCacheHistoryEntry' app/src/main/java/eu/kanade/tachiyomi/data/download/dailycache/DailyOfflineCache.kt
+          grep -Fq 'komikku-daily-cache-history.tsv' app/src/main/java/eu/kanade/tachiyomi/data/download/dailycache/DailyOfflineCache.kt
+          grep -Fq 'Tab(selected = selectedTab == 1' app/src/main/java/eu/kanade/presentation/more/settings/screen/TreasuryExtraControls.kt
+          grep -Fq 'kodami_daily_cache_history_revision' app/src/main/java/eu/kanade/domain/ui/KodamiTreasuryPreferences.kt
           cp ../app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt app/src/test/java/exh/ui/batchadd/BatchTitleSearchCandidateDeduplicatorTest.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt app/src/main/java/eu/kanade/tachiyomi/data/notification/NotificationReceiver.kt
           cp ../app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt app/src/main/java/eu/kanade/tachiyomi/ui/more/MoreTab.kt
@@ -91,8 +95,8 @@ jobs:
           print(f'replaced flexible implementation lines: {n}')
           PY
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 128/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.17"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 129/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.18"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*applicationIdSuffix[[:space:]]*=.*$/            applicationIdSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
@@ -190,13 +194,13 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='128'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='129'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.17-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.18-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30

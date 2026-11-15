@@ -24,4 +24,5 @@ class KodamiTreasuryPreferences(
     fun dailyCacheChapterRecords() = preferenceStore.getString("kodami_daily_cache_chapter_records", "")
     fun dailyCacheStatus() = preferenceStore.getString("kodami_daily_cache_status", "")
     fun dailyCacheFilter() = preferenceStore.getString("kodami_daily_cache_filter", "DISABLED")
+    fun dailyCacheHistoryRevision() = preferenceStore.getString("kodami_daily_cache_history_revision", "")
 }
