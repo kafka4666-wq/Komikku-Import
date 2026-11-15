@@ -100,6 +100,9 @@ jobs:
           grep -Fq 'TitleSearchConcurrencyLimits(2, 16, 3, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchRetryPolicy.isRetryable(error)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'checkpointProgress(context.applicationContext, currentWorkId)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'SOURCE_ERROR_COOLDOWN_MILLIS = 150_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'RATE_LIMIT_COOLDOWN_MILLIS = 180_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchSourceCheckpoint.shouldFinalizeTitle' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq '.setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'getWorkInfosByTag(BatchImportJob.WORK_TAG)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'WORK_TAG = "BatchImport"' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt

@@ -200,11 +200,30 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
-    fun `source retries have bounded short delays`() {
-        assertEquals(3, TitleSearchRetryPolicy.SOURCE_ATTEMPTS)
-        assertEquals(1_000L, TitleSearchRetryPolicy.sourceDelayMillis(1))
-        assertEquals(2_000L, TitleSearchRetryPolicy.sourceDelayMillis(2))
-        assertEquals(2_000L, TitleSearchRetryPolicy.sourceDelayMillis(3))
+    fun `source checkpoints bind completion to both input title and source`() {
+        val marker = TitleSearchSourceCheckpoint.marker("Title A", 41L)
+
+        assertTrue(TitleSearchSourceCheckpoint.isComplete(listOf(marker), "Title A", 41L))
+        assertFalse(TitleSearchSourceCheckpoint.isComplete(listOf(marker), "Title B", 41L))
+        assertFalse(TitleSearchSourceCheckpoint.isComplete(listOf(marker), "Title A", 42L))
+    }
+
+    @Test
+    fun `source errors cool down for two and a half minutes and rate limits for three`() {
+        val ordinary = IOException("temporary source failure")
+        val rateLimited = IOException("source request failed", IOException("HTTP 429 Too Many Requests"))
+
+        assertEquals(150_000L, TitleSearchRetryPolicy.cooldownMillis(ordinary))
+        assertEquals(180_000L, TitleSearchRetryPolicy.cooldownMillis(rateLimited))
+        assertEquals(181_000L, TitleSearchRetryPolicy.cooldownUntil(1_000L, rateLimited))
+        assertTrue(TitleSearchRetryPolicy.isRateLimited(rateLimited))
+    }
+
+    @Test
+    fun `a match from another source finalizes the title without retrying failed sources`() {
+        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = true, allSourcesAnswered = false))
+        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourcesAnswered = true))
+        assertFalse(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourcesAnswered = false))
     }
 
     @Test
