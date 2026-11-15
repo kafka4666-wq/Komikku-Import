@@ -80,6 +80,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import tachiyomi.core.common.util.QuerySanitizer.sanitize
 import mihon.domain.manga.model.toDomainManga
 import tachiyomi.domain.source.service.SourceManager
@@ -176,6 +177,11 @@ class BatchTitleSearchScreen(
         var failureExportInfo by remember(jobId) { mutableStateOf<WorkInfo?>(null) }
         var importedRows by remember { mutableStateOf<List<AutoImportedTitleResult>>(emptyList()) }
         var searchResultsLoaded by remember(jobId) { mutableStateOf(false) }
+        var manualRetryWorkId by remember(jobId) {
+            mutableStateOf(jobId?.let { BatchTitleSearchWorker.savedManualRetryWorkIds(context, it).lastOrNull() })
+        }
+        var manualRetryInfo by remember { mutableStateOf<WorkInfo?>(null) }
+        var manualRetryAttempts by remember(jobId) { mutableStateOf<Map<String, TitleImportAttempt>>(emptyMap()) }
         var fallbackImportWorkId by remember(jobId) {
             mutableStateOf(jobId?.let { BatchTitleSearchWorker.savedAutoImportWorkId(context, it) })
         }
@@ -200,6 +206,34 @@ class BatchTitleSearchScreen(
 
         LaunchedEffect(jobId, autoImport) {
             if (autoImport) jobId?.let { BatchTitleSearchWorker.saveAutoImportRequested(context.applicationContext, it, true) }
+        }
+        LaunchedEffect(jobId) {
+            val searchWorkId = jobId ?: return@LaunchedEffect
+            BatchTitleSearchWorker.savedManualRetryWorkIds(context.applicationContext, searchWorkId).forEach { savedId ->
+                val importId = runCatching { UUID.fromString(savedId) }.getOrNull() ?: return@forEach
+                val finished = manager.getWorkInfoByIdFlow(importId).first { it == null || it.state.isFinished } ?: return@forEach
+                if (finished.state == WorkInfo.State.SUCCEEDED) {
+                    val path = finished.outputData.getString(BatchImportJob.KEY_TITLE_IMPORT_RESULTS_FILE)
+                    val attempts = withContext(Dispatchers.IO) { readTitleImportAttempts(path) }
+                    manualRetryAttempts = manualRetryAttempts + attempts
+                }
+            }
+        }
+        LaunchedEffect(manualRetryWorkId) {
+            val importId = manualRetryWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                ?: return@LaunchedEffect
+            var attemptsLoaded = false
+            manager.getWorkInfoByIdFlow(importId).collect { workInfo ->
+                manualRetryInfo = workInfo
+                if (!attemptsLoaded && workInfo?.state?.isFinished == true) {
+                    attemptsLoaded = true
+                    if (workInfo.state == WorkInfo.State.SUCCEEDED) {
+                        val path = workInfo.outputData.getString(BatchImportJob.KEY_TITLE_IMPORT_RESULTS_FILE)
+                        val attempts = withContext(Dispatchers.IO) { readTitleImportAttempts(path) }
+                        manualRetryAttempts = manualRetryAttempts + attempts
+                    }
+                }
+            }
         }
         LaunchedEffect(inputUriString, existingJobId, speedPresetName, sourceSelectionConfirmed, selectedSourceIds, outputTreeUriString) {
             if (jobId != null) return@LaunchedEffect
@@ -375,7 +409,20 @@ class BatchTitleSearchScreen(
             (!searchResultsLoaded || (importWorkId != null && importInfo?.state?.isFinished != true) || fallbackImportPending)
         val autoImportComplete = autoImportRequested && searchSucceeded && searchResultsLoaded &&
             (importWorkId == null || importInfo?.state?.isFinished == true) && !fallbackImportPending
-        val visibleImportRows = if (selectedTab == 0) importedRows.filter { it.added } else importedRows.filterNot { it.added }
+        val displayedImportRows = remember(importedRows, results, manualRetryAttempts) {
+            applyManualTitleImportAttempts(importedRows, results, manualRetryAttempts)
+        }
+        val visibleImportRows = if (selectedTab == 0) displayedImportRows.filter { it.added } else displayedImportRows.filterNot { it.added }
+        val retryableRows = visibleImportRows.filter { !it.added && it.candidate != null }
+        val retryableCandidateIds = retryableRows.mapNotNull { it.candidate?.id }.toSet()
+        val selectedRetryUrls = retryableRows.mapNotNull { row ->
+            row.candidate?.takeIf { it.id in selected }?.url
+        }.distinctBy(::canonicalImportUrl)
+        val manualRetryRunning = manualRetryWorkId != null && (
+            manualRetryInfo == null ||
+                manualRetryInfo?.state == WorkInfo.State.RUNNING ||
+                manualRetryInfo?.state == WorkInfo.State.ENQUEUED
+            )
         val selectedUrls = results.filter { it.id in selected }.map { it.url }.distinct()
 
         Scaffold(topBar = { scroll ->
@@ -505,8 +552,8 @@ class BatchTitleSearchScreen(
                         Text(exportStatus, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                     TabRow(selectedTabIndex = selectedTab) {
-                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Added (${importedRows.count { it.added }})") })
-                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Not added (${importedRows.count { !it.added }})") })
+                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Added (${displayedImportRows.count { it.added }})") })
+                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Not added (${displayedImportRows.count { !it.added }})") })
                     }
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -516,9 +563,54 @@ class BatchTitleSearchScreen(
                         item {
                             Text(
                                 if (selectedTab == 0) "Best available matches successfully added to your library."
-                                else "These titles were not added. They either had no search match or the source rejected/failed the add.",
+                                else "Select failed matches below to retry adding those saved titles. This retries the library add only; it does not search any sources again. Titles with no saved match cannot be retried here.",
                                 style = MaterialTheme.typography.bodyMedium,
                             )
+                        }
+                        if (selectedTab == 1 && retryableRows.isNotEmpty()) {
+                            item(key = "not-added-retry-actions") {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(
+                                            onClick = {
+                                                if (retryableCandidateIds.all { it in selected }) {
+                                                    selected.removeAll(retryableCandidateIds)
+                                                } else {
+                                                    retryableCandidateIds.forEach { if (it !in selected) selected.add(it) }
+                                                }
+                                            },
+                                        ) { Text("Select all retryable") }
+                                        TextButton(onClick = { selected.removeAll(retryableCandidateIds) }) {
+                                            Text("Clear selection")
+                                        }
+                                    }
+                                    Button(
+                                        enabled = selectedRetryUrls.isNotEmpty() && !manualRetryRunning,
+                                        onClick = {
+                                            val searchWorkId = jobId ?: return@Button
+                                            val retryCandidates = retryableRows.mapNotNull { it.candidate }.filter { it.id in selected }
+                                            val urls = retryCandidates.map { it.url }.distinctBy(::canonicalImportUrl)
+                                            if (urls.isNotEmpty()) {
+                                                val importId = BatchImportJob.startTitleMatches(context.applicationContext, urls)
+                                                BatchTitleSearchWorker.saveManualRetryWorkId(context.applicationContext, searchWorkId, importId.toString())
+                                                manualRetryInfo = null
+                                                manualRetryWorkId = importId.toString()
+                                                selected.removeAll(retryCandidates.map { it.id }.toSet())
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text("Retry selected adds (${selectedRetryUrls.size})") }
+                                    if (manualRetryRunning) {
+                                        val retryProgress = manualRetryInfo?.progress
+                                        val done = retryProgress?.getInt(BatchImportJob.KEY_COMPLETED, 0) ?: 0
+                                        val total = retryProgress?.getInt(BatchImportJob.KEY_TOTAL, 0) ?: 0
+                                        if (total > 0) LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+                                        Text(if (total > 0) "Retrying selected adds: $done/$total" else "Preparing selected additions…", style = MaterialTheme.typography.bodySmall)
+                                    } else if (manualRetryInfo?.state == WorkInfo.State.FAILED) {
+                                        Text("The selected retry did not complete. You can select the failed matches and retry again.", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
                         }
                         if (visibleImportRows.isEmpty()) {
                             item {
@@ -531,18 +623,32 @@ class BatchTitleSearchScreen(
                             }
                         }
                         items(visibleImportRows, key = { it.inputTitle.lowercase() }) { row ->
-                            if (row.candidate != null) {
-                                CandidateCard(candidate = row.candidate, checked = false, onCheckedChange = {}, showCheckbox = false)
-                            } else {
-                                Card(Modifier.fillMaxWidth()) {
-                                    Column(Modifier.padding(12.dp)) {
-                                        Text(row.inputTitle, style = MaterialTheme.typography.titleSmall)
-                                        Text(row.detail ?: "No matching title was found.", style = MaterialTheme.typography.bodySmall)
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                val candidate = row.candidate
+                                if (candidate != null) {
+                                    CandidateCard(
+                                        candidate = candidate,
+                                        checked = !row.added && candidate.id in selected,
+                                        onCheckedChange = { checked ->
+                                            if (!row.added && checked) {
+                                                if (candidate.id !in selected) selected.add(candidate.id)
+                                            } else {
+                                                selected.remove(candidate.id)
+                                            }
+                                        },
+                                        showCheckbox = !row.added && selectedTab == 1,
+                                    )
+                                } else {
+                                    Card(Modifier.fillMaxWidth()) {
+                                        Column(Modifier.padding(12.dp)) {
+                                            Text(row.inputTitle, style = MaterialTheme.typography.titleSmall)
+                                            Text(row.detail ?: "No saved match is available to retry.", style = MaterialTheme.typography.bodySmall)
+                                        }
                                     }
                                 }
-                            }
-                            if (!row.added && row.candidate != null && !row.detail.isNullOrBlank()) {
-                                Text(row.detail, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp))
+                                if (!row.added && candidate != null && !row.detail.isNullOrBlank()) {
+                                    Text(row.detail, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp))
+                                }
                             }
                         }
                     }
@@ -760,6 +866,33 @@ internal fun buildAutomaticTitleResults(
                 attempt.added -> null
                 else -> attempt.detail ?: "The source could not add this title."
             },
+        ),
+    )
+}
+
+internal fun applyManualTitleImportAttempts(
+    rows: List<AutoImportedTitleResult>,
+    candidates: List<TitleSearchCandidate>,
+    attempts: Map<String, TitleImportAttempt>,
+): List<AutoImportedTitleResult> {
+    if (attempts.isEmpty()) return rows
+    val attemptedByInput = candidates.asSequence()
+        .filter { canonicalImportUrl(it.url) in attempts }
+        .groupBy { it.inputTitle.trim().lowercase() }
+    return rows.map { row ->
+        if (row.added) return@map row
+        val attempted = attemptedByInput[row.inputTitle.trim().lowercase()].orEmpty()
+        val chosen = attempted.maxWithOrNull(
+            compareBy<TitleSearchCandidate> { attempts.getValue(canonicalImportUrl(it.url)).added }
+                .thenBy { TitleMatchQuality.similarityScore(it) }
+                .thenByDescending { it.sourceName.lowercase() },
+        ) ?: return@map row
+        val attempt = attempts.getValue(canonicalImportUrl(chosen.url))
+        AutoImportedTitleResult(
+            inputTitle = row.inputTitle,
+            candidate = chosen,
+            added = attempt.added,
+            detail = if (attempt.added) null else attempt.detail ?: "The selected match could not be added.",
         )
     }
 }
@@ -1433,6 +1566,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private const val WORK_SESSION_PREFIX = "work_session:"
         private const val AUTO_IMPORT_JOB_PREFIX = "auto_import_job:"
         private const val AUTO_IMPORT_REQUESTED_PREFIX = "auto_import_requested:"
+        private const val MANUAL_RETRY_IMPORTS_PREFIX = "manual_retry_imports:"
         private const val FAILURE_EXPORT_WORK_PREFIX = "failure_export_work:"
         private const val RETRY_FAILURE_PREFIX = "retry_failure:"
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -1539,6 +1673,16 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         fun saveAutoImportWorkId(context: Context, titleSearchWorkId: String, importWorkId: String) {
             val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
             prefs(context).edit().putString(AUTO_IMPORT_JOB_PREFIX + session, importWorkId).apply()
+        }
+        fun savedManualRetryWorkIds(context: Context, titleSearchWorkId: String): List<String> {
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            return prefs(context).getString(MANUAL_RETRY_IMPORTS_PREFIX + session, null)
+                ?.lineSequence()?.filter(String::isNotBlank)?.toList().orEmpty()
+        }
+        fun saveManualRetryWorkId(context: Context, titleSearchWorkId: String, importWorkId: String) {
+            val session = sessionForWork(context, titleSearchWorkId) ?: titleSearchWorkId
+            val ids = (savedManualRetryWorkIds(context, titleSearchWorkId) + importWorkId).distinct()
+            prefs(context).edit().putString(MANUAL_RETRY_IMPORTS_PREFIX + session, ids.joinToString("\n")).apply()
         }
         fun activeSavedJobId(context: Context): String? {
             val value = savedJobId(context) ?: return null

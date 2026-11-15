@@ -112,6 +112,38 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
+    fun `successful retry of the saved match moves the input into added`() {
+        val savedMatch = candidate("saved", "Summer Girl", "Summer Girl", "A Source", "https://a.example/saved")
+        val original = AutoImportedTitleResult("Summer Girl", savedMatch, false, "The source rejected this title")
+
+        val updated = applyManualTitleImportAttempts(
+            rows = listOf(original),
+            candidates = listOf(savedMatch),
+            attempts = mapOf("https://a.example/saved" to TitleImportAttempt(true, null)),
+        ).single()
+
+        assertTrue(updated.added)
+        assertEquals("https://a.example/saved", updated.candidate?.url)
+        assertEquals(null, updated.detail)
+    }
+
+    @Test
+    fun `failed retry remains visible as not added`() {
+        val savedMatch = candidate("saved", "Summer Girl", "Summer Girl", "A Source", "https://a.example/saved")
+        val original = AutoImportedTitleResult("Summer Girl", savedMatch, false, "Previous add failed")
+
+        val updated = applyManualTitleImportAttempts(
+            listOf(original),
+            listOf(savedMatch),
+            mapOf("https://a.example/saved" to TitleImportAttempt(false, "Source rejected add")),
+        ).single()
+
+        assertFalse(updated.added)
+        assertEquals(savedMatch, updated.candidate)
+        assertEquals("Source rejected add", updated.detail)
+    }
+
+    @Test
     fun `automatic selection prefers any strong hit over a closer weak hit`() {
         val weak = candidate("weak", "Summer Girl", "Summer Gurlz", "A Source", "https://a.example/weak")
         val strong = candidate("strong", "Summer Girl", "Summer", "Z Source", "https://z.example/strong")
