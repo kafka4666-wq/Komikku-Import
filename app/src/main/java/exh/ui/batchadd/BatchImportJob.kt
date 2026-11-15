@@ -151,6 +151,18 @@ class BatchImportJob(
 
             writeLinksFile("batch_import_failed_links", failedLinks)
             showComplete(nextIndex, urls.size, added, failed)
+            if (fastTitleImport) {
+                inputData.getString(KEY_TITLE_SEARCH_SESSION_ID)?.let { sessionId ->
+                    runCatching {
+                        BatchTitleSearchWorker.enqueueFailureTitleExport(
+                            applicationContext,
+                            sessionId,
+                            titleImportResultsFile?.absolutePath,
+                            autoImport = true,
+                        )
+                    }.onFailure { xLogE("Could not queue failed-title TXT export", it) }
+                }
+            }
             val output = Data.Builder().putAll(progressData(nextIndex, urls.size, added, failed))
                 .apply { titleImportResultsFile?.let { putString(KEY_TITLE_IMPORT_RESULTS_FILE, it.absolutePath) } }
                 .build()
@@ -411,6 +423,7 @@ class BatchImportJob(
                 if (titleSearchWorkId == null) androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE else androidx.work.ExistingWorkPolicy.KEEP,
                 saveJobId = titleSearchWorkId == null,
                 fastTitleImport = true,
+                titleSearchSessionId = titleSearchWorkId,
             )
             if (titleSearchWorkId == null) return requestId
             val actualId = runCatching { context.workManager.getWorkInfosForUniqueWork(workName).get().lastOrNull()?.id }.getOrNull() ?: requestId
@@ -437,6 +450,7 @@ class BatchImportJob(
             saveJobId: Boolean,
             nhentaiImport: Boolean = false,
             fastTitleImport: Boolean = false,
+            titleSearchSessionId: String? = null,
         ): UUID {
             val requestId = UUID.randomUUID()
             val constraints = Constraints.Builder()
@@ -445,7 +459,15 @@ class BatchImportJob(
             val request = OneTimeWorkRequestBuilder<BatchImportJob>()
                 .setConstraints(constraints)
                 .setId(requestId)
-                .setInputData(workDataOf(INPUT_PATH to input.absolutePath, KEY_NHENTAI_IMPORT to nhentaiImport, KEY_FAST_TITLE_IMPORT to fastTitleImport, KEY_NOTIFICATION_ID to if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS))
+                .setInputData(
+                    Data.Builder()
+                        .putString(INPUT_PATH, input.absolutePath)
+                        .putBoolean(KEY_NHENTAI_IMPORT, nhentaiImport)
+                        .putBoolean(KEY_FAST_TITLE_IMPORT, fastTitleImport)
+                        .putInt(KEY_NOTIFICATION_ID, if (nhentaiImport) Notifications.ID_NHENTAI_BATCH_IMPORT_PROGRESS else Notifications.ID_BATCH_IMPORT_PROGRESS)
+                        .apply { if (titleSearchSessionId != null) putString(KEY_TITLE_SEARCH_SESSION_ID, titleSearchSessionId) }
+                        .build(),
+                )
                 .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(TAG)
                 .build()
@@ -472,6 +494,7 @@ class BatchImportJob(
         const val KEY_ADDED = "added"
         const val KEY_FAILED = "failed"
         private const val KEY_FAST_TITLE_IMPORT = "fast_title_import"
+        private const val KEY_TITLE_SEARCH_SESSION_ID = "title_search_session_id"
         const val KEY_TITLE_IMPORT_RESULTS_FILE = "title_import_results_file"
     }
 }

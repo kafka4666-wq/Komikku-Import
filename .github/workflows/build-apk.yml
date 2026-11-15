@@ -98,14 +98,17 @@ jobs:
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
           grep -Fq 'TitleMatchQuality.isStrong' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchConcurrencyLimits(2, 16, 3, 8_000L)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'TitleSearchRetryPolicy.isRetryable(error)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'TitleSearchWorkerRecoveryPolicy.shouldRetryWorker(error)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'checkpointProgress(context.applicationContext, currentWorkId)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'SOURCE_ERROR_COOLDOWN_MILLIS = 150_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'RATE_LIMIT_COOLDOWN_MILLIS = 180_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchSourceCheckpoint.shouldFinalizeTitle' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'MAX_FAILURES_PER_TITLE = 2' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'SOURCE_FAILURE_ATTEMPTS = 1' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'failedTitleListText' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'BatchTitleFailureExportWorker' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          ! grep -Fq 'sourceCooldownUntil' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          ! grep -Fq 'cooldownMillis' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'terminalSourceFailureTitles(context.applicationContext, it)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
-          grep -Fq 'this result may be incomplete' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'were not retried' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'takePersistableUriPermission(uri, flags)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq '.setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'getWorkInfosByTag(BatchImportJob.WORK_TAG)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'WORK_TAG = "BatchImport"' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt

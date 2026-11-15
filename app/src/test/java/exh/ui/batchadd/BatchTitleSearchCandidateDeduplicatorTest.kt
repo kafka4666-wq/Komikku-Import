@@ -194,9 +194,9 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
-    fun `transient I O errors retry but invalid source configuration does not`() {
-        assertTrue(TitleSearchRetryPolicy.isRetryable(IOException("temporary source failure")))
-        assertFalse(TitleSearchRetryPolicy.isRetryable(IllegalStateException("selected source is not installed")))
+    fun `source errors are not retried but worker storage recovery remains available`() {
+        assertTrue(TitleSearchWorkerRecoveryPolicy.shouldRetryWorker(IOException("temporary storage failure")))
+        assertFalse(TitleSearchWorkerRecoveryPolicy.shouldRetryWorker(IllegalStateException("selected source is not installed")))
     }
 
     @Test
@@ -209,16 +209,14 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
-    fun `source error marker allows one cooldown retry then becomes terminal`() {
+    fun `the first source error marker is terminal and never schedules a source retry`() {
         val firstError = TitleSearchSourceCheckpoint.failureMarker("Title A", 41L, 1)
-        val secondError = TitleSearchSourceCheckpoint.failureMarker("Title A", 41L, 2)
 
         assertEquals(1, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title A", 41L))
         assertEquals(0, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title B", 41L))
         assertEquals(0, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title A", 42L))
-        assertFalse(TitleSearchSourceCheckpoint.isTerminalFailure(1))
+        assertTrue(TitleSearchSourceCheckpoint.isTerminalFailure(1))
         assertTrue(TitleSearchSourceCheckpoint.isTerminalFailure(2))
-        assertEquals(2, TitleSearchSourceCheckpoint.failureAttempts(listOf(secondError), "Title A", 41L))
     }
 
     @Test
@@ -231,18 +229,26 @@ class BatchTitleSearchCandidateDeduplicatorTest {
         ).single()
 
         assertFalse(result.added)
-        assertTrue(result.detail.orEmpty().contains("may be incomplete"))
+        assertTrue(result.detail.orEmpty().contains("were not retried"))
     }
 
     @Test
-    fun `source errors cool down for two and a half minutes and rate limits for three`() {
-        val ordinary = IOException("temporary source failure")
-        val rateLimited = IOException("source request failed", IOException("HTTP 429 Too Many Requests"))
+    fun `failed title export excludes successful adds and writes one title per line`() {
+        val text = failedTitleListText(
+            listOf(
+                AutoImportedTitleResult("Added title", null, true, null),
+                AutoImportedTitleResult("No match", null, false, "Not found"),
+                AutoImportedTitleResult("Add failed", candidate("failed", "Add failed", "Add failed", "Source", "https://example.com/fail"), false, "Rejected"),
+                AutoImportedTitleResult(" no match ", null, false, "Duplicate input"),
+            ),
+        )
 
-        assertEquals(150_000L, TitleSearchRetryPolicy.cooldownMillis(ordinary))
-        assertEquals(180_000L, TitleSearchRetryPolicy.cooldownMillis(rateLimited))
-        assertEquals(181_000L, TitleSearchRetryPolicy.cooldownUntil(1_000L, rateLimited))
-        assertTrue(TitleSearchRetryPolicy.isRateLimited(rateLimited))
+        assertEquals("No match\nAdd failed\n", text)
+    }
+
+    @Test
+    fun `failed title export filename is a txt with timestamp and is provider safe`() {
+        assertEquals("Komikku_failed_titles_20261115_113800_042.txt", failedTitleExportFileName("20261115_113800_042"))
     }
 
     @Test
@@ -282,6 +288,21 @@ class BatchTitleSearchCandidateDeduplicatorTest {
             speedPresetName = "FAST",
             autoImport = false,
             uniqueWorkName = "batch_title_search_session_session-default",
+        )
+
+        assertEquals(manifest, TitleSearchSessionManifest.parse(manifest.serialize()))
+    }
+
+    @Test
+    fun `durable session manifest round trips output folder permission`() {
+        val manifest = TitleSearchSessionManifest(
+            sessionId = "session-output",
+            titleFilePath = "/private/titles.txt",
+            sourceIds = setOf(7L),
+            speedPresetName = "FAST",
+            autoImport = true,
+            uniqueWorkName = "batch_title_search_session_output",
+            outputTreeUri = "content://com.android.externalstorage.documents/tree/primary%3ADownloads",
         )
 
         assertEquals(manifest, TitleSearchSessionManifest.parse(manifest.serialize()))
