@@ -866,8 +866,8 @@ internal fun buildAutomaticTitleResults(
                 attempt.added -> null
                 else -> attempt.detail ?: "The source could not add this title."
             },
-        ),
-    )
+        )
+    }
 }
 
 internal fun applyManualTitleImportAttempts(
