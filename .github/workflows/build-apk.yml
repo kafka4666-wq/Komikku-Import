@@ -103,6 +103,9 @@ jobs:
           grep -Fq 'SOURCE_ERROR_COOLDOWN_MILLIS = 150_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'RATE_LIMIT_COOLDOWN_MILLIS = 180_000L' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'TitleSearchSourceCheckpoint.shouldFinalizeTitle' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'MAX_FAILURES_PER_TITLE = 2' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'terminalSourceFailureTitles(context.applicationContext, it)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
+          grep -Fq 'this result may be incomplete' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq '.setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'getWorkInfosByTag(BatchImportJob.WORK_TAG)' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'WORK_TAG = "BatchImport"' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt

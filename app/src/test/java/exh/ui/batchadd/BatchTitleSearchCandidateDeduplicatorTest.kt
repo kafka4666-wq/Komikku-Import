@@ -209,6 +209,32 @@ class BatchTitleSearchCandidateDeduplicatorTest {
     }
 
     @Test
+    fun `source error marker allows one cooldown retry then becomes terminal`() {
+        val firstError = TitleSearchSourceCheckpoint.failureMarker("Title A", 41L, 1)
+        val secondError = TitleSearchSourceCheckpoint.failureMarker("Title A", 41L, 2)
+
+        assertEquals(1, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title A", 41L))
+        assertEquals(0, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title B", 41L))
+        assertEquals(0, TitleSearchSourceCheckpoint.failureAttempts(listOf(firstError), "Title A", 42L))
+        assertFalse(TitleSearchSourceCheckpoint.isTerminalFailure(1))
+        assertTrue(TitleSearchSourceCheckpoint.isTerminalFailure(2))
+        assertEquals(2, TitleSearchSourceCheckpoint.failureAttempts(listOf(secondError), "Title A", 41L))
+    }
+
+    @Test
+    fun `not added result discloses that exhausted source errors may hide a match`() {
+        val result = buildAutomaticTitleResults(
+            inputTitles = listOf("Title A"),
+            candidates = emptyList(),
+            attempts = emptyMap(),
+            terminalSourceFailureTitles = setOf("title a"),
+        ).single()
+
+        assertFalse(result.added)
+        assertTrue(result.detail.orEmpty().contains("may be incomplete"))
+    }
+
+    @Test
     fun `source errors cool down for two and a half minutes and rate limits for three`() {
         val ordinary = IOException("temporary source failure")
         val rateLimited = IOException("source request failed", IOException("HTTP 429 Too Many Requests"))
@@ -221,9 +247,9 @@ class BatchTitleSearchCandidateDeduplicatorTest {
 
     @Test
     fun `a match from another source finalizes the title without retrying failed sources`() {
-        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = true, allSourcesAnswered = false))
-        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourcesAnswered = true))
-        assertFalse(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourcesAnswered = false))
+        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = true, allSourceChecksSettled = false))
+        assertTrue(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourceChecksSettled = true))
+        assertFalse(TitleSearchSourceCheckpoint.shouldFinalizeTitle(hasMatch = false, allSourceChecksSettled = false))
     }
 
     @Test

@@ -245,7 +245,10 @@ class BatchTitleSearchScreen(
             val importId = resolvedImportWorkId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             if (importId == null) {
                 importInfo = null
-                importedRows = buildAutomaticTitleResults(inputTitles, results, emptyMap())
+                val terminalFailures = withContext(Dispatchers.IO) {
+                    searchWorkId?.let { BatchTitleSearchWorker.terminalSourceFailureTitles(context.applicationContext, it) }.orEmpty()
+                }
+                importedRows = buildAutomaticTitleResults(inputTitles, results, emptyMap(), terminalFailures)
                 return@LaunchedEffect
             }
             manager.getWorkInfoByIdFlow(importId).collect { importWork ->
@@ -253,8 +256,11 @@ class BatchTitleSearchScreen(
                 if (importWork?.state?.isFinished == true) {
                     val resultFile = importWork.outputData.getString(BatchImportJob.KEY_TITLE_IMPORT_RESULTS_FILE)
                         ?: File(context.filesDir, "batch-title-import-results-$importId.tsv").absolutePath
-                    val attempts = withContext(Dispatchers.IO) { readTitleImportAttempts(resultFile) }
-                    importedRows = buildAutomaticTitleResults(inputTitles, results, attempts)
+                    val (attempts, terminalFailures) = withContext(Dispatchers.IO) {
+                        readTitleImportAttempts(resultFile) to
+                            searchWorkId?.let { BatchTitleSearchWorker.terminalSourceFailureTitles(context.applicationContext, it) }.orEmpty()
+                    }
+                    importedRows = buildAutomaticTitleResults(inputTitles, results, attempts, terminalFailures)
                 }
             }
         }
@@ -280,8 +286,8 @@ class BatchTitleSearchScreen(
         }
         val running = info?.state == WorkInfo.State.RUNNING || info?.state == WorkInfo.State.ENQUEUED
         val progress = info?.progress
-        // Completed counts mean every source answered, or at least one source returned
-        // a match. Visited also includes a title with a durable source-level checkpoint.
+        // Finalized counts include titles with a match, all source checks answered,
+        // or source checks exhausted after one cooldown retry.
         val progressCompleted = progress?.getInt(BatchTitleSearchWorker.KEY_COMPLETED, -1) ?: -1
         val progressVisited = progress?.getInt(BatchTitleSearchWorker.KEY_VISITED, -1) ?: -1
         val progressTotal = progress?.getInt(BatchTitleSearchWorker.KEY_TOTAL, -1) ?: -1
@@ -412,7 +418,7 @@ class BatchTitleSearchScreen(
                             Text(
                                 when {
                                     recoveringProgress -> "Restoring saved title-search progress…"
-                                    total > 0 -> "Visited $visited/$total title inputs · $completed fully resolved"
+                                    total > 0 -> "Visited $visited/$total title inputs · $completed finalized"
                                     else -> "Searching enabled sources…"
                                 },
                             )
@@ -658,7 +664,7 @@ data class AutoImportedTitleResult(
     val detail: String?,
 )
 
-private data class TitleImportAttempt(val added: Boolean, val detail: String?)
+internal data class TitleImportAttempt(val added: Boolean, val detail: String?)
 
 private fun readTitleImportAttempts(path: String?): Map<String, TitleImportAttempt> = runCatching {
     val file = path?.let(::File) ?: return@runCatching emptyMap()
@@ -672,10 +678,11 @@ private fun readTitleImportAttempts(path: String?): Map<String, TitleImportAttem
     }.toMap()
 }.getOrDefault(emptyMap())
 
-private fun buildAutomaticTitleResults(
+internal fun buildAutomaticTitleResults(
     inputTitles: List<String>,
     candidates: List<TitleSearchCandidate>,
     attempts: Map<String, TitleImportAttempt>,
+    terminalSourceFailureTitles: Set<String> = emptySet(),
 ): List<AutoImportedTitleResult> {
     val titles = inputTitles.ifEmpty { candidates.map { it.inputTitle }.distinctBy { it.trim().lowercase() } }
     return titles.distinctBy { it.trim().lowercase() }.map { title ->
@@ -688,6 +695,8 @@ private fun buildAutomaticTitleResults(
             candidate = best,
             added = attempt?.added == true,
             detail = when {
+                best == null && title.trim().lowercase() in terminalSourceFailureTitles ->
+                    "No match was found in the sources that responded. One or more sources still failed after a retry, so this result may be incomplete."
                 best == null -> "No matching title was found in the selected sources."
                 attempt == null -> "The title was not added."
                 attempt.added -> null
@@ -849,6 +858,8 @@ internal object TitleSearchCheckpoint {
 
 internal object TitleSearchSourceCheckpoint {
     private const val PREFIX = "#batch-title-search-source-complete:"
+    private const val FAILURE_PREFIX = "#batch-title-search-source-failure:"
+    const val MAX_FAILURES_PER_TITLE = 2
 
     fun marker(title: String, sourceId: Long): String =
         "$PREFIX$sourceId:${TitleSearchCheckpoint.marker(title).substringAfterLast(':')}"
@@ -856,8 +867,21 @@ internal object TitleSearchSourceCheckpoint {
     fun isComplete(lines: List<String>, title: String, sourceId: Long): Boolean =
         lines.firstOrNull() == marker(title, sourceId)
 
-    fun shouldFinalizeTitle(hasMatch: Boolean, allSourcesAnswered: Boolean): Boolean =
-        hasMatch || allSourcesAnswered
+    fun failureMarker(title: String, sourceId: Long, attempts: Int): String =
+        "$FAILURE_PREFIX$sourceId:$attempts:${TitleSearchCheckpoint.marker(title).substringAfterLast(':')}"
+
+    fun failureAttempts(lines: List<String>, title: String, sourceId: Long): Int {
+        val line = lines.firstOrNull()?.takeIf { it.startsWith(FAILURE_PREFIX) } ?: return 0
+        val parts = line.removePrefix(FAILURE_PREFIX).split(':', limit = 3)
+        if (parts.size != 3 || parts[0].toLongOrNull() != sourceId) return 0
+        if (parts[2] != TitleSearchCheckpoint.marker(title).substringAfterLast(':')) return 0
+        return parts[1].toIntOrNull()?.coerceAtLeast(0) ?: 0
+    }
+
+    fun isTerminalFailure(attempts: Int): Boolean = attempts >= MAX_FAILURES_PER_TITLE
+
+    fun shouldFinalizeTitle(hasMatch: Boolean, allSourceChecksSettled: Boolean): Boolean =
+        hasMatch || allSourceChecksSettled
 }
 
 internal data class TitleSearchConcurrencyLimits(
@@ -965,6 +989,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             .forEach { it.delete() }
         fun rowFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.row")
         fun sourceRowFile(index: Int, sourceId: Long) = sourceCheckpointFile(applicationContext, workId, index, sourceId)
+        fun sourceErrorFile(index: Int, sourceId: Long) = sourceFailureFile(applicationContext, workId, index, sourceId)
         fun visitedFile(index: Int) = File(resultDirectory, "${index.toString().padStart(8, '0')}.visited")
         val completeFlags = titles.indices.map { index -> isCompletedCheckpoint(rowFile(index), titles[index]) }
         val checkpointCandidates = titles.indices
@@ -1017,7 +1042,7 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             updateNotification(
                 completed.get(),
                 titles.size,
-                "Visited ${visited.get()}/${titles.size} title inputs · ${completed.get()} fully resolved",
+                "Visited ${visited.get()}/${titles.size} title inputs · ${completed.get()} finalized",
             )
         }
 
@@ -1041,6 +1066,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                             awaitNotPaused(workId)
                                             val sourceFile = sourceRowFile(index, source.id)
                                             if (readSourceCheckpoint(sourceFile, title, source.id) != null) return@async
+                                            val errorFile = sourceErrorFile(index, source.id)
+                                            val priorFailures = readSourceFailureAttempts(errorFile, title, source.id)
+                                            if (TitleSearchSourceCheckpoint.isTerminalFailure(priorFailures)) return@async
                                             if (sourceCooldownUntil(applicationContext, workId, source.id) > System.currentTimeMillis()) return@async
                                             val sourceCandidates = try {
                                                 searchSource(
@@ -1054,26 +1082,38 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                                             } catch (cancel: CancellationException) {
                                                 throw cancel
                                             } catch (error: IOException) {
+                                                val failures = (priorFailures + 1).coerceAtMost(TitleSearchSourceCheckpoint.MAX_FAILURES_PER_TITLE)
+                                                writeSourceFailureAttempt(errorFile, title, source.id, failures)
                                                 val cooldownUntil = TitleSearchRetryPolicy.cooldownUntil(System.currentTimeMillis(), error)
                                                 recordSourceCooldown(applicationContext, workId, source.id, cooldownUntil)
-                                                xLogE("Cooling down title-search source ${source.name} after an error", error)
+                                                val status = if (TitleSearchSourceCheckpoint.isTerminalFailure(failures)) {
+                                                    "reached its retry limit for this title"
+                                                } else {
+                                                    "cooling down before one retry"
+                                                }
+                                                xLogE("Title-search source ${source.name} $status", error)
                                                 return@async
                                             }
                                             writeSourceCheckpoint(sourceFile, title, source.id, sourceCandidates)
+                                            AtomicFile(errorFile).delete()
                                         }
                                     }.awaitAll()
                                 }
                                 val sourceCandidates = sources.flatMap { source ->
                                     readSourceCheckpoint(sourceRowFile(index, source.id), title, source.id).orEmpty()
                                 }
-                                val allSourcesAnswered = sources.all {
-                                    readSourceCheckpoint(sourceRowFile(index, it.id), title, it.id) != null
+                                val allSourceChecksSettled = sources.all {
+                                    readSourceCheckpoint(sourceRowFile(index, it.id), title, it.id) != null ||
+                                        TitleSearchSourceCheckpoint.isTerminalFailure(
+                                            readSourceFailureAttempts(sourceErrorFile(index, it.id), title, it.id),
+                                        )
                                 }
 
                                 // If any selected source found the title, the user asked
                                 // not to block/retry it just because another source failed.
-                                // Otherwise keep it pending until every source answers.
-                                if (TitleSearchSourceCheckpoint.shouldFinalizeTitle(sourceCandidates.isNotEmpty(), allSourcesAnswered)) {
+                                // Otherwise keep it pending until sources answer or reach
+                                // their per-title retry limit after the cooldown retry.
+                                if (TitleSearchSourceCheckpoint.shouldFinalizeTitle(sourceCandidates.isNotEmpty(), allSourceChecksSettled)) {
                                     val outputFile = rowFile(index)
                                     val tempFile = File(resultDirectory, ".${outputFile.name}.tmp")
                                     val titleCandidates = TitleSearchCandidateDeduplicator.collapse(sourceCandidates)
@@ -1108,7 +1148,12 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
                 if (completed.get() >= titles.size) break
                 val unresolved = titles.indices.filterNot { index -> isCompletedCheckpoint(rowFile(index), titles[index]) }
                 val pendingSources = sources.filter { source ->
-                    unresolved.any { index -> readSourceCheckpoint(sourceRowFile(index, source.id), titles[index], source.id) == null }
+                    unresolved.any { index ->
+                        readSourceCheckpoint(sourceRowFile(index, source.id), titles[index], source.id) == null &&
+                            !TitleSearchSourceCheckpoint.isTerminalFailure(
+                                readSourceFailureAttempts(sourceErrorFile(index, source.id), titles[index], source.id),
+                            )
+                    }
                 }
                 val now = System.currentTimeMillis()
                 val nextCooldown = pendingSources.map { sourceCooldownUntil(applicationContext, workId, it.id) }
@@ -1434,6 +1479,9 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
         private fun sourceCheckpointFile(context: Context, sessionId: String, index: Int, sourceId: Long): File =
             File(context.filesDir, "batch-title-search-$sessionId.result-rows/${index.toString().padStart(8, '0')}.$sourceId.source-row")
 
+        private fun sourceFailureFile(context: Context, sessionId: String, index: Int, sourceId: Long): File =
+            File(context.filesDir, "batch-title-search-$sessionId.result-rows/${index.toString().padStart(8, '0')}.$sourceId.source-error")
+
         private fun sourceCheckpointFiles(context: Context, sessionId: String, index: Int): List<File> =
             File(context.filesDir, "batch-title-search-$sessionId.result-rows").listFiles().orEmpty()
                 .filter { it.isFile && it.name.startsWith("${index.toString().padStart(8, '0')}.") && it.name.endsWith(".source-row") }
@@ -1444,6 +1492,52 @@ class BatchTitleSearchWorker(appContext: Context, params: WorkerParameters) : Co
             if (!TitleSearchSourceCheckpoint.isComplete(lines, title, sourceId)) return@runCatching null
             lines.drop(1).mapNotNull(::decode)
         }.getOrNull()
+
+        private fun readSourceFailureAttempts(file: File, title: String, sourceId: Long): Int = runCatching {
+            if (!file.isFile) return@runCatching 0
+            val lines = AtomicFile(file).openRead().bufferedReader().use { it.readLines() }
+            TitleSearchSourceCheckpoint.failureAttempts(lines, title, sourceId)
+        }.getOrDefault(0)
+
+        private fun writeSourceFailureAttempt(file: File, title: String, sourceId: Long, attempts: Int) {
+            file.parentFile?.mkdirs()
+            val atomic = AtomicFile(file)
+            val stream = atomic.startWrite()
+            try {
+                stream.write(TitleSearchSourceCheckpoint.failureMarker(title, sourceId, attempts).toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+                atomic.finishWrite(stream)
+            } catch (error: Throwable) {
+                atomic.failWrite(stream)
+                throw error
+            }
+        }
+
+        internal fun terminalSourceFailureTitles(context: Context, workId: String): Set<String> = runCatching {
+            val sessionId = sessionForWork(context, workId) ?: return@runCatching emptySet()
+            val manifest = loadManifest(context, sessionId) ?: return@runCatching emptySet()
+            val titlesFile = File(manifest.titleFilePath)
+            if (!titlesFile.isFile) return@runCatching emptySet()
+            val titles = titlesFile.readLines().map(::cleanTitle).map(String::trim).filter(String::isNotBlank).distinct()
+            val directory = File(context.filesDir, "batch-title-search-$sessionId.result-rows")
+            val errorFilesByIndex = directory.listFiles().orEmpty()
+                .filter { it.isFile && it.name.endsWith(".source-error") }
+                .groupBy { it.name.substringBefore('.').toIntOrNull() ?: -1 }
+            titles.indices.mapNotNull { index ->
+                val prefix = "${index.toString().padStart(8, '0')}."
+                val hadTerminalError = errorFilesByIndex[index].orEmpty().any { file ->
+                    if (!file.name.startsWith(prefix)) return@any false
+                    val sourceId = file.name.removePrefix(prefix).substringBefore('.').toLongOrNull() ?: return@any false
+                    if (readSourceCheckpoint(sourceCheckpointFile(context, sessionId, index, sourceId), titles[index], sourceId) != null) {
+                        return@any false
+                    }
+                    TitleSearchSourceCheckpoint.isTerminalFailure(
+                        readSourceFailureAttempts(file, titles[index], sourceId),
+                    )
+                }
+                titles[index].trim().lowercase().takeIf { hadTerminalError }
+            }.toSet()
+        }.getOrDefault(emptySet())
 
         private fun writeSourceCheckpoint(file: File, title: String, sourceId: Long, candidates: List<TitleSearchCandidate>) {
             file.parentFile?.mkdirs()
