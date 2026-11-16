@@ -27,6 +27,7 @@ import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.presentation.more.MoreScreen
 import eu.kanade.presentation.more.KomikkuFeatureHubScreen
+import eu.kanade.presentation.more.TagLibraryScreen
 import eu.kanade.presentation.more.settings.screen.SettingsTreasuryScreen
 import eu.kanade.presentation.util.Tab
 import eu.kanade.tachiyomi.R
@@ -164,6 +165,7 @@ data object MoreTab : Tab {
                 navigator.push(KomikkuFeatureHubScreen())
             },
             onClickTreasury = { navigator.push(SettingsTreasuryScreen) },
+            onClickTagLibrary = { navigator.push(TagLibraryScreen()) },
             // SY <--> 
             // KMK -->
             onClickLibraryUpdateErrors = { navigator.push(LibraryUpdateErrorScreen()) },

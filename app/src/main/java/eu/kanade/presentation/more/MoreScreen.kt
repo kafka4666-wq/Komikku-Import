@@ -93,6 +93,7 @@ fun MoreScreen(
     onClickLibrary: () -> Unit,
     onClickFeatureHub: () -> Unit,
     onClickTreasury: () -> Unit = {},
+    onClickTagLibrary: () -> Unit = {},
     // KMK -->
     onClickLibraryUpdateErrors: () -> Unit,
     // KMK <--
@@ -132,6 +133,14 @@ fun MoreScreen(
                     subtitle = "Clipboard import, recovery, recipes, cleanup, reports, and reading tools",
                     icon = Icons.Outlined.LibraryBooks,
                     onPreferenceClick = onClickFeatureHub,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Tag Library",
+                    subtitle = "Find books by source or personal tag, review covers, and remove selected books",
+                    icon = Icons.Outlined.Search,
+                    onPreferenceClick = onClickTagLibrary,
                 )
             }
             item {
