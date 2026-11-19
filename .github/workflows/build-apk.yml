@@ -39,6 +39,7 @@ jobs:
           mv komikku-overlay.patch.clean komikku-overlay.patch
           git apply --recount --verbose komikku-overlay.patch
           unzip -oq ../komikku-final-overlay.zip -d .
+          cp ../app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/pager/PagerViewer.kt app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/pager/PagerViewer.kt
           mkdir -p app/src/main/java/exh/ui/reverse app/src/main/java/eu/kanade/tachiyomi/data/notification
           mkdir -p app/src/main/java/eu/kanade/presentation/more
           mkdir -p app/src/main/java/eu/kanade/tachiyomi/ui/main app/src/main/res/layout app/src/main/res/xml
@@ -153,8 +154,8 @@ jobs:
           print(f'replaced flexible implementation lines: {n}')
           PY
           sed -i 's/applicationId = "app.komikku"/applicationId = "com.manus.komikku"/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 133/' app/build.gradle.kts
-          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.22"/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionCode[[:space:]]*=.*/        versionCode = 134/' app/build.gradle.kts
+          sed -i -E 's/^[[:space:]]*versionName[[:space:]]*=.*/        versionName = "1.15.23"/' app/build.gradle.kts
           sed -i -E 's/^[[:space:]]*versionNameSuffix[[:space:]]*=.*/            versionNameSuffix = ""/' app/build.gradle.kts
           sed -i '/val debug by getting {/,/isPseudoLocalesEnabled/ s/^[[:space:]]*applicationIdSuffix[[:space:]]*=.*$/            applicationIdSuffix = ""/' app/build.gradle.kts
           grep -q 'applicationId = "com.manus.komikku"' app/build.gradle.kts
@@ -166,6 +167,7 @@ jobs:
           grep -Fq 'SOURCE_FAILURE_ATTEMPTS = 1' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq '.ui.reader.ReaderContinuationActivity' app/src/main/AndroidManifest.xml
           grep -Fq 'onLastChapterForwardNavigation' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderActivity.kt
+          grep -Fq 'activity.onLastChapterForwardNavigation()' app/src/main/java/eu/kanade/tachiyomi/ui/reader/viewer/pager/PagerViewer.kt
           grep -Fq 'findNextVisibleLibraryChapter' app/src/main/java/eu/kanade/tachiyomi/ui/reader/ReaderViewModel.kt
           grep -Fq 'shouldNotifyNewRelease' app/src/main/java/eu/kanade/domain/ui/LibraryReleaseReminder.kt
           grep -Fq 'New chapter reminders: On' app/src/main/java/eu/kanade/presentation/more/LibraryCompanionScreen.kt
@@ -273,13 +275,13 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump packagename "$APK" | grep -Fx "com.manus.komikku"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/komikku-badging.txt
-          grep -E "package: name='com.manus.komikku' versionCode='133'" /tmp/komikku-badging.txt
+          grep -E "package: name='com.manus.komikku' versionCode='134' versionName='1.15.23'" /tmp/komikku-badging.txt
           sha256sum "$APK"
           echo "APK_PATH=upstream/$APK" >> "$GITHUB_ENV"
       - name: Upload universal APK
         uses: actions/upload-artifact@v4
         with:
-          name: Komikku-com.manus.komikku-v1.15.22-stable-signed-universal-debug
+          name: Komikku-com.manus.komikku-v1.15.23-stable-signed-universal-debug
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 30
