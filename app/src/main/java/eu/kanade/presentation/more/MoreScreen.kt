@@ -94,6 +94,7 @@ fun MoreScreen(
     onClickFeatureHub: () -> Unit,
     onClickTreasury: () -> Unit = {},
     onClickTagLibrary: () -> Unit = {},
+    onClickLibraryCompanion: () -> Unit = {},
     // KMK -->
     onClickLibraryUpdateErrors: () -> Unit,
     // KMK <--
@@ -141,6 +142,14 @@ fun MoreScreen(
                     subtitle = "Find books by source or personal tag, review covers, and remove selected books",
                     icon = Icons.Outlined.Search,
                     onPreferenceClick = onClickTagLibrary,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Library Companion",
+                    subtitle = "Personal lists, reading queue, notes, goals, backups, storage review, and more",
+                    icon = Icons.Outlined.LibraryBooks,
+                    onPreferenceClick = onClickLibraryCompanion,
                 )
             }
             item {

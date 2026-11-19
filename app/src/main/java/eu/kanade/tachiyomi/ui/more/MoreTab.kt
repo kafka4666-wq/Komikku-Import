@@ -27,7 +27,9 @@ import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.presentation.more.MoreScreen
 import eu.kanade.presentation.more.KomikkuFeatureHubScreen
+import eu.kanade.presentation.more.LibraryCompanionScreen
 import eu.kanade.presentation.more.TagLibraryScreen
+import eu.kanade.domain.ui.LibraryCompanionStore
 import eu.kanade.presentation.more.settings.screen.SettingsTreasuryScreen
 import eu.kanade.presentation.util.Tab
 import eu.kanade.tachiyomi.R
@@ -91,23 +93,51 @@ data object MoreTab : Tab {
         val tabNavigator = LocalTabNavigator.current
         val titleSearchScope = rememberCoroutineScope()
         var openingTitleSearch by remember { mutableStateOf(false) }
+        var pendingImportProfile by remember { mutableStateOf<LibraryCompanionStore.ImportProfile?>(null) }
         val quickTitleSearchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri ?: return@rememberLauncherForActivityResult
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString(), autoImport = true))
+            val profile = pendingImportProfile
+            navigator.push(
+                BatchTitleSearchScreen(
+                    inputUriString = uri.toString(),
+                    autoImport = true,
+                    profileSourceIds = profile?.sourceIds?.toSet(),
+                    matchThreshold = profile?.matchThreshold ?: 0,
+                    strongOnly = profile?.strongOnly ?: false,
+                ),
+            )
         }
         fun openQuickTitleSearch() {
             if (openingTitleSearch) return
             openingTitleSearch = true
             titleSearchScope.launch(Dispatchers.IO) {
-                val activeJobId = BatchTitleSearchWorker.activeSavedJobId(context.applicationContext)
+                val (activeJobId, activeManifest, profile) = withContext(Dispatchers.IO) {
+                    val workId = BatchTitleSearchWorker.activeSavedJobId(context.applicationContext)
+                    Triple(
+                        workId,
+                        workId?.let { BatchTitleSearchWorker.savedManifestForWork(context.applicationContext, it) },
+                        LibraryCompanionStore.activeImportProfile(context.applicationContext),
+                    )
+                }
                 withContext(Dispatchers.Main.immediate) {
                     openingTitleSearch = false
                     if (activeJobId != null) {
-                        navigator.push(BatchTitleSearchScreen("", activeJobId, autoImport = true))
+                        navigator.push(
+                            BatchTitleSearchScreen(
+                                inputUriString = "",
+                                existingJobId = activeJobId,
+                                speedPresetName = activeManifest?.speedPresetName ?: exh.ui.batchadd.TitleSearchSpeedPreset.FAST.name,
+                                autoImport = true,
+                                profileSourceIds = activeManifest?.sourceIds,
+                                matchThreshold = activeManifest?.matchThreshold ?: 0,
+                                strongOnly = activeManifest?.strongOnly ?: false,
+                            ),
+                        )
                     } else {
+                        pendingImportProfile = profile
                         quickTitleSearchPicker.launch(arrayOf("text/plain", "text/csv", "text/*"))
                     }
                 }
@@ -166,6 +196,7 @@ data object MoreTab : Tab {
             },
             onClickTreasury = { navigator.push(SettingsTreasuryScreen) },
             onClickTagLibrary = { navigator.push(TagLibraryScreen()) },
+            onClickLibraryCompanion = { navigator.push(LibraryCompanionScreen()) },
             // SY <--> 
             // KMK -->
             onClickLibraryUpdateErrors = { navigator.push(LibraryUpdateErrorScreen()) },

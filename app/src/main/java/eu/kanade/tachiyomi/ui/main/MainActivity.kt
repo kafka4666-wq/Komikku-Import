@@ -58,6 +58,7 @@ import eu.kanade.domain.connections.service.ConnectionsPreferences
 import eu.kanade.domain.source.interactor.GetIncognitoState
 import eu.kanade.domain.sync.SyncPreferences
 import eu.kanade.domain.ui.KomikkuFullFeatureEngine
+import eu.kanade.presentation.more.LibraryCompanionScreen
 import eu.kanade.presentation.components.AppStateBanners
 import eu.kanade.presentation.components.DownloadedOnlyBannerBackgroundColor
 import eu.kanade.presentation.components.IncognitoModeBannerBackgroundColor
@@ -211,6 +212,8 @@ class MainActivity : BaseActivity() {
         val splashScreen = if (isLaunch) installSplashScreen() else null
 
         super.onCreate(savedInstanceState)
+
+        KomikkuHomeShortcuts.configureDynamicShortcuts(this)
 
         val didMigration = if (isLaunch) {
             Migrator.awaitAndRelease()
@@ -692,6 +695,33 @@ class MainActivity : BaseActivity() {
     }
 
     private fun handleIntentAction(intent: Intent, navigator: Navigator): Boolean {
+        when (intent.action) {
+            KomikkuHomeShortcuts.ACTION_SURPRISE -> {
+                navigator.popUntilRoot()
+                navigator.push(LibraryCompanionScreen(initialTab = 0, launchRandom = true))
+                return true
+            }
+            KomikkuHomeShortcuts.ACTION_CONTINUE -> {
+                navigator.popUntilRoot()
+                navigator.push(LibraryCompanionScreen(initialTab = 2, launchContinueLatest = true))
+                return true
+            }
+            KomikkuHomeShortcuts.ACTION_SEARCH_TAG -> {
+                navigator.popUntilRoot()
+                navigator.push(LibraryCompanionScreen(initialTab = 0, initialRule = "tag:"))
+                return true
+            }
+            KomikkuHomeShortcuts.ACTION_DOWNLOADS -> {
+                navigator.popUntilRoot()
+                lifecycleScope.launch { HomeScreen.openTab(HomeScreen.Tab.More(toDownloads = true)) }
+                return true
+            }
+            KomikkuHomeShortcuts.ACTION_COMPANION -> {
+                navigator.popUntilRoot()
+                navigator.push(LibraryCompanionScreen(initialTab = 2))
+                return true
+            }
+        }
         if (intent.action == BatchImportJob.ACTION_OPEN_BATCH_IMPORT) {
             navigator.popUntilRoot()
             navigator.push(BatchAddScreen())

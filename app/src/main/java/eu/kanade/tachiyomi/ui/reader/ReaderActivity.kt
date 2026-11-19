@@ -74,6 +74,7 @@ import eu.kanade.domain.connections.service.ConnectionsPreferences
 import eu.kanade.domain.manga.model.readingMode
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.domain.ui.KomikkuFullFeatureEngine
+import eu.kanade.domain.ui.LibraryCompanionStore
 import eu.kanade.domain.ui.DoujinFeatureEngine
 import eu.kanade.domain.ui.DoujinCustomisationsPreferences
 import eu.kanade.presentation.reader.ChapterListDialog
@@ -110,6 +111,7 @@ import eu.kanade.tachiyomi.ui.reader.setting.ReaderPreferences
 import eu.kanade.tachiyomi.ui.reader.setting.ReaderSettingsScreenModel
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingMode
 import eu.kanade.tachiyomi.ui.reader.viewer.ReaderProgressIndicator
+import eu.kanade.tachiyomi.ui.reader.viewer.pager.L2RPagerViewer
 import eu.kanade.tachiyomi.ui.reader.viewer.pager.PagerConfig
 import eu.kanade.tachiyomi.ui.reader.viewer.pager.PagerViewer
 import eu.kanade.tachiyomi.ui.reader.viewer.pager.VerticalPagerViewer
@@ -144,6 +146,7 @@ import tachiyomi.core.common.i18n.pluralStringResource
 import tachiyomi.core.common.i18n.stringResource
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.lang.launchNonCancellable
+import tachiyomi.core.common.util.lang.withIOContext
 import tachiyomi.core.common.util.lang.withUIContext
 import tachiyomi.core.common.util.system.UrlUtils
 import tachiyomi.core.common.util.system.logcat
@@ -160,7 +163,7 @@ import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
 import androidx.compose.ui.graphics.Color as ComposeColor
 
-class ReaderActivity : BaseActivity() {
+open class ReaderActivity : BaseActivity() {
 
     companion object {
 
@@ -172,6 +175,13 @@ class ReaderActivity : BaseActivity() {
                 putExtra("page", page)
                 // SY <--
                 addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        }
+
+        fun newContinuationIntent(context: Context, mangaId: Long, chapterId: Long): Intent {
+            return Intent(context, ReaderContinuationActivity::class.java).apply {
+                putExtra("manga", mangaId)
+                putExtra("chapter", chapterId)
             }
         }
     }
@@ -205,6 +215,10 @@ class ReaderActivity : BaseActivity() {
     private var menuToggleToast: Toast? = null
     private var readingModeToast: Toast? = null
     private val displayRefreshHost = DisplayRefreshHost()
+    private var isFindingNextLibraryBook = false
+    private data class PendingReaderStart(val mangaId: Long, val chapterId: Long, val page: Int?)
+    private var pendingReaderStart: PendingReaderStart? = null
+    private var personalWarningText by mutableStateOf<String?>(null)
 
     private val windowInsetsController by lazy { WindowInsetsControllerCompat(window, window.decorView) }
 
@@ -257,18 +271,13 @@ class ReaderActivity : BaseActivity() {
                 return
             }
             NotificationReceiver.dismissNotification(this, manga.hashCode(), Notifications.ID_NEW_CHAPTERS)
-
+            pendingReaderStart = PendingReaderStart(manga, chapter, page)
             lifecycleScope.launchNonCancellable {
-                val initResult = viewModel.init(manga, chapter/* SY --> */, page/* SY <-- */)
-                if (!initResult.getOrDefault(false)) {
-                    val exception = initResult.exceptionOrNull() ?: IllegalStateException("Unknown err")
-                    withUIContext {
-                        setInitialChapterError(exception)
-                    }
+                val warning = withIOContext { LibraryCompanionStore.getRecord(this@ReaderActivity, manga).warning.trim() }
+                if (warning.isBlank()) {
+                    pendingReaderStart?.let { initializeReader(it) }
                 } else {
-                    withUIContext {
-                        showKomikkuResumePromptIfNeeded()
-                    }
+                    withUIContext { personalWarningText = warning }
                 }
             }
         }
@@ -400,6 +409,16 @@ class ReaderActivity : BaseActivity() {
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                     ) { Text("Doujin tools") }
                 }
+            }
+
+            personalWarningText?.let { warning ->
+                AlertDialog(
+                    onDismissRequest = ::cancelReaderAfterWarning,
+                    title = { Text("Personal content warning") },
+                    text = { Text(warning) },
+                    confirmButton = { TextButton(onClick = ::resumeReaderAfterWarning) { Text("Continue") } },
+                    dismissButton = { TextButton(onClick = ::cancelReaderAfterWarning) { Text("Cancel") } },
+                )
             }
 
             if (showDoujinReaderTools) {
@@ -1257,6 +1276,30 @@ class ReaderActivity : BaseActivity() {
         // <-- AM (DISCORD)
     }
 
+    private suspend fun initializeReader(request: PendingReaderStart) {
+        pendingReaderStart = null
+        val initResult = viewModel.init(request.mangaId, request.chapterId, request.page)
+        if (!initResult.getOrDefault(false)) {
+            val exception = initResult.exceptionOrNull() ?: IllegalStateException("Unknown err")
+            withUIContext { setInitialChapterError(exception) }
+        } else {
+            withUIContext { showKomikkuResumePromptIfNeeded() }
+        }
+    }
+
+    private fun resumeReaderAfterWarning() {
+        val request = pendingReaderStart ?: return
+        pendingReaderStart = null
+        personalWarningText = null
+        lifecycleScope.launchNonCancellable { initializeReader(request) }
+    }
+
+    private fun cancelReaderAfterWarning() {
+        pendingReaderStart = null
+        personalWarningText = null
+        finish()
+    }
+
     /**
      * Called from the presenter if the initial load couldn't load the pages of the chapter. In
      * this case the activity is closed and a toast is shown to the user.
@@ -1300,6 +1343,40 @@ class ReaderActivity : BaseActivity() {
         lifecycleScope.launch {
             viewModel.loadNextChapter()
             moveToPageIndex(0)
+        }
+    }
+
+    /**
+     * Called only after the viewer advances onto the terminal next-chapter transition. In LTR
+     * pager mode, continue to the next eligible visible Library title; if none exists, retain the
+     * existing end-of-book menu behavior.
+     */
+    fun onLastChapterForwardNavigation() {
+        if (viewModel.state.value.viewer !is L2RPagerViewer) {
+            showMenu()
+            return
+        }
+        if (isFindingNextLibraryBook) return
+        isFindingNextLibraryBook = true
+
+        lifecycleScope.launch {
+            try {
+                viewModel.updateHistory()
+                val target = viewModel.findNextVisibleLibraryChapter()
+                if (target == null) {
+                    showMenu()
+                    return@launch
+                }
+                startActivity(newContinuationIntent(this@ReaderActivity, target.mangaId, target.chapterId))
+                finish()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                logcat(LogPriority.WARN, error) { "Could not continue to the next Library title" }
+                showMenu()
+            } finally {
+                isFindingNextLibraryBook = false
+            }
         }
     }
 

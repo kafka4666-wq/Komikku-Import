@@ -46,6 +46,7 @@ import eu.kanade.tachiyomi.ui.reader.viewer.Viewer
 import eu.kanade.tachiyomi.ui.reader.viewer.pager.PagerViewer
 import eu.kanade.tachiyomi.ui.reader.viewer.pager.R2LPagerViewer
 import eu.kanade.tachiyomi.util.chapter.filterDownloaded
+import eu.kanade.tachiyomi.util.chapter.getNextUnread
 import eu.kanade.tachiyomi.util.chapter.removeDuplicates
 import eu.kanade.tachiyomi.util.editCover
 import eu.kanade.tachiyomi.util.lang.byteSize
@@ -933,6 +934,46 @@ class ReaderViewModel @JvmOverloads constructor(
     suspend fun loadNextChapter() {
         val nextChapter = state.value.viewerChapters?.nextChapter ?: return
         loadAdjacent(nextChapter)
+    }
+
+    /**
+     * Finds the first later title in the last rendered Library order that still has an unread
+     * chapter. Database work stays off the UI thread, and stale/non-library IDs are skipped.
+     */
+    suspend fun findNextVisibleLibraryChapter(): ReaderLibraryOrderStore.Target? = withIOContext {
+        val currentManga = manga ?: return@withIOContext null
+        val context = Injekt.get<Application>()
+        val laterMangaIds = ReaderLibraryOrderStore.followingIds(
+            ReaderLibraryOrderStore.read(context),
+            currentManga.id,
+        )
+
+        for (candidateId in laterMangaIds) {
+            try {
+                val candidate = getManga.await(candidateId) ?: continue
+                if (!candidate.favorite) continue
+
+                val mergedManga = if (candidate.source == MERGED_SOURCE_ID) {
+                    getMergedMangaById.await(candidate.id).associateBy { it.id }
+                } else {
+                    emptyMap()
+                }
+                val chapters = if (candidate.source == MERGED_SOURCE_ID) {
+                    getMergedChaptersByMangaId.await(candidate.id, applyFilter = true)
+                } else {
+                    getChaptersByMangaId.await(candidate.id, applyFilter = true)
+                }
+                val nextChapter = chapters.getNextUnread(candidate, downloadManager, mergedManga)
+                    ?: continue
+                val chapterId = nextChapter.id ?: continue
+                return@withIOContext ReaderLibraryOrderStore.Target(candidate.id, chapterId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                logcat(LogPriority.WARN, error) { "Skipping library continuation candidate $candidateId" }
+            }
+        }
+        null
     }
 
     /**

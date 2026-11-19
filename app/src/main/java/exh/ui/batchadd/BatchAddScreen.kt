@@ -38,6 +38,7 @@ import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.util.Screen
+import eu.kanade.domain.ui.LibraryCompanionStore
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.kmk.KMR
 import tachiyomi.i18n.sy.SYMR
@@ -75,7 +76,17 @@ class BatchAddScreen : Screen() {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            navigator.push(BatchTitleSearchScreen(uri.toString(), speedPresetName = titleSearchSpeed.name, autoImport = true))
+            val profile = LibraryCompanionStore.activeImportProfile(context)
+            navigator.push(
+                BatchTitleSearchScreen(
+                    uri.toString(),
+                    speedPresetName = titleSearchSpeed.name,
+                    autoImport = true,
+                    profileSourceIds = profile?.sourceIds?.toSet()?.takeIf { it.isNotEmpty() },
+                    matchThreshold = profile?.matchThreshold ?: 0,
+                    strongOnly = profile?.strongOnly ?: false,
+                ),
+            )
         }
         fun openTitleSearch() {
             if (openingTitleSearch) return
