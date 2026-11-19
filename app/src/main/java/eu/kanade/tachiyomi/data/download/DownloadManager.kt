@@ -176,6 +176,11 @@ class DownloadManager(
             // SY <--
             source,
         )
+        return buildPageList(chapterDir)
+    }
+
+    /** Builds a downloaded page list from a chapter directory already resolved by the caller. */
+    fun buildPageList(chapterDir: UniFile?): List<Page> {
         val files = chapterDir?.listFiles().orEmpty()
             .filter { it.isFile && ImageUtil.isImage(it.name) { it.openInputStream() } }
 

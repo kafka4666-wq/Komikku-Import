@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.ui.reader
 
 import android.app.Application
 import android.net.Uri
+import android.os.SystemClock
 import androidx.annotation.ColorInt
 import androidx.annotation.IntRange
 import androidx.compose.runtime.Immutable
@@ -19,6 +20,7 @@ import eu.kanade.domain.track.interactor.TrackChapter
 import eu.kanade.domain.track.service.TrackPreferences
 import eu.kanade.domain.ui.UiPreferences
 import eu.kanade.presentation.manga.components.ChapterDownloadAction
+import eu.kanade.tachiyomi.data.cache.ChapterCache
 import eu.kanade.tachiyomi.data.database.models.toDomainChapter
 import eu.kanade.tachiyomi.data.download.DownloadManager
 import eu.kanade.tachiyomi.data.download.DownloadProvider
@@ -59,8 +61,11 @@ import exh.source.getMainSource
 import exh.source.isEhBasedManga
 import exh.util.defaultReaderType
 import exh.util.mangaType
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -245,6 +250,9 @@ class ReaderViewModel @JvmOverloads constructor(
      * The chapter loader for the loaded manga. It'll be null until [manga] is set.
      */
     private var loader: ChapterLoader? = null
+
+    @Volatile private var nextLibraryChapterLookup: Deferred<ReaderLibraryOrderStore.Target?>? = null
+    @Volatile private var nextLibraryPageListWarmup: Job? = null
 
     private val pageMergeStore = ReaderPageMergeStore(Injekt.get<Application>())
 
@@ -545,8 +553,12 @@ class ReaderViewModel @JvmOverloads constructor(
         page: Int? = null,
         // SY <--
     ): ViewerChapters {
+        val pageListStartedAt = SystemClock.elapsedRealtime()
         loader.loadChapter(chapter /* SY --> */, page/* SY <-- */)
         appendMergedPages(chapter)
+        logcat {
+            "Reader chapter pages ready (local=${chapter.pageLoader?.isLocal}, pages=${chapter.pages?.size ?: 0}, elapsed=${SystemClock.elapsedRealtime() - pageListStartedAt}ms)"
+        }
 
         val chapterPos = chapterList.indexOf(chapter)
         val newChapters = ViewerChapters(
@@ -568,6 +580,7 @@ class ReaderViewModel @JvmOverloads constructor(
                 )
             }
         }
+        if (newChapters.nextChapter == null) prepareNextVisibleLibraryChapter()
         return newChapters
     }
 
@@ -697,6 +710,14 @@ class ReaderViewModel @JvmOverloads constructor(
 
         val selectedChapter = page.chapter
         val pages = selectedChapter.pages ?: return
+
+        val activeChapters = state.value.viewerChapters
+        val isFinalActiveChapter = activeChapters != null && activeChapters.nextChapter == null &&
+            activeChapters.currChapter.chapter.id == selectedChapter.chapter.id
+        if (ReaderContinuationPrefetchPolicy.shouldWarmNextBook(page.number, pages.size, isFinalActiveChapter)) {
+            prepareNextVisibleLibraryChapter()
+            prefetchNextLibraryPageList()
+        }
 
         // Save last page read and mark as read if needed
         viewModelScope.launchNonCancellable {
@@ -940,7 +961,76 @@ class ReaderViewModel @JvmOverloads constructor(
      * Finds the first later title in the last rendered Library order that still has an unread
      * chapter. Database work stays off the UI thread, and stale/non-library IDs are skipped.
      */
-    internal suspend fun findNextVisibleLibraryChapter(): ReaderLibraryOrderStore.Target? = withIOContext {
+    @Synchronized
+    private fun prepareNextVisibleLibraryChapter() {
+        if (nextLibraryChapterLookup != null) return
+        nextLibraryChapterLookup = viewModelScope.async(Dispatchers.IO) {
+            findNextVisibleLibraryChapterNow()
+        }
+    }
+
+    internal suspend fun findNextVisibleLibraryChapter(): ReaderLibraryOrderStore.Target? {
+        val lookup = nextLibraryChapterLookup ?: return findNextVisibleLibraryChapterNow()
+        return try {
+            lookup.await()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            logcat(LogPriority.WARN, error) { "Prepared library continuation lookup failed; retrying" }
+            findNextVisibleLibraryChapterNow()
+        }
+    }
+
+    @Synchronized
+    private fun prefetchNextLibraryPageList() {
+        if (nextLibraryPageListWarmup != null) return
+        nextLibraryPageListWarmup = viewModelScope.launchIO {
+            try {
+                val target = findNextVisibleLibraryChapter() ?: return@launchIO
+                val candidate = getManga.await(target.mangaId) ?: return@launchIO
+                if (candidate.source == MERGED_SOURCE_ID) return@launchIO
+                val source = sourceManager.getOrStub(candidate.source) as? HttpSource ?: return@launchIO
+                val targetChapter = getChaptersByMangaId.await(candidate.id, applyFilter = true)
+                    .firstOrNull { it.id == target.chapterId } ?: return@launchIO
+                if (
+                    downloadManager.isChapterDownloaded(
+                        chapterName = targetChapter.name,
+                        chapterScanlator = targetChapter.scanlator,
+                        chapterUrl = targetChapter.url,
+                        mangaTitle = candidate.ogTitle,
+                        sourceId = candidate.source,
+                    )
+                ) {
+                    return@launchIO
+                }
+
+                val cache = Injekt.get<ChapterCache>()
+                val cachedPageList = try {
+                    cache.getPageListFromCache(targetChapter).isNotEmpty()
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    false
+                }
+                if (cachedPageList) return@launchIO
+
+                val pages = source.getPageList(targetChapter.toDbChapter())
+                if (pages.isNotEmpty()) {
+                    cache.putPageListToCache(targetChapter, pages)
+                    logcat { "Warmed next Library page list (pages=${pages.size})" }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                logcat(LogPriority.WARN, error) { "Could not warm next Library page list" }
+            }
+        }
+    }
+
+    internal suspend fun awaitNextLibraryPageListWarmup() {
+        withTimeoutOrNull(250) { nextLibraryPageListWarmup?.join() }
+    }
+
+    private suspend fun findNextVisibleLibraryChapterNow(): ReaderLibraryOrderStore.Target? = withIOContext {
         val currentManga = manga ?: return@withIOContext null
         val context = Injekt.get<Application>()
         val laterMangaIds = ReaderLibraryOrderStore.followingIds(

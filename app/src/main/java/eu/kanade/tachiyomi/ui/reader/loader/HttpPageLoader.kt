@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.ui.reader.loader
 
+import android.os.SystemClock
 import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.tachiyomi.data.cache.ChapterCache
 import eu.kanade.tachiyomi.data.database.models.toDomainChapter
@@ -25,9 +26,12 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.suspendCancellableCoroutine
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.core.common.util.lang.withIOContext
+import tachiyomi.core.common.util.system.logcat
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.atomics.incrementAndFetch
@@ -53,6 +57,10 @@ internal class HttpPageLoader(
      * A queue used to manage requests one by one while allowing priorities.
      */
     private val queue = PriorityBlockingQueue<PriorityPage>()
+
+    private val readerRequestedPages = ConcurrentHashMap.newKeySet<ReaderPage>()
+    private val aggressivePreloadScheduled = AtomicBoolean(false)
+    @Volatile private var chapterPages: List<ReaderPage> = emptyList()
 
     private val preloadSize = /* SY --> */ readerPreferences.preloadSize().get() // SY <--
 
@@ -85,13 +93,19 @@ internal class HttpPageLoader(
      * otherwise fallbacks to network.
      */
     override suspend fun getPages(): List<ReaderPage> {
+        val startedAt = SystemClock.elapsedRealtime()
+        var pageListCacheHit = true
         val pages = try {
             chapterCache.getPageListFromCache(chapter.chapter.toDomainChapter()!!)
         } catch (e: Throwable) {
             if (e is CancellationException) {
                 throw e
             }
+            pageListCacheHit = false
             source.getPageList(chapter.chapter)
+        }
+        logcat {
+            "Reader page list ready (cached=$pageListCacheHit, pages=${pages.size}, elapsed=${SystemClock.elapsedRealtime() - startedAt}ms)"
         }
         // SY -->
         val rp = pages
@@ -100,13 +114,7 @@ internal class HttpPageLoader(
             // Don't trust sources and use our own indexing
             ReaderPage(index, page.url, page.imageUrl)
         }
-        if (readerPreferences.aggressivePageLoading().get()) {
-            rp.forEach {
-                if (it.status == Page.State.Queue) {
-                    queue.offer(PriorityPage(it, 0))
-                }
-            }
-        }
+        chapterPages = rp
         return rp
         // SY <--
     }
@@ -129,12 +137,18 @@ internal class HttpPageLoader(
 
         val queuedPages = mutableListOf<PriorityPage>()
         if (page.status == Page.State.Queue) {
+            readerRequestedPages.add(page)
             queuedPages += PriorityPage(page, 1).also { queue.offer(it) }
         }
-        queuedPages += preloadNextPages(page, preloadSize)
+        if (readerPreferences.aggressivePageLoading().get()) {
+            if (page.status == Page.State.Ready) startAggressivePreload(page)
+        } else if (page.status == Page.State.Ready) {
+            queuedPages += preloadNextPages(page, preloadSize)
+        }
 
         suspendCancellableCoroutine<Nothing> { continuation ->
             continuation.invokeOnCancellation {
+                readerRequestedPages.remove(page)
                 queuedPages.forEach {
                     if (it.page.status == Page.State.Queue) {
                         queue.remove(it)
@@ -174,6 +188,7 @@ internal class HttpPageLoader(
     override fun retryPage(page: ReaderPage) {
         if (page.status is Page.State.Error) {
             page.status = Page.State.Queue
+            readerRequestedPages.add(page)
         }
         // EXH -->
         // Grab a new image URL on EXH sources
@@ -185,6 +200,7 @@ internal class HttpPageLoader(
             boostPage(page)
         } else {
             // EXH <--
+            readerRequestedPages.add(page)
             queue.offer(PriorityPage(page, 2))
         }
     }
@@ -240,27 +256,61 @@ internal class HttpPageLoader(
      * @param page the page whose source image has to be downloaded.
      */
     private suspend fun internalLoadPage(page: ReaderPage) {
+        val startedAt = SystemClock.elapsedRealtime()
+        var urlResolutionMs = 0L
+        var imageTransferMs = 0L
+        var cacheWriteMs = 0L
         try {
             if (page.imageUrl.isNullOrEmpty()) {
                 page.status = Page.State.LoadPage
+                val urlStartedAt = SystemClock.elapsedRealtime()
                 page.imageUrl = source.getImageUrl(page)
+                urlResolutionMs = SystemClock.elapsedRealtime() - urlStartedAt
             }
             val imageUrl = page.imageUrl!!
 
             if (!chapterCache.isImageInCache(imageUrl)) {
                 page.status = Page.State.DownloadImage
+                val imageStartedAt = SystemClock.elapsedRealtime()
                 val imageResponse = source.getImage(page, dataSaver)
+                imageTransferMs = SystemClock.elapsedRealtime() - imageStartedAt
+                val cacheStartedAt = SystemClock.elapsedRealtime()
                 chapterCache.putImageToCache(imageUrl, imageResponse)
+                cacheWriteMs = SystemClock.elapsedRealtime() - cacheStartedAt
             }
 
             page.stream = { chapterCache.getImageFile(imageUrl).inputStream() }
             page.status = Page.State.Ready
+            if (readerRequestedPages.contains(page)) {
+                if (readerPreferences.aggressivePageLoading().get()) {
+                    startAggressivePreload(page)
+                } else {
+                    preloadNextPages(page, preloadSize)
+                }
+            }
+            logcat {
+                "Reader page ready (page=${page.index + 1}, url=${urlResolutionMs}ms, transfer=${imageTransferMs}ms, cache=${cacheWriteMs}ms, total=${SystemClock.elapsedRealtime() - startedAt}ms)"
+            }
         } catch (e: Throwable) {
             page.status = Page.State.Error(e)
             if (e is CancellationException) {
                 throw e
             }
+        } finally {
+            readerRequestedPages.remove(page)
         }
+    }
+
+    /** Starts aggressive all-page loading only after a viewer-requested image is ready. */
+    private fun startAggressivePreload(currentPage: ReaderPage) {
+        if (!readerPreferences.aggressivePageLoading().get() ||
+            !aggressivePreloadScheduled.compareAndSet(false, true)
+        ) {
+            return
+        }
+        chapterPages.asSequence()
+            .filter { it !== currentPage && it.status == Page.State.Queue }
+            .forEach { queue.offer(PriorityPage(it, 0)) }
     }
 
     // EXH -->

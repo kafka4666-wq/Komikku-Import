@@ -1367,6 +1367,7 @@ open class ReaderActivity : BaseActivity() {
                     showMenu()
                     return@launch
                 }
+                viewModel.awaitNextLibraryPageListWarmup()
                 startActivity(newContinuationIntent(this@ReaderActivity, target.mangaId, target.chapterId))
                 finish()
             } catch (error: kotlinx.coroutines.CancellationException) {
