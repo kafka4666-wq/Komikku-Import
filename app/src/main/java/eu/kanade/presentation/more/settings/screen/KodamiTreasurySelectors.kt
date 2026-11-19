@@ -153,7 +153,7 @@ internal fun KodamiTreasuryVaultHeader(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "$themeName · all 7 themes, 8 effects, and profile styles available. No achievements required.",
+                    text = "$themeName · all 7 themes, 14 animated backgrounds, and profile styles available. No achievements required.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.76f),
                     maxLines = 3,
@@ -329,6 +329,12 @@ private val backgroundOptions = listOf(
     BackgroundOption("event_horizon_library", "Event Horizon Library", "A cinematic singularity with lensing rings and drifting archive shards.", Color(0xFF1A4FE0)),
     BackgroundOption("void_weeping_red", "Weeping Void", "A crimson rain falling through the dark.", Color(0xFFFF1E27)),
     BackgroundOption("ink_water", "Ink in Water", "Living ink blooming through water across the app.", Color(0xFF8998FF)),
+    BackgroundOption("clockwork_orrery", "Clockwork Orrery", "Interlocking clockwork gears turn at different speeds beneath shifting escapement ticks.", Color(0xFFFFD36E)),
+    BackgroundOption("facet_shift", "Facet Shift", "Translucent angular crystal facets refract and rotate as they drift across the surface.", Color(0xFFB8D8FF)),
+    BackgroundOption("origami_fold", "Origami Fold", "Folded paper kites tumble slowly, revealing layered triangular creases.", Color(0xFF9EE5C2)),
+    BackgroundOption("comic_panel_parallax", "Comic Panel Parallax", "Skewed manga panels slide at separate depths with subtle speed-line accents.", Color(0xFFFF9F6E)),
+    BackgroundOption("halftone_pulse", "Halftone Pulse", "A shifting print-screen dot field pulses in diagonal waves like a living manga page.", Color(0xFFE19BFF)),
+    BackgroundOption("circuit_loom", "Circuit Loom", "Angular circuit paths carry traveling signal pulses through stepped junctions.", Color(0xFF69E5D0)),
 )
 
 @Composable
@@ -338,7 +344,7 @@ internal fun KodamiTreasuryBackgroundSelector(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            text = "Tap any row to preview and apply it. The active effect keeps moving behind the Library and More screens.",
+            text = "Choose once to set the shared Treasury backdrop. It appears behind Library and More, in previews, and in Library Companion when set to Use Treasury; Companion can also use a local override.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

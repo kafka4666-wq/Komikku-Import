@@ -142,7 +142,7 @@ class LibraryCompanionScreen(
         var selectedBook by remember { mutableStateOf<CompanionBook?>(null) }
         var readingWarningBook by remember { mutableStateOf<CompanionBook?>(null) }
         var randomPick by remember { mutableStateOf<CompanionBook?>(null) }
-        var ambientEffectName by remember { mutableStateOf(LibraryCompanionStore.setting(context, "ambient_effect", KomikkuAmbientEffect.CLOCKWORK_ORRERY.name)) }
+        var ambientEffectName by remember { mutableStateOf(LibraryCompanionStore.setting(context, "ambient_effect", "TREASURY")) }
         var activeViewName by remember { mutableStateOf("") }
         var viewName by remember { mutableStateOf("") }
         var bulkTag by remember { mutableStateOf("") }
@@ -204,6 +204,7 @@ class LibraryCompanionScreen(
                 Toast.makeText(context, "Notification permission is needed for release reminders", Toast.LENGTH_LONG).show()
             }
         }
+        val usesTreasuryBackdrop = ambientEffectName == "TREASURY"
         val ambientEffect = KomikkuAmbientEffect.entries.firstOrNull { it.name == ambientEffectName } ?: KomikkuAmbientEffect.CLOCKWORK_ORRERY
 
         fun refreshSidecars() {
@@ -368,7 +369,11 @@ class LibraryCompanionScreen(
         }
 
         Box(Modifier.fillMaxSize()) {
-            KomikkuAmbientBackdrop(effect = ambientEffect, modifier = Modifier.fillMaxSize())
+            if (usesTreasuryBackdrop) {
+                KodamiTreasuryBackdrop(Modifier.fillMaxSize())
+            } else {
+                KomikkuAmbientBackdrop(effect = ambientEffect, modifier = Modifier.fillMaxSize())
+            }
             androidx.compose.material3.Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
@@ -386,12 +391,17 @@ class LibraryCompanionScreen(
                 ) {
                     Text("Moving background", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                     BoxMenu(
-                        value = ambientEffect.title,
-                        options = KomikkuAmbientEffect.entries.map { it.title },
+                        value = if (usesTreasuryBackdrop) "Use Treasury backdrop" else ambientEffect.title,
+                        options = listOf("Use Treasury backdrop") + KomikkuAmbientEffect.entries.map { it.title },
                         onSelect = { title ->
-                            val selected = KomikkuAmbientEffect.entries.firstOrNull { it.title == title } ?: KomikkuAmbientEffect.CLOCKWORK_ORRERY
-                            ambientEffectName = selected.name
-                            LibraryCompanionStore.setSetting(context, "ambient_effect", selected.name)
+                            if (title == "Use Treasury backdrop") {
+                                ambientEffectName = "TREASURY"
+                                LibraryCompanionStore.setSetting(context, "ambient_effect", "TREASURY")
+                            } else {
+                                val selected = KomikkuAmbientEffect.entries.firstOrNull { it.title == title } ?: KomikkuAmbientEffect.CLOCKWORK_ORRERY
+                                ambientEffectName = selected.name
+                                LibraryCompanionStore.setSetting(context, "ambient_effect", selected.name)
+                            }
                         },
                     )
                 }

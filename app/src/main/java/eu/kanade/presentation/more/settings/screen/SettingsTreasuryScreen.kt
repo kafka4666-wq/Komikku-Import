@@ -84,7 +84,7 @@ object SettingsTreasuryScreen : Screen() {
                                 )
                             },
                             Preference.PreferenceItem.InfoPreference(
-                                "The active effect animates behind Library and More. Motion pauses in the background, with system animations disabled, or while Battery Saver is active.",
+                                "The selected Treasury background is a shared app-wide preference, rendered behind Library and More, in live previews, and in Library Companion when it follows Treasury. Motion pauses in the background, with system animations disabled, or while Battery Saver is active.",
                             ),
                         ),
                     ),

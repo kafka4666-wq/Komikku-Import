@@ -77,6 +77,17 @@ internal fun KodamiTreasuryBackdrop(
         (elapsedMillis % BACKGROUND_CYCLE_MILLIS).toFloat() / BACKGROUND_CYCLE_MILLIS
     } else 0f
 
+    val ambientEffect = ambientEffectFromTreasuryKey(effect)
+    if (ambientEffect != null) {
+        AmbientCanvas(
+            effect = ambientEffect,
+            slowPhase = (elapsedMillis % 30_000L).toFloat() / 30_000f,
+            fastPhase = (elapsedMillis % 19_000L).toFloat() / 19_000f,
+            modifier = modifier,
+        )
+        return
+    }
+
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height

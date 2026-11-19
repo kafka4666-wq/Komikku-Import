@@ -27,14 +27,17 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /** Six original ambient illustrations, intentionally distinct from the app's existing themes. */
-internal enum class KomikkuAmbientEffect(val title: String) {
-    CLOCKWORK_ORRERY("Clockwork Orrery"),
-    FACET_SHIFT("Facet Shift"),
-    ORIGAMI_FOLD("Origami Fold"),
-    COMIC_PANEL_PARALLAX("Comic Panel Parallax"),
-    HALFTONE_PULSE("Halftone Pulse"),
-    CIRCUIT_LOOM("Circuit Loom"),
+internal enum class KomikkuAmbientEffect(val title: String, val treasuryKey: String) {
+    CLOCKWORK_ORRERY("Clockwork Orrery", "clockwork_orrery"),
+    FACET_SHIFT("Facet Shift", "facet_shift"),
+    ORIGAMI_FOLD("Origami Fold", "origami_fold"),
+    COMIC_PANEL_PARALLAX("Comic Panel Parallax", "comic_panel_parallax"),
+    HALFTONE_PULSE("Halftone Pulse", "halftone_pulse"),
+    CIRCUIT_LOOM("Circuit Loom", "circuit_loom"),
 }
+
+internal fun ambientEffectFromTreasuryKey(key: String): KomikkuAmbientEffect? =
+    KomikkuAmbientEffect.entries.firstOrNull { it.treasuryKey == key }
 
 private data class AmbientSeed(
     val x: Float,
@@ -93,7 +96,7 @@ internal fun KomikkuAmbientBackdrop(effect: KomikkuAmbientEffect, modifier: Modi
 }
 
 @Composable
-private fun AmbientCanvas(effect: KomikkuAmbientEffect, slowPhase: Float, fastPhase: Float, modifier: Modifier) {
+internal fun AmbientCanvas(effect: KomikkuAmbientEffect, slowPhase: Float, fastPhase: Float, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
     val palette = listOf(scheme.primary, scheme.secondary, scheme.tertiary, scheme.primaryContainer, scheme.secondaryContainer)
     Canvas(modifier = modifier) {
