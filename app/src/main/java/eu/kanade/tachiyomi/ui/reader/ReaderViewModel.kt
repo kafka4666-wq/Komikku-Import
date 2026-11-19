@@ -940,7 +940,7 @@ class ReaderViewModel @JvmOverloads constructor(
      * Finds the first later title in the last rendered Library order that still has an unread
      * chapter. Database work stays off the UI thread, and stale/non-library IDs are skipped.
      */
-    suspend fun findNextVisibleLibraryChapter(): ReaderLibraryOrderStore.Target? = withIOContext {
+    internal suspend fun findNextVisibleLibraryChapter(): ReaderLibraryOrderStore.Target? = withIOContext {
         val currentManga = manga ?: return@withIOContext null
         val context = Injekt.get<Application>()
         val laterMangaIds = ReaderLibraryOrderStore.followingIds(

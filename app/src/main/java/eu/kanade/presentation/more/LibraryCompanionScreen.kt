@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,6 +63,7 @@ import eu.kanade.domain.ui.KomikkuExtendedFeatureStore
 import eu.kanade.domain.ui.KomikkuFeatureStore
 import eu.kanade.domain.ui.LibraryCompanionRules
 import eu.kanade.domain.ui.LibraryReleaseReminder
+import eu.kanade.domain.ui.LibraryStorageWatch
 import eu.kanade.domain.ui.LibraryCompanionStore
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.data.download.DownloadManager
@@ -368,7 +368,7 @@ class LibraryCompanionScreen(
         }
 
         Box(Modifier.fillMaxSize()) {
-            KomikkuAmbientBackdrop(effect = ambientEffect, modifier = Modifier.matchParentSize())
+            KomikkuAmbientBackdrop(effect = ambientEffect, modifier = Modifier.fillMaxSize())
             androidx.compose.material3.Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
@@ -1173,7 +1173,7 @@ class LibraryCompanionScreen(
                                         description = remote.description,
                                         genre = remote.genre?.split(",")?.map(String::trim)?.filter(String::isNotBlank),
                                         thumbnailUrl = remote.thumbnail_url,
-                                        status = remote.status,
+                                        status = remote.status.toLong(),
                                         updateStrategy = remote.update_strategy,
                                         initialized = true,
                                     ),
