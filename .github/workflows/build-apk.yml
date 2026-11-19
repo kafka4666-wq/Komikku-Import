@@ -178,12 +178,12 @@ jobs:
           grep -Fq 'Text("Retry selected adds (' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'saveManualRetryWorkId' app/src/main/java/exh/ui/batchadd/BatchTitleSearch.kt
           grep -Fq 'WORK_TAG = "BatchImport"' app/src/main/java/exh/ui/batchadd/BatchImportJob.kt
-          grep -Fq 'INK_AURORA("Ink Aurora")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
-          grep -Fq 'PAPER_BLOSSOM("Paper Blossom")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
-          grep -Fq 'LANTERN_ORBITS("Lantern Orbits")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
-          grep -Fq 'NEON_RAIN("Neon Rain")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
-          grep -Fq 'TIDAL_RIBBONS("Tidal Ribbons")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
-          grep -Fq 'CONSTELLATION_TRAILS("Constellation Trails")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'CLOCKWORK_ORRERY("Clockwork Orrery")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'FACET_SHIFT("Facet Shift")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'ORIGAMI_FOLD("Origami Fold")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'COMIC_PANEL_PARALLAX("Comic Panel Parallax")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'HALFTONE_PULSE("Halftone Pulse")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
+          grep -Fq 'CIRCUIT_LOOM("Circuit Loom")' app/src/main/java/eu/kanade/presentation/more/KomikkuAmbientBackdrop.kt
           grep -Fq 'Pick another' app/src/main/java/eu/kanade/presentation/more/LibraryCompanionScreen.kt
           grep -Fq 'library-update-check' app/src/main/java/eu/kanade/presentation/more/LibraryCompanionScreen.kt
       - name: Set up JDK 21

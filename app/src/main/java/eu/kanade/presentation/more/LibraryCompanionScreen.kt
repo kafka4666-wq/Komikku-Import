@@ -142,7 +142,7 @@ class LibraryCompanionScreen(
         var selectedBook by remember { mutableStateOf<CompanionBook?>(null) }
         var readingWarningBook by remember { mutableStateOf<CompanionBook?>(null) }
         var randomPick by remember { mutableStateOf<CompanionBook?>(null) }
-        var ambientEffectName by remember { mutableStateOf(LibraryCompanionStore.setting(context, "ambient_effect", KomikkuAmbientEffect.INK_AURORA.name)) }
+        var ambientEffectName by remember { mutableStateOf(LibraryCompanionStore.setting(context, "ambient_effect", KomikkuAmbientEffect.CLOCKWORK_ORRERY.name)) }
         var activeViewName by remember { mutableStateOf("") }
         var viewName by remember { mutableStateOf("") }
         var bulkTag by remember { mutableStateOf("") }
@@ -204,7 +204,7 @@ class LibraryCompanionScreen(
                 Toast.makeText(context, "Notification permission is needed for release reminders", Toast.LENGTH_LONG).show()
             }
         }
-        val ambientEffect = KomikkuAmbientEffect.entries.firstOrNull { it.name == ambientEffectName } ?: KomikkuAmbientEffect.INK_AURORA
+        val ambientEffect = KomikkuAmbientEffect.entries.firstOrNull { it.name == ambientEffectName } ?: KomikkuAmbientEffect.CLOCKWORK_ORRERY
 
         fun refreshSidecars() {
             queueEntries = LibraryCompanionStore.queue(context)
@@ -389,7 +389,7 @@ class LibraryCompanionScreen(
                         value = ambientEffect.title,
                         options = KomikkuAmbientEffect.entries.map { it.title },
                         onSelect = { title ->
-                            val selected = KomikkuAmbientEffect.entries.firstOrNull { it.title == title } ?: KomikkuAmbientEffect.INK_AURORA
+                            val selected = KomikkuAmbientEffect.entries.firstOrNull { it.title == title } ?: KomikkuAmbientEffect.CLOCKWORK_ORRERY
                             ambientEffectName = selected.name
                             LibraryCompanionStore.setSetting(context, "ambient_effect", selected.name)
                         },

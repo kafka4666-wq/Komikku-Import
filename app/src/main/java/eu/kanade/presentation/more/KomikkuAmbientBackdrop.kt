@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -27,34 +26,32 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
+/** Six original ambient illustrations, intentionally distinct from the app's existing themes. */
 internal enum class KomikkuAmbientEffect(val title: String) {
-    INK_AURORA("Ink Aurora"),
-    PAPER_BLOSSOM("Paper Blossom"),
-    LANTERN_ORBITS("Lantern Orbits"),
-    NEON_RAIN("Neon Rain"),
-    TIDAL_RIBBONS("Tidal Ribbons"),
-    CONSTELLATION_TRAILS("Constellation Trails"),
+    CLOCKWORK_ORRERY("Clockwork Orrery"),
+    FACET_SHIFT("Facet Shift"),
+    ORIGAMI_FOLD("Origami Fold"),
+    COMIC_PANEL_PARALLAX("Comic Panel Parallax"),
+    HALFTONE_PULSE("Halftone Pulse"),
+    CIRCUIT_LOOM("Circuit Loom"),
 }
 
 private data class AmbientSeed(
     val x: Float,
     val y: Float,
-    val radius: Float,
-    val speed: Float,
+    val scale: Float,
     val phase: Float,
 )
 
-private val ambientSeeds = List(36) { index ->
+private val ambientSeeds = List(30) { index ->
     AmbientSeed(
         x = ((index * 37 + 13) % 101) / 101f,
         y = ((index * 61 + 29) % 103) / 103f,
-        radius = 0.7f + (index % 5) * 0.28f,
-        speed = 0.24f + (index % 6) * 0.085f,
+        scale = 0.68f + (index % 5) * 0.16f,
         phase = ((index * 17 + 7) % 97) / 97f,
     )
 }
 
-/** One selected, low-cost ambient artwork layer; the six styles are drawn entirely in Compose. */
 @Composable
 internal fun KomikkuAmbientBackdrop(effect: KomikkuAmbientEffect, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -97,170 +94,231 @@ internal fun KomikkuAmbientBackdrop(effect: KomikkuAmbientEffect, modifier: Modi
 
 @Composable
 private fun AmbientCanvas(effect: KomikkuAmbientEffect, slowPhase: Float, fastPhase: Float, modifier: Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val palette = listOf(colors.primary, colors.secondary, colors.tertiary, colors.primaryContainer, colors.secondaryContainer)
+    val scheme = MaterialTheme.colorScheme
+    val palette = listOf(scheme.primary, scheme.secondary, scheme.tertiary, scheme.primaryContainer, scheme.secondaryContainer)
     Canvas(modifier = modifier) {
         val width = size.width
         val height = size.height
         if (width <= 0f || height <= 0f) return@Canvas
         val turn = 2f * PI.toFloat()
-        val center = Offset(width * 0.5f, height * 0.48f)
 
         when (effect) {
-            KomikkuAmbientEffect.INK_AURORA -> {
-                repeat(4) { index ->
-                    val p = slowPhase + index * 0.21f
-                    val glowCenter = Offset(
-                        width * (0.2f + index * 0.2f + sin(p * turn) * 0.08f),
-                        height * (0.28f + index * 0.12f + cos(p * turn) * 0.07f),
+            KomikkuAmbientEffect.CLOCKWORK_ORRERY -> {
+                val center = Offset(width * 0.5f, height * 0.47f)
+                drawGear(center, width * 0.145f, teeth = 14, rotation = slowPhase * turn, color = palette[0], alpha = 0.22f)
+                drawGear(Offset(center.x + width * 0.205f, center.y + height * 0.115f), width * 0.092f, teeth = 11, rotation = -slowPhase * turn * 1.25f, color = palette[1], alpha = 0.2f)
+                drawGear(Offset(center.x - width * 0.19f, center.y + height * 0.13f), width * 0.083f, teeth = 10, rotation = slowPhase * turn * 1.45f, color = palette[2], alpha = 0.19f)
+                drawGear(Offset(width * 0.17f, height * 0.19f), width * 0.053f, teeth = 9, rotation = -fastPhase * turn, color = palette[3], alpha = 0.15f)
+                repeat(18) { index ->
+                    val angle = turn * index / 18f + fastPhase * turn * 0.18f
+                    val start = Offset(center.x + cos(angle) * width * 0.31f, center.y + sin(angle) * width * 0.31f)
+                    val end = Offset(center.x + cos(angle) * width * 0.34f, center.y + sin(angle) * width * 0.34f)
+                    drawLine(palette[index % palette.size].copy(alpha = 0.11f), start, end, strokeWidth = 1.dp.toPx())
+                }
+            }
+
+            KomikkuAmbientEffect.FACET_SHIFT -> {
+                ambientSeeds.take(13).forEachIndexed { index, seed ->
+                    val travel = (slowPhase * (0.24f + (index % 4) * 0.055f) + seed.phase + 1f) % 1f
+                    val center = Offset(
+                        width * ((seed.x + sin((fastPhase + seed.phase) * turn) * 0.035f + 1f) % 1f),
+                        height * ((seed.y + travel * 0.28f + 1f) % 1f),
                     )
-                    drawGlow(glowCenter, palette[index % palette.size], maxOf(width, height) * 0.42f, 0.14f)
+                    val radius = (16f + seed.scale * 38f).dp.toPx()
+                    drawFacetShard(center, radius, fastPhase * turn * (0.32f + index % 3 * 0.12f) + seed.phase * turn, palette[index % palette.size], alpha = 0.16f)
+                }
+                drawFacetShard(Offset(width * 0.78f, height * 0.34f), width * 0.18f, -slowPhase * turn * 0.22f, palette[1], alpha = 0.08f)
+            }
+
+            KomikkuAmbientEffect.ORIGAMI_FOLD -> {
+                ambientSeeds.take(12).forEachIndexed { index, seed ->
+                    val progress = (seed.y + slowPhase * (0.2f + seed.scale * 0.12f) + 1f) % 1f
+                    val x = width * ((seed.x + sin((fastPhase + seed.phase) * turn) * 0.05f + 1f) % 1f)
+                    val y = height * progress
+                    val paperWidth = (14f + seed.scale * 22f).dp.toPx()
+                    val paperHeight = paperWidth * (1.25f + (index % 3) * 0.14f)
+                    drawOrigamiKite(
+                        center = Offset(x, y),
+                        width = paperWidth,
+                        height = paperHeight,
+                        rotation = sin((slowPhase + seed.phase) * turn) * 0.45f + fastPhase * 0.42f,
+                        color = palette[index % palette.size],
+                        alpha = 0.19f,
+                    )
+                }
+                drawOrigamiKite(Offset(width * 0.72f, height * 0.29f), width * 0.105f, height * 0.17f, slowPhase * 0.32f, palette[2], 0.085f)
+            }
+
+            KomikkuAmbientEffect.COMIC_PANEL_PARALLAX -> {
+                repeat(7) { index ->
+                    val panelHeight = height * (0.075f + (index % 3) * 0.018f)
+                    val panelWidth = width * (0.34f + (index % 4) * 0.12f)
+                    val phaseOffset = index * 0.173f
+                    val wrap = height + panelHeight * 2f
+                    val top = ((index * height * 0.155f + slowPhase * height * (0.36f + index % 2 * 0.16f) + panelHeight) % wrap) - panelHeight
+                    val direction = if (index % 2 == 0) 1f else -1f
+                    val left = (width - panelWidth) * (0.5f + direction * sin((fastPhase + phaseOffset) * turn) * 0.32f)
+                    drawComicPanel(left, top, panelWidth, panelHeight, palette[index % palette.size], fastPhase + phaseOffset)
+                }
+            }
+
+            KomikkuAmbientEffect.HALFTONE_PULSE -> {
+                val spacing = 28.dp.toPx()
+                val columns = (width / spacing).toInt().coerceIn(8, 26)
+                val rows = (height / spacing).toInt().coerceIn(12, 38)
+                val stepX = width / columns
+                val stepY = height / rows
+                for (row in 0 until rows) {
+                    for (column in 0 until columns) {
+                        val wave = 0.5f + 0.5f * sin((column * 0.41f + row * 0.18f - slowPhase * 2.1f + fastPhase * 0.7f) * turn)
+                        val radius = (0.55f + wave * 1.45f).dp.toPx()
+                        val tint = palette[(column / 4 + row / 7) % palette.size]
+                        val point = Offset((column + 0.5f) * stepX, (row + 0.5f) * stepY)
+                        drawCircle(tint.copy(alpha = 0.07f + wave * 0.12f), radius, point)
+                    }
                 }
                 repeat(5) { index ->
-                    val baseY = height * (0.25f + index * 0.13f)
-                    val wave = height * (0.035f + index * 0.004f)
-                    val p = (slowPhase + index * 0.14f) * turn
+                    val x = width * ((index / 5f + slowPhase * 0.22f) % 1f)
+                    drawLine(palette[index % palette.size].copy(alpha = 0.035f), Offset(x, 0f), Offset(x - width * 0.22f, height), strokeWidth = 1.dp.toPx())
+                }
+            }
+
+            KomikkuAmbientEffect.CIRCUIT_LOOM -> {
+                repeat(8) { track ->
+                    val laneY = height * (0.11f + track * 0.112f)
+                    val amplitude = height * (0.022f + (track % 3) * 0.008f)
+                    val xs = listOf(-0.04f, 0.13f, 0.13f, 0.31f, 0.31f, 0.52f, 0.52f, 0.73f, 0.73f, 1.04f)
+                    val ys = listOf(0f, 0f, 1f, 1f, -1f, -1f, 1f, 1f, 0f, 0f)
+                    val route = xs.indices.map { index -> Offset(width * xs[index], laneY + amplitude * ys[index]) }
                     val path = Path().apply {
-                        moveTo(-width * 0.08f, baseY)
-                        cubicTo(width * 0.22f, baseY + sin(p) * wave, width * 0.33f, baseY - cos(p) * wave, width * 0.56f, baseY)
-                        cubicTo(width * 0.78f, baseY + sin(p + 1f) * wave, width * 0.9f, baseY - cos(p + 1f) * wave, width * 1.08f, baseY)
+                        moveTo(route.first().x, route.first().y)
+                        route.drop(1).forEach { lineTo(it.x, it.y) }
                     }
-                    drawPath(path, palette[index % palette.size].copy(alpha = 0.095f), style = Stroke(width = (1.2f + index * 0.35f).dp.toPx(), cap = StrokeCap.Round))
-                }
-                drawMotes(slowPhase, fastPhase, palette, alpha = 0.13f)
-            }
-
-            KomikkuAmbientEffect.PAPER_BLOSSOM -> {
-                drawGlow(Offset(width * 0.18f, height * 0.27f), palette[0], maxOf(width, height) * 0.36f, 0.10f)
-                drawGlow(Offset(width * 0.82f, height * 0.74f), palette[2], maxOf(width, height) * 0.33f, 0.09f)
-                drawMotes(slowPhase, fastPhase, palette, alpha = 0.32f, paperPetals = true)
-                repeat(8) { index ->
-                    val x = width * (((index * 29 + 11) % 97) / 97f)
-                    val progress = (ambientSeeds[index].y + slowPhase * ambientSeeds[index].speed * 0.65f) % 1f
-                    val y = height * progress
-                    val drift = sin((fastPhase + index * 0.19f) * turn) * width * 0.035f
-                    drawLine(palette[index % palette.size].copy(alpha = 0.11f), Offset(x + drift - 8.dp.toPx(), y - 13.dp.toPx()), Offset(x + drift + 8.dp.toPx(), y + 13.dp.toPx()), strokeWidth = 0.8.dp.toPx())
-                }
-            }
-
-            KomikkuAmbientEffect.LANTERN_ORBITS -> {
-                val orbitCenter = Offset(width * (0.5f + sin(slowPhase * turn) * 0.035f), height * 0.48f)
-                repeat(4) { index ->
-                    val rx = width * (0.15f + index * 0.055f)
-                    val ry = height * (0.09f + index * 0.04f)
-                    val tint = palette[(index + 1) % palette.size]
-                    drawOval(
-                        color = tint.copy(alpha = 0.10f),
-                        topLeft = Offset(orbitCenter.x - rx, orbitCenter.y - ry),
-                        size = Size(rx * 2f, ry * 2f),
-                        style = Stroke(width = (0.8f + index % 2 * 0.4f).dp.toPx()),
-                    )
-                    val angle = slowPhase * turn * (0.7f + index * 0.09f) + index * 1.62f
-                    val lantern = Offset(orbitCenter.x + cos(angle) * rx, orbitCenter.y + sin(angle) * ry)
-                    val tail = Offset(orbitCenter.x + cos(angle - 0.18f) * rx, orbitCenter.y + sin(angle - 0.18f) * ry)
-                    drawLine(tint.copy(alpha = 0.22f), tail, lantern, strokeWidth = 2.dp.toPx())
-                    drawGlow(lantern, tint, 34.dp.toPx(), 0.21f)
-                    drawCircle(tint.copy(alpha = 0.65f), 6.dp.toPx(), lantern, style = Stroke(width = 1.2.dp.toPx()))
-                    drawCircle(tint.copy(alpha = 0.44f), 2.3.dp.toPx(), lantern)
-                }
-                drawGlow(center, palette[0], maxOf(width, height) * 0.25f, 0.07f)
-            }
-
-            KomikkuAmbientEffect.NEON_RAIN -> {
-                ambientSeeds.forEachIndexed { index, seed ->
-                    val x = width * seed.x + sin((fastPhase + seed.phase) * turn) * 10.dp.toPx()
-                    val y = height * ((seed.y + slowPhase * seed.speed + 1f) % 1f)
-                    val length = height * (0.035f + seed.radius * 0.018f)
-                    val tint = palette[index % palette.size]
-                    val alpha = if (index % 5 == 0) 0.24f else 0.105f
-                    drawLine(tint.copy(alpha = alpha), Offset(x, y), Offset(x - 0.022f * width, y + length), strokeWidth = if (index % 5 == 0) 1.5.dp.toPx() else 0.75.dp.toPx())
-                    if (index % 5 == 0) drawGlow(Offset(x, y), tint, 20.dp.toPx(), 0.15f)
-                }
-                drawGlow(Offset(width * 0.78f, height * (0.32f + 0.1f * sin(slowPhase * turn))), palette[1], maxOf(width, height) * 0.25f, 0.065f)
-            }
-
-            KomikkuAmbientEffect.TIDAL_RIBBONS -> {
-                repeat(6) { index ->
-                    val baseY = height * (0.2f + index * 0.115f)
-                    val amplitude = height * (0.045f + index * 0.008f)
-                    val p = (slowPhase * turn * (0.62f + index * 0.035f)) + index * 0.8f
-                    val path = Path().apply {
-                        moveTo(-width * 0.12f, baseY)
-                        cubicTo(width * 0.12f, baseY + sin(p) * amplitude, width * 0.22f, baseY - cos(p * 0.8f) * amplitude, width * 0.48f, baseY + sin(p + 1.2f) * amplitude)
-                        cubicTo(width * 0.7f, baseY + cos(p + 0.4f) * amplitude, width * 0.82f, baseY - sin(p) * amplitude, width * 1.12f, baseY + cos(p + 1.6f) * amplitude)
+                    val tint = palette[track % palette.size]
+                    drawPath(path, tint.copy(alpha = 0.12f), style = Stroke(width = 1.1.dp.toPx(), cap = StrokeCap.Square))
+                    listOf(2, 4, 6, 8).forEach { corner ->
+                        val point = route[corner]
+                        drawRect(tint.copy(alpha = 0.17f), topLeft = Offset(point.x - 2.2.dp.toPx(), point.y - 2.2.dp.toPx()), size = androidx.compose.ui.geometry.Size(4.4.dp.toPx(), 4.4.dp.toPx()))
                     }
-                    drawPath(path, palette[index % palette.size].copy(alpha = 0.12f), style = Stroke(width = (1.5f + (index % 3) * 0.7f).dp.toPx(), cap = StrokeCap.Round))
-                }
-                drawGlow(Offset(width * (0.34f + 0.12f * sin(fastPhase * turn)), height * 0.5f), palette[2], maxOf(width, height) * 0.32f, 0.08f)
-                drawMotes(slowPhase, fastPhase, palette, alpha = 0.09f)
-            }
-
-            KomikkuAmbientEffect.CONSTELLATION_TRAILS -> {
-                val stars = ambientSeeds.take(24).mapIndexed { index, seed ->
-                    val driftX = sin((fastPhase + seed.phase) * turn) * width * 0.018f
-                    val driftY = cos((slowPhase * seed.speed + seed.phase) * turn) * height * 0.018f
-                    Offset(width * seed.x + driftX, height * seed.y + driftY)
-                }
-                stars.forEachIndexed { index, star ->
-                    val next = stars[(index + 1) % stars.size]
-                    val cross = stars[(index + 7) % stars.size]
-                    val tint = palette[index % palette.size]
-                    drawLine(tint.copy(alpha = 0.075f), star, next, strokeWidth = 0.75.dp.toPx())
-                    if (index % 2 == 0) drawLine(tint.copy(alpha = 0.055f), star, cross, strokeWidth = 0.6.dp.toPx())
-                    val twinkle = 0.55f + 0.45f * sin((fastPhase + index * 0.117f) * turn)
-                    drawGlow(star, tint, (10f + twinkle * 10f).dp.toPx(), 0.09f + twinkle * 0.08f)
-                    drawCircle(tint.copy(alpha = 0.26f + twinkle * 0.4f), (0.8f + twinkle * 1.15f).dp.toPx(), star)
-                    if (index % 6 == 0) {
-                        drawLine(tint.copy(alpha = 0.28f * twinkle), Offset(star.x - 4.dp.toPx(), star.y), Offset(star.x + 4.dp.toPx(), star.y), strokeWidth = 0.7.dp.toPx())
-                        drawLine(tint.copy(alpha = 0.28f * twinkle), Offset(star.x, star.y - 4.dp.toPx()), Offset(star.x, star.y + 4.dp.toPx()), strokeWidth = 0.7.dp.toPx())
-                    }
+                    val progress = (slowPhase * (0.55f + track * 0.045f) + fastPhase * 0.2f + track * 0.13f) % 1f
+                    val scaled = progress * (route.size - 1)
+                    val segment = scaled.toInt().coerceIn(0, route.lastIndex - 1)
+                    val fraction = scaled - segment
+                    val a = route[segment]
+                    val b = route[segment + 1]
+                    val pulse = Offset(a.x + (b.x - a.x) * fraction, a.y + (b.y - a.y) * fraction)
+                    drawCircle(tint.copy(alpha = 0.62f), 3.dp.toPx(), pulse)
+                    drawCircle(tint.copy(alpha = 0.16f), 8.dp.toPx(), pulse, style = Stroke(width = 1.dp.toPx()))
                 }
             }
         }
     }
 }
 
-private fun DrawScope.drawGlow(center: Offset, color: Color, radius: Float, alpha: Float) {
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(color.copy(alpha = alpha), Color.Transparent),
-            center = center,
-            radius = radius,
-        ),
-        radius = radius,
-        center = center,
-    )
+private fun DrawScope.drawGear(center: Offset, radius: Float, teeth: Int, rotation: Float, color: Color, alpha: Float) {
+    val points = teeth * 4
+    val turn = 2f * PI.toFloat()
+    val rootRadius = radius * 0.79f
+    val path = Path()
+    repeat(points) { index ->
+        val toothRadius = if (index % 4 == 1 || index % 4 == 2) radius else rootRadius
+        val angle = rotation + turn * index / points
+        val point = Offset(center.x + cos(angle) * toothRadius, center.y + sin(angle) * toothRadius)
+        if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+    }
+    path.close()
+    drawPath(path, color.copy(alpha = alpha * 0.22f))
+    drawPath(path, color.copy(alpha = alpha), style = Stroke(width = 1.2.dp.toPx()))
+    drawCircle(color.copy(alpha = alpha * 0.72f), radius * 0.34f, center, style = Stroke(width = 1.1.dp.toPx()))
+    drawCircle(color.copy(alpha = alpha * 0.56f), radius * 0.12f, center)
+    repeat(6) { spoke ->
+        val angle = rotation + turn * spoke / 6f
+        drawLine(
+            color.copy(alpha = alpha * 0.42f),
+            Offset(center.x + cos(angle) * radius * 0.35f, center.y + sin(angle) * radius * 0.35f),
+            Offset(center.x + cos(angle) * radius * 0.72f, center.y + sin(angle) * radius * 0.72f),
+            strokeWidth = 1.dp.toPx(),
+        )
+    }
 }
 
-private fun DrawScope.drawMotes(
-    slowPhase: Float,
-    fastPhase: Float,
-    palette: List<Color>,
-    alpha: Float,
-    paperPetals: Boolean = false,
-) {
+private fun DrawScope.drawFacetShard(center: Offset, radius: Float, rotation: Float, color: Color, alpha: Float) {
     val turn = 2f * PI.toFloat()
-    val canvasWidth = size.width
-    val canvasHeight = size.height
-    ambientSeeds.forEachIndexed { index, seed ->
-        val x = canvasWidth * ((seed.x + sin((fastPhase + seed.phase) * turn) * 0.026f + 1f) % 1f)
-        val y = canvasHeight * ((seed.y + slowPhase * seed.speed + 1f) % 1f)
-        val tint = palette[index % palette.size]
-        val shimmer = 0.55f + 0.45f * sin((fastPhase + seed.phase) * turn)
-        if (paperPetals) {
-            val radius = (2.1f + seed.radius * 1.4f).dp.toPx()
-            val petal = Path().apply {
-                moveTo(x, y - radius)
-                cubicTo(x + radius * 1.1f, y - radius * 0.55f, x + radius * 1.25f, y + radius * 0.2f, x, y + radius)
-                cubicTo(x - radius * 1.25f, y + radius * 0.2f, x - radius * 1.1f, y - radius * 0.55f, x, y - radius)
-                close()
-            }
-            drawPath(petal, tint.copy(alpha = alpha * (0.28f + shimmer * 0.3f)))
-            drawLine(tint.copy(alpha = alpha * 0.6f), Offset(x, y - radius * 0.55f), Offset(x, y + radius * 0.65f), strokeWidth = 0.6.dp.toPx())
-        } else {
-            val radius = (0.65f + seed.radius * 0.55f).dp.toPx()
-            drawCircle(tint.copy(alpha = alpha * (0.35f + shimmer * 0.5f)), radius, Offset(x, y))
-            if (index % 7 == 0) drawGlow(Offset(x, y), tint, 12.dp.toPx(), alpha * 0.26f)
+    val vertices = List(6) { index ->
+        val angle = rotation + turn * index / 6f
+        val localRadius = radius * if (index % 2 == 0) 1f else 0.64f
+        Offset(center.x + cos(angle) * localRadius, center.y + sin(angle) * localRadius)
+    }
+    val shape = Path().apply {
+        moveTo(vertices.first().x, vertices.first().y)
+        vertices.drop(1).forEach { lineTo(it.x, it.y) }
+        close()
+    }
+    drawPath(shape, color.copy(alpha = alpha * 0.23f))
+    drawPath(shape, color.copy(alpha = alpha * 0.9f), style = Stroke(width = 1.dp.toPx()))
+    listOf(0, 2, 4).forEachIndexed { index, vertex ->
+        val edge = vertices[vertex]
+        drawLine(color.copy(alpha = alpha * (0.25f + index * 0.08f)), center, edge, strokeWidth = 0.85.dp.toPx())
+    }
+    val glint = vertices[1]
+    drawLine(color.copy(alpha = alpha * 0.65f), glint, Offset(glint.x + 5.dp.toPx(), glint.y - 8.dp.toPx()), strokeWidth = 1.1.dp.toPx())
+}
+
+private fun DrawScope.drawOrigamiKite(center: Offset, width: Float, height: Float, rotation: Float, color: Color, alpha: Float) {
+    fun rotated(point: Offset): Offset = Offset(
+        point.x * cos(rotation) - point.y * sin(rotation) + center.x,
+        point.x * sin(rotation) + point.y * cos(rotation) + center.y,
+    )
+    val top = rotated(Offset(0f, -height * 0.55f))
+    val right = rotated(Offset(width * 0.44f, -height * 0.05f))
+    val bottom = rotated(Offset(0f, height * 0.55f))
+    val left = rotated(Offset(-width * 0.44f, -height * 0.05f))
+    val middle = rotated(Offset(0f, height * 0.12f))
+    val silhouette = Path().apply {
+        moveTo(top.x, top.y)
+        lineTo(right.x, right.y)
+        lineTo(bottom.x, bottom.y)
+        lineTo(left.x, left.y)
+        close()
+    }
+    drawPath(silhouette, color.copy(alpha = alpha * 0.21f))
+    drawPath(silhouette, color.copy(alpha = alpha * 0.78f), style = Stroke(width = 0.9.dp.toPx()))
+    fun face(a: Offset, b: Offset, c: Offset, shade: Float) {
+        val triangle = Path().apply {
+            moveTo(a.x, a.y)
+            lineTo(b.x, b.y)
+            lineTo(c.x, c.y)
+            close()
         }
+        drawPath(triangle, color.copy(alpha = alpha * shade))
+    }
+    face(top, right, middle, 0.35f)
+    face(right, bottom, middle, 0.18f)
+    face(bottom, left, middle, 0.32f)
+    face(left, top, middle, 0.13f)
+    drawLine(color.copy(alpha = alpha * 0.86f), top, middle, strokeWidth = 0.75.dp.toPx())
+    drawLine(color.copy(alpha = alpha * 0.72f), left, right, strokeWidth = 0.7.dp.toPx())
+}
+
+private fun DrawScope.drawComicPanel(left: Float, top: Float, width: Float, height: Float, color: Color, phase: Float) {
+    val cut = minOf(10.dp.toPx(), width * 0.12f, height * 0.24f)
+    val panel = Path().apply {
+        moveTo(left, top)
+        lineTo(left + width - cut, top)
+        lineTo(left + width, top + cut)
+        lineTo(left + width, top + height)
+        lineTo(left + cut * 0.6f, top + height)
+        lineTo(left, top + height - cut * 0.6f)
+        close()
+    }
+    drawPath(panel, color.copy(alpha = 0.035f))
+    drawPath(panel, color.copy(alpha = 0.17f), style = Stroke(width = 1.05.dp.toPx()))
+    val splitX = left + width * (0.28f + 0.38f * ((phase + 1f) % 1f))
+    drawLine(color.copy(alpha = 0.10f), Offset(splitX, top + 4.dp.toPx()), Offset(splitX - 5.dp.toPx(), top + height - 4.dp.toPx()), strokeWidth = 0.75.dp.toPx())
+    repeat(3) { index ->
+        val lineStart = left + width * (0.08f + index * 0.055f)
+        val lineY = top + height * (0.24f + index * 0.2f)
+        val length = width * (0.12f + index * 0.025f)
+        drawLine(color.copy(alpha = 0.065f), Offset(lineStart, lineY), Offset(lineStart + length, lineY - 2.dp.toPx()), strokeWidth = 0.7.dp.toPx())
     }
 }
